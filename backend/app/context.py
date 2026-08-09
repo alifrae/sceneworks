@@ -1,0 +1,100 @@
+"""Application composition root.
+
+Builds every service once at startup, wires the execution engine's
+continuation hook to the workflow service, and reconciles interrupted
+executions. API handlers access services through this context only.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+
+from app.agents.registry import BackendRegistry
+from app.config.settings import Settings, get_settings
+from app.db.session import close_db, create_engine_and_sessionmaker, init_db
+from app.events.bus import EventBus
+from app.events.store import EventStore
+from app.execution.engine import ExecutionEngine
+from app.git.workspace import GitWorktreeService
+from app.roles.prompts import PromptBuilder
+from app.roles.registry import RoleRegistry
+from app.services.company import CompanyService
+from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
+from app.services.workflow import TaskWorkflowService
+
+logger = logging.getLogger("sceneworks")
+
+
+@dataclass
+class AppContext:
+    settings: Settings
+    engine_factory: async_sessionmaker
+    db_engine: AsyncEngine
+    bus: EventBus
+    event_store: EventStore
+    backends: BackendRegistry
+    git: GitWorktreeService
+    roles: RoleRegistry
+    prompt_builder: PromptBuilder
+    execution_engine: ExecutionEngine
+    workflow: TaskWorkflowService
+    company: CompanyService
+    settings_store: SettingsStore
+    settings_overrides: SettingsOverrides
+
+    async def shutdown(self) -> None:
+        await self.execution_engine.shutdown()
+        await close_db(self.db_engine)
+
+
+async def build_context(settings: Settings | None = None) -> AppContext:
+    settings = settings or get_settings()
+    db_engine, session_factory = create_engine_and_sessionmaker(settings)
+    await init_db(db_engine)
+
+    settings_store = SettingsStore(session_factory)
+    overrides = await settings_store.load()
+    settings = apply_overrides(settings, overrides)
+
+    bus = EventBus()
+    event_store = EventStore(session_factory)
+    backends = BackendRegistry(settings)
+    git = GitWorktreeService(settings)
+    roles = RoleRegistry(
+        settings.roles_dir,
+        default_backend=settings.default_backend if settings.default_backend != "gemini_acp" else None,
+    )
+    prompt_builder = PromptBuilder(settings, roles)
+    execution_engine = ExecutionEngine(
+        session_factory, bus, event_store, backends, settings
+    )
+    workflow = TaskWorkflowService(
+        session_factory, execution_engine, git, prompt_builder, roles, bus, event_store, settings
+    )
+    execution_engine.on_execution_finished = workflow.on_execution_finished
+    company = CompanyService(session_factory, workflow, roles, git, prompt_builder, execution_engine)
+
+    ctx = AppContext(
+        settings=settings,
+        engine_factory=session_factory,
+        db_engine=db_engine,
+        bus=bus,
+        event_store=event_store,
+        backends=backends,
+        git=git,
+        roles=roles,
+        prompt_builder=prompt_builder,
+        execution_engine=execution_engine,
+        workflow=workflow,
+        company=company,
+        settings_store=settings_store,
+        settings_overrides=overrides,
+    )
+
+    interrupted = await execution_engine.recover_interrupted()
+    if interrupted:
+        logger.warning("reconciled %d interrupted executions from previous run", len(interrupted))
+    return ctx

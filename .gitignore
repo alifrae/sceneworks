@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Data / runtime
+backend/data/
+backend/*.db
+
+# Node
+node_modules/
+web/.next/
+web/out/
+web/tsconfig.tsbuildinfo
+npm-debug.log*
+
+# Env / secrets
+.env
+.env.local
+*.pem
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,200 @@
+"""API schemas (Pydantic v2)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    repository_path: str = Field(min_length=1, max_length=1000)
+    default_branch: str | None = None
+    architecture_context_paths: list[str] = []
+    test_commands: list[str] = []
+    build_commands: list[str] = []
+    worktree_root_override: str | None = None
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    default_branch: str | None = None
+    architecture_context_paths: list[str] | None = None
+    test_commands: list[str] | None = None
+    build_commands: list[str] | None = None
+    worktree_root_override: str | None = None
+
+
+class ProjectOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str
+    repository_path: str
+    default_branch: str
+    status: str
+    architecture_context_paths: list[Any]
+    test_commands: list[Any]
+    build_commands: list[Any]
+    worktree_root_override: str | None
+    created_at: datetime
+    updated_at: datetime
+    active_task_count: int = 0
+
+
+class RepoStatusOut(BaseModel):
+    is_git: bool
+    head_branch: str | None
+    head_commit: str | None
+    error: str | None = None
+    worktrees: list[dict] = []
+    active_tasks: int = 0
+
+
+class TaskCreate(BaseModel):
+    project_id: int
+    title: str = Field(min_length=1, max_length=300)
+    description: str = ""
+    priority: Literal["low", "medium", "high"] = "medium"
+
+
+class TaskOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    title: str
+    description: str
+    status: str
+    priority: str
+    current_role: str | None
+    current_execution_id: str | None
+    base_commit: str | None
+    task_branch: str | None
+    worktree_path: str | None
+    result_commit: str | None
+    architecture_result: str | None
+    implementation_summary: str | None
+    review_result: str | None
+    created_at: datetime
+    updated_at: datetime
+    project_name: str = ""
+    allowed_actions: list[str] = []
+    execution_status: str | None = None
+
+
+class DiffOut(BaseModel):
+    stat: str = ""
+    full: str = ""
+    commits: list[dict] = []
+    status: str = ""
+    error: str | None = None
+
+
+class ActionRequest(BaseModel):
+    reason: str = ""
+    notes: str = ""
+
+
+class ExecutionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    task_id: int | None
+    role: str
+    backend: str
+    model_profile: str | None
+    status: str
+    workspace: dict = {}
+    prompt_preview: str | None
+    result: str | None
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+
+
+class EventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    execution_id: str | None
+    task_id: int | None
+    type: str
+    payload: dict
+    severity: str
+    timestamp: datetime
+
+
+class BackendOut(BaseModel):
+    key: str
+    label: str
+    available: bool
+    version: str | None
+    detail: str | None
+
+
+class RoleOut(BaseModel):
+    key: str
+    display_name: str
+    description: str
+    backend: str
+    model_profile: str | None
+    permissions: list[str]
+    can_modify_source: bool
+    can_commit: bool
+    responsibilities: list[str]
+
+
+class CompanyAskRequest(BaseModel):
+    role: str
+    project_id: int | None = None
+    question: str = Field(min_length=1, max_length=5000)
+
+
+class ArtifactOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    kind: str
+    role: str
+    project_id: int | None
+    title: str
+    content: str
+    source_execution_id: str | None
+    created_at: datetime
+
+
+class SettingsOut(BaseModel):
+    worktree_root: str
+    gemini_executable: str | None
+    gemini_model: str | None
+    gemini_extra_args: list[str]
+    execution_timeout_seconds: int
+    cancel_grace_seconds: int
+    default_backend: str
+    log_level: str
+    context_max_bytes: int
+    database_url: str
+    backends: list[BackendOut]
+
+
+class SettingsUpdate(BaseModel):
+    worktree_root: str | None = None
+    gemini_executable: str | None = None
+    gemini_model: str | None = None
+    execution_timeout_seconds: int | None = Field(default=None, ge=60, le=86400)
+
+
+class DashboardOut(BaseModel):
+    active_tasks: int
+    awaiting_approval: int
+    running_executions: int
+    recently_completed: list[TaskOut]
+    failed_executions: list[ExecutionOut]
+    roles: list[dict]
