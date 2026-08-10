@@ -261,3 +261,27 @@ async def test_workflow_continuation_runs(context, git_repo):
     # Change landed in the worktree, never in the human tree.
     assert not (git_repo / "fix.py").exists()
     assert (Path(task_row.worktree_path) / "fix.py").read_text() == "x = 2\n"
+
+
+async def test_agent_events_are_attributed_to_their_execution(context):
+    """Agent activity must be reachable from the task and execution feeds.
+
+    AgentEventSink.emit dropped the execution id, so every agent event
+    (text deltas, tool calls, file changes, command output) was persisted
+    with execution_id and task_id NULL. The rows existed but no API could
+    return them, and the UI event log showed no agent activity at all.
+    """
+    execution_id = await _create_execution(
+        context,
+        steps=[
+            ScriptStep(kind="emit", type="agent.message", payload={"text": "working"}),
+            ScriptStep(kind="summary", summary="done"),
+        ],
+    )
+    await context.execution_engine.start(execution_id)
+    await _wait_status(context, execution_id, "COMPLETED")
+
+    rows = await context.event_store.list_for_execution(execution_id, limit=100)
+    types = [r.type for r in rows]
+    assert "agent.message" in types, f"agent event not attributed: {types}"
+    assert all(r.execution_id == execution_id for r in rows)

@@ -51,6 +51,8 @@ class TaskStateMachine:
         "send_back_to_engineer",
         "cancel",
         "retry",
+        "retry_architecture",
+        "architecture_failed",
         "advisory_completed",
     }
 
@@ -94,7 +96,11 @@ class TaskStateMachine:
             TaskStatus.READY_FOR_HUMAN
         ),
         # Recoverable failure: retry re-enters the appropriate phase.
+        # "retry" resumes an approved task at implementation; a task that never
+        # produced an architecture must restart from the beginning instead,
+        # because start_architecture is only valid from NEW.
         (TaskStatus.FAILED, "retry"): TaskStatus.READY_TO_IMPLEMENT,
+        (TaskStatus.FAILED, "retry_architecture"): TaskStatus.NEW,
     }
 
     @classmethod

@@ -128,3 +128,79 @@ class TestRoleSeparation:
         roles = {r.key: r for r in default_roles()}
         assert not roles["reviewer"].can_modify_source
         assert not roles["reviewer"].can_commit
+
+
+class TestTriageParsing:
+    """Regression cover for a live failure.
+
+    The Gemini ACP backend streams the agent's reply as deltas. Those deltas
+    were re-joined with "\n", which inserted newlines at arbitrary chunk
+    boundaries — inside string literals and even inside identifiers. The
+    triage reply below is the shape actually observed against a live model:
+    valid content, destroyed by reassembly, silently discarded by a parser
+    that then defaulted `requires_implementation` to True for an explicitly
+    read-only investigation.
+    """
+
+    def test_chunks_are_concatenated_not_newline_joined(self):
+        from app.agents.gemini_acp import _join_text
+
+        chunks = ['{"request_type": "technical_inv', 'estigation", "use_arch',
+                  'itect": true, "requires_implementation": false}']
+        assert _join_text(chunks) == (
+            '{"request_type": "technical_investigation", '
+            '"use_architect": true, "requires_implementation": false}'
+        )
+
+    def test_reassembled_stream_parses(self):
+        from app.agents.gemini_acp import _join_text
+        from app.roles.prompts import PromptBuilder
+
+        chunks = ['{"request_type": "technical_inv', 'estigation", "use_technical_expert"',
+                  ': true, "requires_implementation": false}']
+        result = PromptBuilder.parse_triage_result(_join_text(chunks))
+        assert result["request_type"] == "technical_investigation"
+        assert result["use_technical_expert"] is True
+        assert result["requires_implementation"] is False
+        assert not result.get("triage_parse_failed")
+
+    def test_json_in_markdown_fence_is_extracted(self):
+        from app.roles.prompts import PromptBuilder
+
+        text = (
+            'Here is my classification:\n```json\n'
+            '{"request_type": "bug", "use_cto": true, "requires_implementation": true}\n'
+            '```\nLet me know if you need more.'
+        )
+        result = PromptBuilder.parse_triage_result(text)
+        assert result["request_type"] == "bug"
+        assert result["use_cto"] is True
+        assert not result.get("triage_parse_failed")
+
+    def test_nested_objects_and_braces_in_strings_are_handled(self):
+        from app.roles.prompts import PromptBuilder
+
+        text = (
+            '{"request_type": "refactor", "meta": {"depth": {"n": 2}}, '
+            '"reasoning_summary": "mentions {braces} and \\"quotes\\" inline", '
+            '"requires_implementation": false}'
+        )
+        result = PromptBuilder.parse_triage_result(text)
+        assert result["request_type"] == "refactor"
+        assert result["requires_implementation"] is False
+        assert not result.get("triage_parse_failed")
+
+    def test_unparseable_output_is_flagged_not_silently_defaulted(self):
+        from app.roles.prompts import PromptBuilder
+
+        corrupted = '{\n  "request_type": "technical_investigation\n",\n  "use\n_architect": true\n}'
+        result = PromptBuilder.parse_triage_result(corrupted)
+        assert result["triage_parse_failed"] is True
+        # Defaults still applied, but the caller can tell they are a guess.
+        assert result["use_architect"] is True
+        assert result["requires_implementation"] is True
+
+    def test_empty_output_is_flagged(self):
+        from app.roles.prompts import PromptBuilder
+
+        assert PromptBuilder.parse_triage_result("")["triage_parse_failed"] is True

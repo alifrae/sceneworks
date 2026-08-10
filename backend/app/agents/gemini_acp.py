@@ -33,7 +33,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -321,6 +320,16 @@ class AcpStdioClient:
             path = self._policy.workspace_root / path
         return path.resolve()
 
+    def _outside_reason(self, path: Path) -> str:
+        """Explain why a path was rejected (helps the agent self-correct)."""
+        repo = self._policy.repo_root
+        if repo is not None and path.resolve().is_relative_to(repo.resolve()):
+            return (
+                f"{path} is in the human working tree, which agents may never "
+                f"access. Use the pinned worktree at {self._policy.workspace_root}"
+            )
+        return f"{path} is outside the workspace {self._policy.workspace_root}"
+
     async def _serve_read_file(self, params: dict) -> dict:
         path = self._resolve_path(str(params.get("path") or ""))
         if not self._within_workspace(path):
@@ -329,7 +338,7 @@ class AcpStdioClient:
                 {"name": "fs_read_denied", "path": str(path), "diagnostics": True},
                 severity="warning",
             )
-            raise AcpError(f"read outside workspace denied: {path}")
+            raise AcpError(f"read denied: {self._outside_reason(path)}")
         data = path.read_text(encoding="utf-8", errors="replace")
         limit = params.get("limit")
         if isinstance(limit, int) and limit > 0:
@@ -352,7 +361,12 @@ class AcpStdioClient:
             raise AcpError("write denied: this role is read-only")
         path = self._resolve_path(str(params.get("path") or ""))
         if not self._within_workspace(path):
-            raise AcpError(f"write outside workspace denied: {path}")
+            await self._sink.emit(
+                "agent.event",
+                {"name": "fs_write_denied", "path": str(path), "diagnostics": True},
+                severity="warning",
+            )
+            raise AcpError(f"write denied: {self._outside_reason(path)}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(params.get("content") or ""), encoding="utf-8")
         await self._sink.emit("file.changed", {"path": str(path)})
@@ -400,7 +414,18 @@ class AcpStdioClient:
             )
             raise AcpError("shell access denied for this role")
         command = str(params.get("command") or "")
-        cwd = str(params.get("cwd") or self._cwd)
+        requested_cwd = params.get("cwd")
+        cwd = str(self._cwd)
+        if requested_cwd:
+            candidate = self._resolve_path(str(requested_cwd))
+            if not self._within_workspace(candidate):
+                await self._sink.emit(
+                    "agent.event",
+                    {"name": "shell_cwd_denied", "cwd": str(candidate), "diagnostics": True},
+                    severity="warning",
+                )
+                raise AcpError(f"shell cwd denied: {self._outside_reason(candidate)}")
+            cwd = str(candidate)
         args = [command, *(params.get("args") or [])]
         if sys.platform == "win32":
             shell = ["cmd.exe", "/d", "/s", "/c"] + [command, *(params.get("args") or [])]
@@ -442,7 +467,7 @@ class AcpStdioClient:
         if terminal is None:
             raise AcpError("unknown terminal")
         try:
-            await asyncio.wait_for(terminal.process.wait(), timeout=self._REQUEST_TIMEOUT)
+            await asyncio.wait_for(terminal.process.wait(), timeout=_REQUEST_TIMEOUT)
         except asyncio.TimeoutError:
             await self._sink.emit(
                 "agent.event",
@@ -459,14 +484,16 @@ class AcpStdioClient:
         return {}
 
     def _within_workspace(self, path: Path) -> bool:
+        """Confine agent file access to the execution's workspace.
+
+        The workspace is always a commit-pinned worktree. The main repository
+        checkout (repo_root) is deliberately NOT allowed: it is the human's
+        working tree and may hold uncommitted edits. Letting an agent read it
+        would leak unreviewed state into a supposedly snapshot-pinned answer;
+        letting an agent write it would modify the human's checkout.
+        """
         resolved = path.resolve()
-        if resolved.is_relative_to(self._policy.workspace_root.resolve()):
-            return True
-        if self._policy.repo_root is not None and resolved.is_relative_to(
-            self._policy.repo_root.resolve()
-        ):
-            return True
-        return False
+        return resolved.is_relative_to(self._policy.workspace_root.resolve())
 
     # -------------------------------------------------------- notifications
 
@@ -863,4 +890,13 @@ class GeminiACPBackend(AgentBackend):
 
 
 def _join_text(parts: list[str]) -> str:
-    return "\n".join(part for part in parts if part).strip()
+    """Reassemble streamed agent text.
+
+    `agent_message_chunk` updates are *deltas* of one continuous message, not
+    separate lines. Joining them with "\\n" inserted newlines at arbitrary
+    chunk boundaries, which landed inside string literals and identifiers and
+    corrupted any structured output — a triage reply split mid-token became
+    `"use\\n_architect"` and failed to parse, silently discarding a correct
+    routing decision. Concatenate them exactly as received.
+    """
+    return "".join(parts).strip()

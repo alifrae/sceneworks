@@ -53,24 +53,31 @@ uv run python -m pytest --collect-only     # list all tests
 The test suite uses an in-memory SQLite database and the FakeAgentBackend.
 No live services or model access required.
 
-### Browser E2E tests
+### End-to-end tests
 
 ```bash
-# Terminal 1: Start the backend with fake backend
+# Terminal 1: Start the backend with the scripted fake backend
 cd backend
 SCENEWORKS_DEFAULT_BACKEND=fake uv run uvicorn app.main:app --port 8010
 
-# Terminal 2: Start the frontend (in dev mode)
-cd web
-npm run dev
-
-# Terminal 3: Run E2E tests
+# Terminal 2: Run the E2E suite (it starts the web server itself)
 cd web
 npx playwright test
 ```
 
-E2E tests create their own temporary Git repositories. No `E2E_REPO_PATH`
-environment variable needed.
+Playwright starts the web server for you: by default it runs
+`next build && next start`, so the suite exercises the production build. Set
+`E2E_DEV=1` to use `next dev` instead — useful while iterating, but the dev
+server compiles routes on first visit, which can exceed assertion timeouts.
+
+The backend must already be running on port 8010; Playwright does not start
+it. E2E tests create their own temporary Git repositories, so no
+`E2E_REPO_PATH` environment variable is needed.
+
+Only some of these are browser tests. The workflow scenarios drive the API
+over HTTP through Playwright's request client; the dashboard, projects,
+company, settings and error-handling tests navigate real pages. See the
+validation-label table in the README.
 
 ### Code conventions
 
@@ -130,8 +137,13 @@ The frontend is a Next.js 15 App Router application with TypeScript.
 - Types: `web/lib/types.ts`
 - Styles: `web/app/globals.css`
 
-Run the linter:
+Type-check and build:
 ```bash
 cd web
-npm run lint
+npm run build
 ```
+
+> There is **no configured linter** in this repository. `package.json` still
+> declares a `lint` script, but no ESLint configuration exists, so
+> `npm run lint` opens an interactive setup prompt instead of linting. Do not
+> treat it as a validation step. Type errors are caught by `npm run build`.

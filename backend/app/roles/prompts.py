@@ -195,25 +195,66 @@ class PromptBuilder:
         return system, user
 
     @staticmethod
+    def _extract_json_object(text: str) -> dict | None:
+        """Pull the first complete JSON object out of model output.
+
+        Models wrap JSON in prose or in a ```json fence, and the object can
+        contain nested objects. A non-greedy `\\{[^{}]*\\}` regex matched
+        neither case, so a perfectly good reply was discarded. Scan for a
+        balanced object instead, ignoring braces inside strings.
+        """
+        for start, char in enumerate(text):
+            if char != "{":
+                continue
+            depth = 0
+            in_string = False
+            escaped = False
+            for index in range(start, len(text)):
+                current = text[index]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif current == "\\":
+                        escaped = True
+                    elif current == '"':
+                        in_string = False
+                    continue
+                if current == '"':
+                    in_string = True
+                elif current == "{":
+                    depth += 1
+                elif current == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start : index + 1]
+                        try:
+                            parsed = json.loads(candidate)
+                        except (json.JSONDecodeError, TypeError):
+                            break
+                        if isinstance(parsed, dict):
+                            return parsed
+                        break
+        return None
+
+    @staticmethod
     def parse_triage_result(text: str) -> dict:
-        """Extract a triage JSON blob from model output. Returns dict with
-        sensible defaults on parse failure."""
-        import re
-        match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-                return {
-                    "request_type": str(parsed.get("request_type", "feature")),
-                    "use_product": bool(parsed.get("use_product", False)),
-                    "use_cto": bool(parsed.get("use_cto", False)),
-                    "use_architect": bool(parsed.get("use_architect", True)),
-                    "use_technical_expert": bool(parsed.get("use_technical_expert", False)),
-                    "requires_implementation": bool(parsed.get("requires_implementation", True)),
-                    "reasoning_summary": str(parsed.get("reasoning_summary", "")),
-                }
-            except (json.JSONDecodeError, TypeError):
-                pass
+        """Extract a triage decision from model output.
+
+        Returns defaults on parse failure, with `triage_parse_failed` set so
+        the caller can report that routing was not actually decided by triage
+        rather than presenting the fallback as a real decision.
+        """
+        parsed = PromptBuilder._extract_json_object(text or "")
+        if parsed is not None:
+            return {
+                "request_type": str(parsed.get("request_type", "feature")).strip(),
+                "use_product": bool(parsed.get("use_product", False)),
+                "use_cto": bool(parsed.get("use_cto", False)),
+                "use_architect": bool(parsed.get("use_architect", True)),
+                "use_technical_expert": bool(parsed.get("use_technical_expert", False)),
+                "requires_implementation": bool(parsed.get("requires_implementation", True)),
+                "reasoning_summary": str(parsed.get("reasoning_summary", "")),
+            }
         return {
             "request_type": "feature",
             "use_product": False,
@@ -221,7 +262,10 @@ class PromptBuilder:
             "use_architect": True,
             "use_technical_expert": False,
             "requires_implementation": True,
-            "reasoning_summary": "triage parse failed; defaulting to architect path",
+            "reasoning_summary": "triage output could not be parsed; defaulting to "
+            "architect path — participant selection and requires_implementation "
+            "were NOT determined by triage",
+            "triage_parse_failed": True,
         }
 
     # ------------------------------------------------------------------ files

@@ -93,6 +93,38 @@ def test_refuses_existing_destination(git_repo: Path, svc: GitWorktreeService):
         asyncio_run(svc.create_detached_worktree(git_repo, base, 5))
 
 
+def test_reclaims_stale_leftover_directory(git_repo: Path, svc: GitWorktreeService):
+    """A directory git no longer tracks must not block the next worktree.
+
+    On Windows `git worktree remove` regularly succeeds while leaving the
+    (now empty) directory behind, because the agent process that had it as its
+    cwd is still exiting. Treating that leftover as a fatal collision crashed
+    the second review iteration of the auto-repair loop.
+    """
+    base = asyncio_run(svc.resolve_base_commit(git_repo, "main"))
+    first = asyncio_run(svc.create_detached_worktree(git_repo, base, 7, suffix="-review"))
+    asyncio_run(svc.remove_worktree(git_repo, first.worktree_path, None))
+
+    # Recreate the bare directory: git does not know about it any more.
+    first.worktree_path.mkdir(parents=True, exist_ok=True)
+    assert first.worktree_path.exists()
+
+    second = asyncio_run(svc.create_detached_worktree(git_repo, base, 7, suffix="-review"))
+    assert second.worktree_path.is_dir()
+    assert (second.worktree_path / "README.md").is_file()
+
+
+def test_remove_worktree_tolerates_leftover_empty_directory(
+    git_repo: Path, svc: GitWorktreeService
+):
+    base = asyncio_run(svc.resolve_base_commit(git_repo, "main"))
+    ws = asyncio_run(svc.create_detached_worktree(git_repo, base, 8, suffix="-arch"))
+    asyncio_run(svc.remove_worktree(git_repo, ws.worktree_path, None))
+    # Idempotent: removing again (or removing a bare leftover) must not raise.
+    ws.worktree_path.mkdir(parents=True, exist_ok=True)
+    asyncio_run(svc.remove_worktree(git_repo, ws.worktree_path, None))
+
+
 def test_worktree_root_isolated(git_repo: Path, tmp_path: Path):
     settings = Settings(
         worktree_root=tmp_path / "outside",

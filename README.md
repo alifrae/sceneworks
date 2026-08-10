@@ -1,4 +1,4 @@
-# SceneWorks V2.5.1
+# SceneWorks V3.0
 
 SceneWorks is an **AI-native software company control plane**: a standalone web
 application for operating software projects through virtual company roles
@@ -74,17 +74,23 @@ over Server-Sent Events. Nothing merges into the human branch automatically.
 SceneWorks V2.2 replaced the linear workflow service with a **LangGraph
 state graph** with durable checkpointing via `langgraph-checkpoint-sqlite`.
 
-The graph includes:
+The nodes registered in `backend/app/workflows/manager.py`:
 
 | Node | Function |
 |---|---|
-| **triage** | Analyzes task and routes to architecture analysis or direct implementation |
+| **route_entry** | Entry point; routes by current task status to triage, engineer or reviewer |
+| **triage** | Pins the workflow's base commit, classifies the request, selects advisory roles |
+| **advisor_router** | Dispatches to each selected advisory role in turn, then to the architect |
+| **product** / **cto** / **technical_expert** | Optional advisory analyses, each in its own detached worktree |
 | **architect** | Read-only architecture analysis in a detached worktree |
-| **human_approval** | Interrupts for human approval (approve/reject/revision) |
-| **engineer** | Implements changes in an isolated worktree with full write/shell access |
-| **testing** | Runs project-configured test commands |
-| **reviewer** | Inspects diff, commits, tests; emits `APPROVED` or `CHANGES_REQUESTED` |
-| **complete** | Finalizes workflow, marks task `READY_FOR_HUMAN` |
+| **architecture_approval** | LangGraph `interrupt()` — waits for human approve/reject/revision |
+| **engineer** | Implements changes in an isolated branch worktree with write/shell access |
+| **reviewer** | Inspects diff, commits and tests; emits `APPROVED` or `CHANGES_REQUESTED` |
+
+There is no separate `testing` or `complete` node: the Engineer runs the
+project's tests itself inside its worktree, and terminal states are reached by
+the routing edges (`READY_FOR_HUMAN` when the reviewer approves, or when an
+advisory-only task finishes its analysis).
 
 ### V2.2 key features
 
@@ -115,8 +121,29 @@ AgentBackend
 ### Gemini ACP backend
 
 The first and default backend. Gemini CLI is launched in ACP mode (`--acp`,
-protocol version 1 over stdio). SceneWorks mediates every file read/write
-and command through the ACP client proxy, enforcing role permissions.
+protocol version 1 over stdio) with its working directory set to a
+commit-pinned worktree.
+
+**What the proxy actually enforces.** SceneWorks answers the agent's
+client-side requests and applies role permissions there:
+
+- `fs/read_text_file` / `fs/write_text_file` are confined to the pinned
+  worktree, and writes additionally require `repository_write`. The main
+  repository checkout is never an allowed path.
+- `session/request_permission` is answered against the role: `execute` tool
+  calls are refused unless the role has `shell_execute`. In live runs this
+  demonstrably refused `git reflog`, `git remote -v` and
+  `python -m pytest --version` for read-only roles.
+- `terminal/create` requires `shell_execute`, and its working directory is
+  validated against the worktree.
+
+**What it does not enforce.** The agent runtime also has its own tools and
+does not route everything through the client. Measured over the V3.0 live
+runs, 28 of 191 observed tool calls arrived at the permission gate; the rest
+were reported as `session/update` notifications after the fact. And a shell
+command, once permitted, is a real process — it can reach anything the OS
+lets the SceneWorks user reach. Treat the proxy as a strong guard rail and an
+audit trail, **not as a sandbox against a hostile agent**.
 
 Configuration: `SCENEWORKS_GEMINI_EXECUTABLE`, `SCENEWORKS_GEMINI_MODEL`,
 `SCENEWORKS_GEMINI_EXTRA_ARGS`.
@@ -249,16 +276,42 @@ roles never modify code and never trigger chains of other agents.
 # Backend tests (no live model required)
 cd backend
 uv sync
-uv run pytest                # 105 tests
+uv run pytest                # 120 tests
 
-# Frontend lint and build
+# Frontend type-check and build
 cd web
 npm run build
-npm run lint
 
-# Browser E2E tests (requires running backend + frontend)
-npm run test:e2e
+# End-to-end tests (requires the backend running on :8010)
+#   cd backend && SCENEWORKS_DEFAULT_BACKEND=fake uv run uvicorn app.main:app --port 8010
+npm run test:e2e             # 12 tests
 ```
+
+> `npm run lint` is declared in `package.json` but **no ESLint configuration
+> exists** in this repository — running it starts an interactive setup prompt
+> rather than linting. There is no configured linter for either the backend or
+> the frontend; type checking happens as part of `npm run build`.
+
+### How to read validation claims
+
+Every capability below is labelled with the strongest evidence that exists
+for it. The labels are deliberately narrow.
+
+| Label | Meaning |
+| --- | --- |
+| `implemented` | Code exists and is exercised by no automated test. |
+| `automatically tested` | Covered by `uv run pytest` against the scripted FakeAgentBackend. |
+| `browser-E2E validated` | Exercised through a real Chromium page in `web/e2e/`. |
+| `API-E2E validated` | Exercised end-to-end against the running server via Playwright's HTTP client — a real server and real Git, but no browser UI. |
+| `live-model validated` | Executed against the real Gemini CLI over ACP, with real Git worktrees. |
+| `experimental` | Present but never validated; may not work. |
+
+Current state of the E2E suite (12 tests): the workflow scenarios
+(architecture → approval → engineer → reviewer → accept, revision,
+rejection, cancellation, repair loop, project memory, company ask) are
+**API-E2E validated** — they drive the running server over HTTP rather than
+clicking through the UI. Five tests (dashboard, projects, company, settings,
+API-unreachable handling) are **browser-E2E validated**.
 
 Test categories:
 
@@ -280,10 +333,16 @@ Test categories:
   health checks, configuration, registry integration, experimental label.
 - **Memory tests** (`test_memory.py`): CRUD, search, archival,
   injection context, provenance.
-- **Browser E2E tests** (`web/e2e/`): Playwright-based UI → API →
-  workflow flow. Uses FakeAgentBackend. No live models.
-- **Live smoke test** (optional): Run the app with a real Gemini project
-  and execute a task as described above.
+- **End-to-end tests** (`web/e2e/`): Playwright, against a running server
+  and real Git repositories created per test, using FakeAgentBackend.
+  Seven workflow tests drive the API directly (`API-E2E validated`); five
+  navigate real pages in Chromium (`browser-E2E validated`). No live models.
+  They run against the production build (`next build && next start`); set
+  `E2E_DEV=1` to use the dev server instead.
+- **Live-model validation** (manual, not part of `pytest`): run the app
+  against a real repository with `SCENEWORKS_DEFAULT_BACKEND=gemini_acp`
+  and execute a task as described above. See "V3.0 baseline" for what has
+  actually been exercised this way.
 
 ## Documentation
 
@@ -298,6 +357,108 @@ Test categories:
 - [Development](docs/development.md) — Developer setup and conventions.
 - [Known Limitations](docs/limitations.md) — Current boundaries and
   non-goals.
+
+## V3.0 baseline
+
+V3.0 contains no new product capability. It is an independent audit of the
+V2.5.1 system: the defects it found are fixed, and every claim below is
+labelled with the evidence that actually exists for it.
+
+### Correctness fixes
+
+- **Agents could reach the human working tree.** The ACP file-system proxy
+  accepted any path under the repository root in addition to the worktree.
+  A read-only role could therefore read uncommitted human edits, and the
+  Engineer — which has write permission — could write into the human
+  checkout. Access is now confined to the pinned worktree, and shell working
+  directories are validated the same way.
+- **Manual company asks read the mutable working tree.** A repository-grounded
+  ask ran with `cwd` set to the human checkout, so uncommitted changes could
+  silently enter an answer and no commit was recorded. Asks now run in a
+  commit-pinned detached worktree, record `base_commit`, and state the
+  analyzed commit in the stored decision.
+- **Triage read the mutable working tree** for the same reason, and pinned no
+  commit. Triage now runs in a detached worktree and pins `task.base_commit`
+  once for the whole workflow; the Architect reuses it instead of re-resolving
+  the branch head (which let the base drift on the revision loop).
+- **`terminal/wait_for_exit` always failed** — `self._REQUEST_TIMEOUT` on an
+  attribute that only exists at module level. Every attempt by an agent to
+  wait for a command it started raised `AttributeError`.
+- **Auto-repair crashed the workflow.** On Windows `git worktree remove`
+  routinely leaves an empty directory behind, because the agent process that
+  had it as its cwd is still exiting. The second review iteration then hit
+  "worktree path already exists", and `GitError` — unlike `WorkflowError` —
+  was not caught by the graph nodes, so the whole task went to `FAILED`.
+  Stale leftovers are now reclaimed (registered worktrees are still never
+  overwritten), and git failures degrade to a clean task failure.
+- **Replayed side effects.** `_finish_architect/_engineer/_reviewer` applied
+  their state transition unconditionally, so re-entering a node after a
+  restart raised `InvalidTransition` and failed the task. Each now applies its
+  transition only from the state it is valid in.
+- **`retry` was broken for architecture failures**: `FAILED → retry` produced
+  `READY_TO_IMPLEMENT`, from which `start_architecture` is not a legal
+  transition. A task with no architecture now retries via `retry_architecture`
+  back to `NEW`.
+- **Engineer runs that produced no commit** were recorded as if they had:
+  `result_commit` was set to the base commit and a `git.commit` event
+  announced it. Uncommitted work left in the worktree is now committed on the
+  Engineer's behalf, and a commit event is only emitted for a real commit.
+- **Health probes blocked the UI.** `/api/backends` and `/api/settings` shelled
+  out to `gemini --version` on every request (~20 s and ~28 s measured here),
+  gating first paint on the Dashboard and Settings pages. Health is now cached
+  and served stale-while-revalidate, warmed at startup: the same requests
+  measure ~50 ms and ~14 ms.
+- **Terminal status was written before the terminal event**, so a client could
+  observe an execution `COMPLETED` and then fetch events that did not yet
+  contain `execution.completed`. They now commit in one transaction.
+- **No agent activity was visible anywhere.** `AgentEventSink.emit` did not
+  pass its execution id to the engine's emitter, so every agent event was
+  persisted with `execution_id` and `task_id` NULL. 1,325 such rows had
+  accumulated: text deltas, tool calls, file changes, command output — all
+  unreachable from `/api/tasks/{id}/events` and `/api/executions/{id}/events`,
+  so the "live event log" showed only lifecycle transitions during real runs.
+- **Timeouts sized for toy repositories.** `git worktree add` was capped by a
+  hard-coded 120 s constant and aborted on a large repository, failing the
+  task before triage could start; the git timeout is now configurable
+  (`SCENEWORKS_GIT_TIMEOUT_SECONDS`, default 900 s). The ACP `initialize`
+  handshake exceeded its 30 s budget whenever two agents started at once
+  (now 120 s), and a single Engineer run exceeded the 1800 s execution limit
+  while running the project's own test and lint commands (now 5400 s).
+- **Memory events were dropped by SSE.** `MemoryService` published `"id": 0`;
+  because the SSE stream de-duplicates on id, every memory event after the
+  first was discarded. Workflow events also published no `timestamp`, which
+  the event log renders.
+- **Architect manual asks produced no artifact**: artifact storage keyed off
+  `COMPANY_ROLES`, which excludes `architect` even though it is ask-allowed.
+- Smaller fixes: `send_back_to_engineer` wrote `project_id: 0` into graph
+  state and did not reset the repair budget; advisory worktrees leaked when an
+  execution failed; the advisory-only path double-transitioned through
+  `AWAITING_ARCHITECTURE_APPROVAL`; dead `TaskWorkflowService` transition code
+  removed; unbounded SSE de-duplication set bounded.
+
+### What was actually validated, and how
+
+| Area | Evidence |
+| --- | --- |
+| Backend behaviour | `automatically tested` — 120 tests |
+| Workflow scenarios incl. repair loop | `API-E2E validated` |
+| Dashboard / projects / company / settings pages | `browser-E2E validated` |
+| Gemini ACP: triage → architect → engineer → reviewer, real Git | `live-model validated` |
+| Repository snapshot pinning under a concurrent human commit | `live-model validated` |
+| OpenHands backend | `experimental` — never executed |
+| `model_profile` → model routing | not implemented; see below |
+
+### Model configuration
+
+There is no hard-coded model anywhere. `SCENEWORKS_GEMINI_MODEL` is unset by
+default, so SceneWorks exports no `GEMINI_MODEL` and the Gemini CLI performs
+its own automatic model selection (backend health reports `model: auto`).
+Setting the value pins every role to that model.
+
+`model_profile` (`strongest` / `coding` / `research`) is **metadata only**. It
+is recorded on the role and on each execution row for provenance, but no
+backend reads it and it does not influence model selection. Profile→model
+routing is deferred to V3.1 provider routing.
 
 ## V2.5 changes
 

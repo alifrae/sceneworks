@@ -74,7 +74,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(
         title="SceneWorks",
-        version="2.4.0",
+        version="3.0.0",
         lifespan=lifespan,
         description="AI-native software company control plane.",
     )

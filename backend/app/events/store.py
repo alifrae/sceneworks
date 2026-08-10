@@ -20,18 +20,30 @@ class EventStore:
         type: str,
         payload: dict,
         severity: str = "info",
+        session: AsyncSession | None = None,
     ) -> Event:
-        async with self._session_factory() as session:
-            row = Event(
-                execution_id=execution_id,
-                task_id=task_id,
-                type=type,
-                payload=payload,
-                severity=severity,
-            )
+        """Persist an event.
+
+        Pass `session` to enlist the event in a caller-owned transaction so
+        that a state change and the event describing it commit together. The
+        caller is then responsible for committing; the row is flushed so its
+        id and timestamp are populated.
+        """
+        row = Event(
+            execution_id=execution_id,
+            task_id=task_id,
+            type=type,
+            payload=payload,
+            severity=severity,
+        )
+        if session is not None:
             session.add(row)
-            await session.commit()
-            await session.refresh(row)
+            await session.flush()
+            return row
+        async with self._session_factory() as own_session:
+            own_session.add(row)
+            await own_session.commit()
+            await own_session.refresh(row)
             return row
 
     async def list_for_task(

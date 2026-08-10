@@ -20,8 +20,15 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "npx next dev --port 3000",
+      // Run against the production build by default. `next dev` compiles
+      // routes on first visit, which made the first navigation to a page
+      // exceed the assertion timeout and fail intermittently — a property of
+      // the dev server, not of the app. Set E2E_DEV=1 for the dev server.
+      command: process.env.E2E_DEV
+        ? "npx next dev --port 3000"
+        : "npx next build && npx next start --port 3000",
       port: 3000,
+      timeout: 240_000,
       reuseExistingServer: !process.env.CI,
     },
   ],

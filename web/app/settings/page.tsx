@@ -96,8 +96,12 @@ export default function SettingsPage() {
           <small>Leave empty to auto-discover on PATH. Overrides SCENEWORKS_GEMINI_EXECUTABLE.</small>
         </label>
         <label className="field">
-          Model preference (optional)
-          <input value={form.gemini_model} onChange={(e) => setForm({ ...form, gemini_model: e.target.value })} placeholder="e.g. gemini-2.5-pro" />
+          Model override (optional)
+          <input value={form.gemini_model} onChange={(e) => setForm({ ...form, gemini_model: e.target.value })} placeholder="leave empty for automatic selection" />
+          <small>
+            Empty means the Gemini CLI picks the model itself. Setting a value exports
+            GEMINI_MODEL to the agent process and pins every role to that model.
+          </small>
         </label>
       </div>
 

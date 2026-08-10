@@ -83,6 +83,27 @@ async function waitForStatus(page: any, taskId: number, status: string, timeout 
   throw new Error(`Timed out waiting for task ${taskId} status ${status} (last: ${(await pollTask(page, taskId))?.status})`);
 }
 
+/**
+ * Wait for an execution to reach a terminal state.
+ *
+ * A company ask returns as soon as the execution is queued. Deleting the
+ * repository before it finishes races the agent (which is reading a pinned
+ * worktree of that repository) and leaves the worktree un-removable.
+ */
+async function waitForExecution(page: any, executionId: string, timeout = 60000) {
+  const terminal = ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"];
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const resp = await page.request.get(`${API_URL}/api/executions/${executionId}`);
+    if (resp.status() === 200) {
+      const execution = await resp.json();
+      if (terminal.includes(execution.status)) return execution;
+    }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+  }
+  throw new Error(`Timed out waiting for execution ${executionId} to finish`);
+}
+
 async function taskAction(page: any, taskId: number, action: string, extra?: Record<string, unknown>) {
   const resp = await page.request.post(`${API_URL}/api/tasks/${taskId}/actions/${action}`, {
     data: extra || {},
@@ -286,6 +307,20 @@ test.describe("Advisory role routing", () => {
       const exec = await askResp.json();
       expect(exec.id).toBeTruthy();
       expect(exec.role).toBe("architect");
+
+      // The ask must run against a commit-pinned snapshot, not the working
+      // tree, and must record the commit it analyzed.
+      expect(exec.workspace.base_commit).toBeTruthy();
+      expect(exec.workspace.cwd).not.toBe(repoPath);
+
+      const finished = await waitForExecution(page, exec.id);
+      expect(finished.status).toBe("COMPLETED");
+
+      // A manual architect ask is stored as a company decision.
+      const artifactsResp = await page.request.get(`${API_URL}/api/company/artifacts?role=architect`);
+      expect(artifactsResp.status()).toBe(200);
+      const artifacts = await artifactsResp.json();
+      expect(artifacts.some((a: any) => a.source_execution_id === exec.id)).toBe(true);
 
       const rolesResp = await page.request.get(`${API_URL}/api/company/roles`);
       expect(rolesResp.status()).toBe(200);

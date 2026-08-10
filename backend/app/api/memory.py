@@ -9,7 +9,6 @@ from app.context import AppContext
 from app.schemas import (
     MemoryCreate,
     MemoryOut,
-    MemorySearchParams,
     MemoryUpdate,
     VALID_MEMORY_TYPES,
 )

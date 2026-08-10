@@ -29,13 +29,13 @@ from app.events import types as event_types
 from app.events.bus import EventBus
 from app.events.store import EventStore
 from app.execution.engine import ExecutionEngine
-from app.git.workspace import GitWorktreeService
+from app.git.workspace import GitError, GitWorktreeService
 from app.models import Execution, Project, Task
 from app.roles.definitions import RoleDefinition
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
 from app.services.memory import MemoryService
-from app.services.workflow import COMPANY_ROLES, WorkflowError, parse_review_verdict
+from app.services.workflow import ASK_ALLOWED_ROLES, WorkflowError, parse_review_verdict
 from app.workflows.state import InitiativeState
 
 logger = logging.getLogger("sceneworks.workflows")
@@ -264,6 +264,25 @@ class WorkflowManager:
 
     async def _node_triage(self, state: InitiativeState) -> InitiativeState:
         task_id = state["task_id"]
+        try:
+            return await self._run_triage(state)
+        except (WorkflowError, GitError) as exc:
+            # Preparing the triage snapshot can fail for ordinary reasons (the
+            # repository is huge and worktree creation times out, the path is
+            # not a git repository). Report that as a failed task with the
+            # reason attached, not as an opaque "graph error".
+            logger.error("triage preparation failed for task %s: %s", task_id, exc)
+            await self._append_task_note(task_id, "triage could not start", str(exc))
+            await self._set_task_status(task_id, TaskStatus.FAILED, "system")
+            return {
+                **state,
+                "task_status": TaskStatus.FAILED.value,
+                "triage_executed": True,
+                "error": str(exc),
+            }
+
+    async def _run_triage(self, state: InitiativeState) -> InitiativeState:
+        task_id = state["task_id"]
         logger.info("triage node starting for task %s", task_id)
 
         async with self._session_factory() as session:
@@ -300,11 +319,27 @@ class WorkflowManager:
                     {"node": "triage", "injected_ids": memory_ctx.get("injected_ids", [])},
                 )
 
+            # Pin the whole workflow to one commit here, at the first node that
+            # touches the repository. Triage reads a detached worktree at that
+            # commit — never the human working tree — and every later role
+            # reuses task.base_commit, so architecture, implementation and
+            # review all describe the same snapshot.
+            repo = Path(project.repository_path).resolve()
+            info = await self._git.repo_info(repo)
+            if not info.is_git:
+                raise WorkflowError(f"repository at {repo} is not a valid Git repository", 400)
+            base = task.base_commit or await self._git.resolve_base_commit(
+                repo, project.default_branch
+            )
+            worktree = await self._git.create_detached_worktree(
+                repo, base, task.id, suffix="-triage"
+            )
+
             workspace = {
-                "cwd": str(Path(project.repository_path).resolve()),
-                "repo_path": str(Path(project.repository_path).resolve()),
-                "branch": project.default_branch,
-                "base_commit": task.base_commit,
+                "cwd": str(worktree.worktree_path),
+                "repo_path": str(repo),
+                "branch": None,
+                "base_commit": base,
                 "permissions": ["repository_read", "network_access"],
             }
 
@@ -316,21 +351,72 @@ class WorkflowManager:
                 model_profile=TRIAGE_MODEL_PROFILE,
             )
 
-            async with self._session_factory() as session:
-                task2 = await self._get_task(session, task_id)
-                execution = await self._create_execution(
-                    task=task2, role=role, workspace=workspace,
-                    system_prompt=system, user_prompt=user,
-                )
-                task2.current_execution_id = execution.id
-                task2.current_role = "triage"
-                await session.commit()
+            try:
+                async with self._session_factory() as session:
+                    task2 = await self._get_task(session, task_id)
+                    task2.base_commit = base
+                    execution = await self._create_execution(
+                        task=task2, role=role, workspace=workspace,
+                        system_prompt=system, user_prompt=user,
+                    )
+                    task2.current_execution_id = execution.id
+                    task2.current_role = "triage"
+                    await session.commit()
 
-            await self._emit_workflow_event(task_id, "workflow.node.started",
-                                             {"node": "triage", "execution_id": execution.id})
-            await self._engine.start(execution.id)
-            final = await self._wait_for_execution(execution.id)
-            triage_data = PromptBuilder.parse_triage_result(final.result or "")
+                await self._emit_workflow_event(
+                    task_id, "workflow.node.started",
+                    {"node": "triage", "execution_id": execution.id, "base_commit": base},
+                )
+                await self._engine.start(execution.id)
+                final = await self._wait_for_execution(execution.id)
+                triage_data = PromptBuilder.parse_triage_result(final.result or "")
+                if triage_data.pop("triage_parse_failed", False):
+                    logger.warning(
+                        "triage output for task %s could not be parsed; default routing",
+                        task_id,
+                    )
+                    triage_data["triage_degraded"] = True
+                    await self._emit_workflow_event(
+                        task_id, "workflow.triage.degraded",
+                        {"execution_id": final.id, "status": final.status,
+                         "reason": "output could not be parsed as JSON"},
+                    )
+                    await self._append_task_note(
+                        task_id, "triage output could not be parsed",
+                        triage_data["reasoning_summary"],
+                    )
+                if final.status != "COMPLETED":
+                    # Falling back to defaults is fine — the architecture
+                    # approval gate still stands between this and any code
+                    # change — but it must not look like a real decision.
+                    # requires_implementation=True in particular is a guess,
+                    # and silently claiming it for a read-only investigation
+                    # is misleading.
+                    logger.warning(
+                        "triage execution for task %s ended %s; using default routing",
+                        task_id, final.status,
+                    )
+                    triage_data["reasoning_summary"] = (
+                        f"triage execution {final.status.lower()} "
+                        f"({final.error or 'no error recorded'}); "
+                        "default routing applied — participant selection and "
+                        "requires_implementation were NOT determined by triage"
+                    )
+                    triage_data["triage_degraded"] = True
+                    await self._emit_workflow_event(
+                        task_id, "workflow.triage.degraded",
+                        {"execution_id": final.id, "status": final.status,
+                         "error": final.error},
+                    )
+                    await self._append_task_note(
+                        task_id, "triage did not complete",
+                        triage_data["reasoning_summary"],
+                    )
+            finally:
+                try:
+                    await self._git.remove_worktree(repo, worktree.worktree_path, None)
+                except Exception:  # noqa: BLE001
+                    logger.warning("triage worktree cleanup failed for task %s", task_id)
 
         triage_json = json.dumps(triage_data)
 
@@ -372,6 +458,11 @@ class WorkflowManager:
     def _route_after_advisor_router(
         self, state: InitiativeState,
     ) -> Literal["product", "cto", "technical_expert", "architect", "__end__"]:
+        # A task that already failed (e.g. triage could not create its
+        # snapshot) must not fall through to the architect on default routing.
+        if state.get("task_status") == TaskStatus.FAILED.value:
+            return "__end__"
+
         triage_json = state.get("triage_result", "{}")
         try:
             triage = json.loads(triage_json) if triage_json else {}
@@ -405,6 +496,8 @@ class WorkflowManager:
         task_id = state["task_id"]
         logger.info("%s node starting for task %s", role_key, task_id)
 
+        repo: Path | None = None
+        worktree = None
         try:
             async with self._session_factory() as session:
                 task = await self._get_task(session, task_id)
@@ -447,11 +540,6 @@ class WorkflowManager:
             await self._engine.start(execution.id)
             final = await self._wait_for_execution(execution.id)
 
-            try:
-                await self._git.remove_worktree(repo, worktree.worktree_path, None)
-            except Exception:
-                logger.debug("failed to clean up %s worktree for task %s", role_key, task_id)
-
             if final.status == "COMPLETED":
                 result_content = final.result or f"({display} produced no output)"
                 await self._store_task_advisory_result(task_id, role_key, result_content)
@@ -473,13 +561,24 @@ class WorkflowManager:
                     f"{role_key}_result": f"({display} execution {final.status})",
                     "error": None,
                 }
-        except WorkflowError as exc:
+        except (WorkflowError, GitError) as exc:
             logger.error("%s preparation failed for task %s: %s", role_key, task_id, exc)
             return {
                 **state,
                 f"{role_key}_executed": True,
                 "error": str(exc),
             }
+        finally:
+            # Advisory worktrees are disposable and must not survive a failed
+            # or cancelled execution, otherwise the next run of the same role
+            # fails with "worktree path already exists".
+            if worktree is not None and repo is not None:
+                try:
+                    await self._git.remove_worktree(repo, worktree.worktree_path, None)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "failed to clean up %s worktree for task %s", role_key, task_id
+                    )
 
     # ------------------------------------------------------------ architect node
 
@@ -489,7 +588,7 @@ class WorkflowManager:
 
         try:
             execution = await self._prepare_and_start_architect(task_id, state)
-        except WorkflowError as exc:
+        except (WorkflowError, GitError) as exc:
             logger.error("architect preparation failed for task %s: %s", task_id, exc)
             return {
                 **state,
@@ -503,10 +602,13 @@ class WorkflowManager:
         final = await self._wait_for_execution(execution.id)
 
         if final.status == "COMPLETED":
-            await self._finish_architect(task_id, final)
+            requires_implementation = state.get("requires_implementation", True)
+            await self._finish_architect(task_id, final, requires_implementation)
             # Non-implementation tasks skip approval and go straight to ready.
-            if not state.get("requires_implementation", True):
-                await self._set_task_status(task_id, TaskStatus.READY_FOR_HUMAN, "system")
+            if not requires_implementation:
+                # No approval step will run, so nothing else would ever remove
+                # this worktree.
+                await self._cleanup_architect_worktree(task_id)
                 return {
                     **state,
                     "task_status": TaskStatus.READY_FOR_HUMAN.value,
@@ -672,7 +774,7 @@ class WorkflowManager:
 
         try:
             execution = await self._prepare_and_start_engineer(task_id, is_correction)
-        except WorkflowError as exc:
+        except (WorkflowError, GitError) as exc:
             logger.error("engineer preparation failed for task %s: %s", task_id, exc)
             return {
                 **state,
@@ -717,7 +819,7 @@ class WorkflowManager:
 
         try:
             execution = await self._prepare_and_start_reviewer(task_id)
-        except WorkflowError as exc:
+        except (WorkflowError, GitError) as exc:
             logger.error("reviewer preparation failed for task %s: %s", task_id, exc)
             return {
                 **state,
@@ -854,8 +956,15 @@ class WorkflowManager:
             if execution.task_id is not None:
                 task = await session.get(Task, execution.task_id)
 
-            if task is None and execution.role in COMPANY_ROLES:
+            # Any task-less execution created by a manual ask is recorded as a
+            # company decision. ASK_ALLOWED_ROLES (not COMPANY_ROLES) is the
+            # right set: "architect" can be asked manually but is not a
+            # company role, and its answers were previously dropped.
+            if task is None and execution.role in ASK_ALLOWED_ROLES:
                 await self._store_company_artifact(session, execution)
+
+        if task is None:
+            await self._cleanup_ask_worktree(execution)
 
         event = self._pending_executions.get(execution_id)
         if event:
@@ -894,7 +1003,24 @@ class WorkflowManager:
             if not info.is_git:
                 raise WorkflowError(f"repository at {repo} is not a valid Git repository", 400)
 
-            base = await self._git.resolve_base_commit(repo, project.default_branch)
+            # Reuse the commit pinned at triage so architecture, implementation
+            # and review all analyze the same snapshot. Re-resolving here would
+            # let the base drift if the human committed meanwhile (notably on
+            # the revision loop, where the architect node runs a second time).
+            base = task.base_commit or await self._git.resolve_base_commit(
+                repo, project.default_branch
+            )
+
+            # Clear any worktree left behind by a failed earlier attempt,
+            # otherwise worktree creation fails with "path already exists".
+            if task.architecture_worktree_path:
+                try:
+                    await self._git.remove_worktree(
+                        repo, Path(task.architecture_worktree_path), None
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("stale architect worktree cleanup failed for task %s", task_id)
+
             worktree = await self._git.create_detached_worktree(repo, base, task.id)
             task.base_commit = base
             task.architecture_worktree_path = str(worktree.worktree_path)
@@ -1073,13 +1199,33 @@ class WorkflowManager:
 
     # ------------------------------------------------------------ finish hooks
 
-    async def _finish_architect(self, task_id: int, execution: Execution) -> None:
+    # These hooks can legitimately run twice for the same execution: LangGraph
+    # re-enters a node after a restart, and _node_engineer deliberately reuses
+    # an already-finished execution. Each therefore applies its transition only
+    # from the state that transition is valid in, and emits its events only
+    # alongside a real transition. Re-entry refreshes the result fields and is
+    # otherwise a no-op instead of raising InvalidTransition.
+
+    async def _finish_architect(
+        self, task_id: int, execution: Execution, requires_implementation: bool = True,
+    ) -> None:
         async with self._session_factory() as session:
             task = await self._get_task(session, task_id)
             task.current_role = None
             task.current_execution_id = None
             task.architecture_result = execution.result or "(architect produced no analysis)"
-            await self._transition(task, "architecture_completed", "system", session)
+            if task.status == TaskStatus.ARCHITECTURE_ANALYSIS.value:
+                # Advisory-only tasks go straight to READY_FOR_HUMAN. Routing
+                # them through architecture_completed first would emit a
+                # transition into AWAITING_ARCHITECTURE_APPROVAL that never
+                # actually happened, and needs no approval.
+                action = (
+                    "architecture_completed" if requires_implementation
+                    else "advisory_completed"
+                )
+                await self._transition(task, action, "system", session)
+            else:
+                await session.commit()
 
     async def _finish_engineer(self, task_id: int, execution: Execution) -> None:
         async with self._session_factory() as session:
@@ -1087,21 +1233,84 @@ class WorkflowManager:
             task.current_role = None
             task.current_execution_id = None
             commit = None
+            committed_by_sceneworks = False
             if task.worktree_path:
-                try:
-                    commit = await self._git.head_commit(Path(task.worktree_path))
-                except Exception:
-                    logger.warning("could not read engineer commit for task %s", task_id)
+                commit, committed_by_sceneworks = await self._capture_engineer_commit(
+                    task_id, Path(task.worktree_path), task.base_commit
+                )
             task.result_commit = commit or execution.workspace.get("result_commit")
             task.implementation_summary = execution.result or ""
-            await self._transition(task, "implementation_completed", "system", session)
-            if commit:
-                await self._events.append(
-                    execution_id=execution.id,
-                    task_id=task_id,
-                    type=event_types.GIT_COMMIT,
-                    payload={"commit": commit, "message": "Engineer implementation commit"},
-                )
+            if task.status == TaskStatus.IMPLEMENTING.value:
+                await self._transition(task, "implementation_completed", "system", session)
+                # Only report a commit when the engineer actually produced one.
+                # Reporting HEAD unconditionally announced the *base* commit as
+                # an implementation commit whenever the agent wrote no code.
+                if commit and commit != task.base_commit:
+                    await self._events.append(
+                        execution_id=execution.id,
+                        task_id=task_id,
+                        type=event_types.GIT_COMMIT,
+                        payload={
+                            "commit": commit,
+                            "message": (
+                                "Uncommitted engineer changes committed by SceneWorks"
+                                if committed_by_sceneworks
+                                else "Engineer implementation commit"
+                            ),
+                        },
+                    )
+                elif commit == task.base_commit:
+                    await self._events.append(
+                        execution_id=execution.id,
+                        task_id=task_id,
+                        type="task.note",
+                        payload={
+                            "title": "engineer produced no commit",
+                            "detail": (
+                                "The engineer execution finished without changing the "
+                                "worktree. The reviewer will see an empty diff."
+                            ),
+                        },
+                    )
+            else:
+                await session.commit()
+
+    async def _capture_engineer_commit(
+        self, task_id: int, worktree: Path, base_commit: str | None,
+    ) -> tuple[str | None, bool]:
+        """Return (HEAD commit, whether SceneWorks had to create it).
+
+        Agents sometimes finish having edited files but never run git commit.
+        Committing the leftovers here keeps the work reviewable instead of
+        handing the reviewer an empty diff and burning a repair iteration.
+        """
+        try:
+            head = await self._git.head_commit(worktree)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not read engineer commit for task %s", task_id)
+            return None, False
+
+        if base_commit is not None and head != base_commit:
+            return head, False
+
+        try:
+            dirty = (await self._git.status(worktree)).strip()
+        except Exception:  # noqa: BLE001
+            return head, False
+        if not dirty:
+            return head, False
+
+        logger.info(
+            "task %s: engineer left uncommitted changes; committing on its behalf", task_id,
+        )
+        try:
+            new_head = await self._git.commit_all(
+                worktree, f"sw-task-{task_id}: commit uncommitted engineer changes"
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("could not commit leftover engineer changes for task %s", task_id)
+            return head, False
+        return new_head, True
 
     async def _finish_reviewer(self, task_id: int, execution: Execution, verdict: str) -> None:
         async with self._session_factory() as session:
@@ -1110,7 +1319,10 @@ class WorkflowManager:
             task.current_execution_id = None
             task.review_result = execution.result or ""
             action = "review_completed" if verdict == "APPROVED" else "review_changes_requested"
-            await self._transition(task, action, "system", session)
+            if task.status == TaskStatus.REVIEWING.value:
+                await self._transition(task, action, "system", session)
+            else:
+                await session.commit()
             await self._cleanup_review_worktree(task)
 
     async def _store_task_advisory_result(
@@ -1198,7 +1410,6 @@ class WorkflowManager:
         """Start the workflow graph for a task (background)."""
         async with self._session_factory() as session:
             task = await self._get_task(session, task_id)
-            project = await self._get_project(session, task.project_id)
             await self._transition(task, "start_architecture", "founder", session)
             project_id = task.project_id
 
@@ -1352,9 +1563,12 @@ class WorkflowManager:
             await self._append_task_note(task_id, "work rejected", reason)
 
     async def send_back_to_engineer(self, task_id: int, notes: str = "") -> None:
+        await self._await_previous_graph(task_id)
+
         async with self._session_factory() as session:
             task = await self._get_task(session, task_id)
             await self._transition(task, "send_back_to_engineer", "founder", session)
+            project_id = task.project_id
         if notes:
             await self._append_task_note(task_id, "sent back to engineer", notes)
 
@@ -1364,8 +1578,13 @@ class WorkflowManager:
         cmd = Command(
             update={
                 "task_id": task_id,
-                "project_id": 0,
+                "project_id": project_id,
                 "task_status": TaskStatus.CHANGES_REQUESTED.value,
+                # The repair bound limits *automatic* Engineer<->Reviewer
+                # loops. An explicit human send-back starts a new cycle, so the
+                # budget resets; otherwise a task that once hit the limit could
+                # never be auto-repaired again.
+                "review_iteration": 0,
                 "error": None,
             },
             goto="route_entry",
@@ -1393,14 +1612,21 @@ class WorkflowManager:
             task = await self._get_task(session, task_id)
             if task.status != TaskStatus.FAILED.value:
                 raise WorkflowError("retry is only available for FAILED tasks", 409)
-            await self._transition(task, "retry", "founder", session)
+            # Choose the resume point before transitioning: a task with an
+            # architecture resumes at implementation, one without must restart
+            # from NEW so start_architecture is a legal transition.
+            resume_implementation = bool(task.architecture_result)
+            await self._transition(
+                task,
+                "retry" if resume_implementation else "retry_architecture",
+                "founder",
+                session,
+            )
 
-        async with self._session_factory() as session:
-            task = await self._get_task(session, task_id)
-            if task.architecture_result:
-                await self.start_implementation(task_id)
-            else:
-                await self.start_workflow(task_id)
+        if resume_implementation:
+            await self.start_implementation(task_id)
+        else:
+            await self.start_workflow(task_id)
 
     async def cleanup_worktree(self, task_id: int) -> None:
         async with self._session_factory() as session:
@@ -1487,6 +1713,7 @@ class WorkflowManager:
             "payload": {"from": current.value, "to": new_status.value,
                          "action": action, "actor": actor},
             "severity": "info",
+            "timestamp": event_row.timestamp.isoformat(),
         })
         return new_status
 
@@ -1515,6 +1742,7 @@ class WorkflowManager:
                 "payload": {"from": existing.value if existing else "unknown",
                              "to": status.value, "action": "workflow", "actor": actor},
                 "severity": "info",
+                "timestamp": event_row.timestamp.isoformat(),
             })
 
     async def _create_execution(
@@ -1566,6 +1794,7 @@ class WorkflowManager:
             "type": event_type,
             "payload": payload,
             "severity": "info",
+            "timestamp": row.timestamp.isoformat(),
         })
 
     async def _inject_memory(
@@ -1586,6 +1815,13 @@ class WorkflowManager:
         workspace = execution.workspace or {}
         title = workspace.get("ask_title") or f"{execution.role} decision"
         content = execution.result or f"Execution failed: {execution.error or 'unknown'}"
+        # Repository-grounded answers must state the commit they analyzed, so a
+        # reader can tell which snapshot the conclusions apply to.
+        base_commit = workspace.get("base_commit")
+        if base_commit:
+            content = (
+                f"_Analyzed repository snapshot: `{base_commit}`_\n\n" + content
+            )
         artifact = Artifact(
             kind="company_decision",
             role=execution.role,
@@ -1600,8 +1836,24 @@ class WorkflowManager:
             execution_id=execution.id,
             task_id=None,
             type=event_types.ARTIFACT_CREATED,
-            payload={"artifact_id": artifact.id, "role": execution.role},
+            payload={
+                "artifact_id": artifact.id,
+                "role": execution.role,
+                "base_commit": base_commit,
+            },
         )
+
+    async def _cleanup_ask_worktree(self, execution: Execution) -> None:
+        """Remove the commit-pinned snapshot created for a manual ask."""
+        workspace = execution.workspace or {}
+        path = workspace.get("ask_worktree_path")
+        repo = workspace.get("repo_path")
+        if not path or not repo:
+            return
+        try:
+            await self._git.remove_worktree(Path(repo), Path(path), None)
+        except Exception:  # noqa: BLE001
+            logger.warning("ask worktree cleanup failed for execution %s", execution.id)
 
 
 def _cap(text: str, max_bytes: int) -> str:

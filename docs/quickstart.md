@@ -45,6 +45,14 @@ Open **http://localhost:3000**
 4. **Observe automatic role routing** — the triage node analyzes the task,
    then the Architect inspects your codebase (read-only).
 
+   > **Agents read committed state, not your working tree.** At triage,
+   > SceneWorks resolves the head of the project's default branch and pins the
+   > whole workflow to that commit; every role reads a worktree checked out at
+   > it. Uncommitted or staged edits in your checkout are invisible to the
+   > agents, and nothing they do can modify your checkout. **Commit (or at
+   > least stage and commit) work you want the analysis to consider.** The
+   > pinned commit is shown as the task's base commit.
+
 5. **Review the architecture proposal** — read the analysis on the task page.
 
 6. **Approve it** — click "Approve Architecture". The workflow runs
@@ -64,8 +72,14 @@ Open **http://localhost:3000**
 
 ## Ask a company role
 
-Go to Company, pick a role (CTO, Product, etc.), connect to a project,
-and ask a question. The answer is stored as a company artifact.
+Go to Company, pick a role (CEO, CTO, Product, GTM, Technical Expert or
+Architect), connect to a project, and ask a question. The answer is stored as
+a company artifact.
+
+When you attach a project, the ask is repository-grounded: it runs against a
+commit-pinned snapshot of that repository — never your working tree — and the
+stored decision records the commit that was analyzed. Asks with no project
+attached are conversational and read no repository at all.
 
 ## Inspect Project Memory (V2.4)
 

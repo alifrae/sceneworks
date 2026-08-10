@@ -196,11 +196,18 @@ async def test_end_to_end_workflow(client, context, git_repo):
     assert detail["result_commit"]
     assert detail["task_branch"] == f"sw-task-{task['id']}"
 
-    # Diff endpoint shows the worktree path with changes recorded.
+    # Diff endpoint shows the engineer's change. The scripted backend writes
+    # the file without committing, exactly like a real agent that ends its
+    # turn having forgotten to commit; SceneWorks commits the leftovers, so
+    # the work shows up as a commit rather than as a dirty worktree.
     resp = await client.get(f"/api/tasks/{task['id']}/diff")
     assert resp.status_code == 200
     diff_data = resp.json()
-    assert "fix.py" in diff_data.get("status", ""), f"expected fix.py in status: {diff_data}"
+    assert "fix.py" in diff_data.get("full", ""), f"expected fix.py in diff: {diff_data}"
+    assert diff_data.get("commits"), f"expected a commit capturing the work: {diff_data}"
+    assert not diff_data.get("status", "").strip(), (
+        f"engineer work should be committed, not left dirty: {diff_data}"
+    )
 
     # Human accepts; no merge happens (branch untouched in human tree).
     resp = await client.post(f"/api/tasks/{task['id']}/actions/accept")

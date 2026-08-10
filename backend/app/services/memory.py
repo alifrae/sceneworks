@@ -298,17 +298,21 @@ class MemoryService:
             "title": mem.title,
             "status": mem.status,
         }
-        await self._events.append(
+        row = await self._events.append(
             execution_id=None,
             task_id=mem.source_task_id,
             type=event_type,
             payload=payload,
         )
+        # Publish the persisted row id: SSE clients de-duplicate on it, so a
+        # hard-coded 0 made every memory event after the first look like a
+        # replay of the first and get dropped.
         await self._bus.publish({
-            "id": 0,
+            "id": row.id,
             "execution_id": None,
             "task_id": mem.source_task_id,
             "type": event_type,
             "payload": payload,
             "severity": "info",
+            "timestamp": row.timestamp.isoformat(),
         })

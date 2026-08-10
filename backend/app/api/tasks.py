@@ -160,7 +160,6 @@ async def task_action(
 ) -> TaskOut:
     body = body or ActionRequest()
     wm = ctx.workflow_manager
-    workflow = ctx.workflow
     try:
         if action == "start-architecture":
             await wm.start_workflow(task_id)

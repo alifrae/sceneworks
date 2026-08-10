@@ -8,7 +8,6 @@ with project/task/worktree context at invocation time.
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import lru_cache
 from pathlib import Path
 
 from app.roles.definitions import RoleDefinition, default_roles
@@ -30,6 +29,15 @@ class RoleRegistry:
         self._roles = {r.key: r for r in (roles or default_roles())}
         self._overrides = backend_overrides or {}
         self._default_backend = default_backend
+
+    def set_default_backend(self, backend: str | None) -> None:
+        """Change the backend all roles run on, in place.
+
+        Every service (WorkflowManager, CompanyService, PromptBuilder) holds a
+        reference to this same registry instance, so mutating it here is what
+        makes a Settings-page backend change take effect without a restart.
+        """
+        self._default_backend = backend
 
     def get(self, key: str) -> RoleDefinition:
         try:
@@ -67,7 +75,6 @@ class RoleRegistry:
             "request falls outside your permissions."
         )
 
-    @lru_cache(maxsize=1)
     def prompt_files(self) -> list[str]:
         if not self._prompts_dir.is_dir():
             return []

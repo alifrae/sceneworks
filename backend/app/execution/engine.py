@@ -121,12 +121,9 @@ class ExecutionEngine:
             execution_id,
             status="CANCELLED",
             error="cancelled (forced after grace period)",
-        )
-        await self._emit(
-            event_types.EXECUTION_CANCELLED,
-            {"reason": "forced cancellation"},
-            severity="warning",
-            execution_id=execution_id,
+            event_type=event_types.EXECUTION_CANCELLED,
+            event_payload={"reason": "forced cancellation"},
+            event_severity="warning",
         )
         await self._notify_finished(execution_id)
 
@@ -209,22 +206,25 @@ class ExecutionEngine:
                 "cancelled": "CANCELLED",
                 "failed": "FAILED",
             }
-            await self._finalize(
-                execution_id,
-                status=status_map[result.status],
-                result=result.summary,
-                error=result.error,
-            )
             final_event = {
                 "completed": event_types.EXECUTION_COMPLETED,
                 "cancelled": event_types.EXECUTION_CANCELLED,
                 "failed": event_types.EXECUTION_FAILED,
             }[result.status]
-            await self._emit(
-                final_event,
-                {"error": result.error, "summary": (result.summary or "")[:2000]},
-                severity="error" if result.status == "failed" else "info",
-                execution_id=execution_id,
+            # Terminal status and terminal event commit together. Written
+            # separately, a client could poll the execution to COMPLETED and
+            # then fetch events that do not yet contain execution.completed.
+            await self._finalize(
+                execution_id,
+                status=status_map[result.status],
+                result=result.summary,
+                error=result.error,
+                event_type=final_event,
+                event_payload={
+                    "error": result.error,
+                    "summary": (result.summary or "")[:2000],
+                },
+                event_severity="error" if result.status == "failed" else "info",
             )
         except asyncio.CancelledError:
             raise
@@ -308,7 +308,16 @@ class ExecutionEngine:
         status: str,
         result: str | None = None,
         error: str | None = None,
+        event_type: str | None = None,
+        event_payload: dict | None = None,
+        event_severity: str = "info",
     ) -> None:
+        """Move an execution to a terminal status.
+
+        When event_type is given, the event is written in the same transaction
+        as the status change, so observers never see one without the other.
+        """
+        published: dict | None = None
         async with self._session_factory() as session:
             row = await session.get(Execution, execution_id)
             if row is None or row.status in TERMINAL_STATUSES:
@@ -319,7 +328,30 @@ class ExecutionEngine:
             if error is not None:
                 row.error = error
             row.finished_at = datetime.now(timezone.utc)
+            task_id = row.task_id
+            if event_type is not None:
+                event_row = await self._event_store.append(
+                    execution_id=execution_id,
+                    task_id=task_id,
+                    type=event_type,
+                    payload=event_payload or {},
+                    severity=event_severity,
+                    session=session,
+                )
+                published = {
+                    "id": event_row.id,
+                    "execution_id": execution_id,
+                    "task_id": task_id,
+                    "type": event_type,
+                    "payload": event_payload or {},
+                    "severity": event_severity,
+                    "timestamp": event_row.timestamp.isoformat(),
+                }
             await session.commit()
+        # Publish only after the transaction commits, so an SSE consumer that
+        # reacts to the event always finds the terminal row already written.
+        if published is not None:
+            await self._bus.publish(published)
 
     # -------------------------------------------------------------- recovery
 

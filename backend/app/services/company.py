@@ -8,13 +8,14 @@ role invocations never trigger chains of other agents and never modify code.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.execution.engine import ExecutionEngine
-from app.git.workspace import GitWorktreeService
-from app.models import Execution, Project, Task
+from app.git.workspace import GitError, GitWorktreeService
+from app.models import Execution, Project
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleNotFoundError, RoleRegistry
 from app.services.workflow import ASK_ALLOWED_ROLES, WorkflowError, TaskWorkflowService
@@ -62,37 +63,61 @@ class CompanyService:
 
         repo = Path(project.repository_path).resolve() if project else None
         base: str | None = None
+        worktree_path: Path | None = None
+
+        # Repository-grounded asks obey the same snapshot invariant as workflow
+        # roles: the agent reads a commit-pinned detached worktree, never the
+        # human working tree. Uncommitted edits can therefore never enter the
+        # answer, and the analyzed commit is recorded on the execution.
         if repo is not None:
             info = await self._git.repo_info(repo)
             if not info.is_git:
                 raise WorkflowError(f"repository at {repo} is not a valid Git repository", 400)
             base = await self._git.resolve_base_commit(repo, project.default_branch)
+            label = f"{project.id}-{uuid.uuid4().hex[:10]}"
+            try:
+                snapshot = await self._git.create_snapshot_worktree(repo, base, label)
+            except GitError as exc:
+                raise WorkflowError(f"could not prepare repository snapshot: {exc}", 500) from exc
+            worktree_path = snapshot.worktree_path
 
         permissions = sorted(p.value for p in role.permissions)
         workspace = {
-            "cwd": str(repo) if repo else None,
+            "cwd": str(worktree_path) if worktree_path else None,
             "repo_path": str(repo) if repo else None,
-            "branch": project.default_branch if project else None,
+            "branch": None,
             "base_commit": base,
             "permissions": permissions,
             "project_id": project_id,
             "ask_title": question[:200],
+            # Recorded so on_execution_finished can remove the snapshot.
+            "ask_worktree_path": str(worktree_path) if worktree_path else None,
         }
-        prompt = await self._prompts.build(
-            role=role,
-            project=project,
-            task=None,
-            workspace=workspace,
-            extra={"Question": question},
-        )
-        execution = await self._workflow.create_execution(
-            task=None,
-            project=project,
-            role=role,
-            workspace=workspace,
-            system_prompt=prompt.system,
-            user_prompt=prompt.user,
-        )
-        await self._engine.start(execution.id)
+        try:
+            prompt = await self._prompts.build(
+                role=role,
+                project=project,
+                task=None,
+                workspace=workspace,
+                extra={"Question": question},
+                context_worktree_path=str(worktree_path) if worktree_path else None,
+            )
+            execution = await self._workflow.create_execution(
+                task=None,
+                project=project,
+                role=role,
+                workspace=workspace,
+                system_prompt=prompt.system,
+                user_prompt=prompt.user,
+            )
+            await self._engine.start(execution.id)
+        except Exception:
+            # Never leak a snapshot worktree if the ask fails before it runs.
+            if worktree_path is not None and repo is not None:
+                try:
+                    await self._git.remove_worktree(repo, worktree_path, None)
+                except Exception:  # noqa: BLE001
+                    logger.warning("could not clean up ask worktree %s", worktree_path)
+            raise
         return execution
 

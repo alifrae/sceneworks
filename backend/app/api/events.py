@@ -26,7 +26,11 @@ async def _stream(
     execution_id: str | None,
 ) -> StreamingResponse:
     async def generator():
+        # Replayed rows are de-duplicated against the live stream. Only the
+        # replay window can collide, so the set is trimmed to keep a
+        # long-running stream from growing without bound.
         seen: set[int] = set()
+        seen_limit = max(ctx.settings.sse_replay_events * 2, 1000)
 
         # Replay persisted history first (subscribe after replay start, dedupe).
         queue = await ctx.bus.register()
@@ -70,6 +74,11 @@ async def _stream(
                 if event_id is not None and event_id in seen:
                     continue
                 if event_id is not None:
+                    if len(seen) >= seen_limit:
+                        # Event ids increase monotonically, so the oldest half
+                        # can never collide with anything still arriving.
+                        for stale in sorted(seen)[: seen_limit // 2]:
+                            seen.discard(stale)
                     seen.add(event_id)
                 if task_id is not None and event.get("task_id") != task_id:
                     continue

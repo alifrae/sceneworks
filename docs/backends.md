@@ -41,8 +41,17 @@ filesystem/shell/permission capabilities. DeepSeek via OpenHands is possible
 in principle, dependent on OpenHands validation and configuration.
 
 **Provider-neutral runtime**: An OpenAI-compatible agent runtime that
-supports arbitrary provider models is a V3 candidate. V2 ships with Gemini
-CLI ACP as the validated default.
+supports arbitrary provider models remains a candidate for a later release.
+V3.0 ships with Gemini CLI ACP as the live-validated default.
+
+**`model_profile` is not model selection.** Each role carries a
+`model_profile` (`strongest`, `coding`, `research`) and it is copied onto
+every execution row, but **no backend reads it** — it is provenance metadata
+only. The model actually used comes from the backend's own configuration
+(`SCENEWORKS_GEMINI_MODEL`, `SCENEWORKS_OPENHANDS_MODEL`) or, when unset,
+from the agent runtime's automatic selection. If you implement a new backend,
+you may map `request.model_profile` to a concrete model — nothing does today,
+and a profile→model mapping is deferred to V3.1 provider routing.
 
 ## Adding a Backend
 

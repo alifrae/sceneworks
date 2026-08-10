@@ -47,6 +47,78 @@
   between-node states can auto-resume. See `backend/app/execution/recovery.py`
   for the full state-by-state contract.
 
+### Accepted V2 limitations carried into the V3.0 baseline
+
+These were found during the V3.0 audit, judged not worth changing now, and
+are deliberately carried forward.
+
+- **Mediation is partial, and shell access is not confined.** SceneWorks
+  confines `fs/read_text_file` / `fs/write_text_file` to the pinned worktree,
+  gates `session/request_permission` on the role, and validates the working
+  directory of any terminal the agent opens. Measured over the V3.0 live runs,
+  28 of 191 observed tool calls actually reached the permission gate — the
+  rest were reported as `session/update` notifications for tools the agent ran
+  through its own runtime rather than asking the client. The gate does work
+  when used (it refused `git reflog`, `git remote -v` and
+  `python -m pytest --version` for read-only roles), but coverage depends on
+  the agent asking. Separately, a role holding `shell_execute` (Engineer,
+  Reviewer, Technical Expert) runs real commands, and a command can `cd`
+  anywhere the OS permits. Treat this as a guard rail and an audit trail,
+  **not a sandbox against a hostile agent**. Registered repositories are
+  trusted inputs; an agent with shell access has the privileges of the user
+  running SceneWorks.
+- **Large repositories are slow and can exhaust the timeouts.** Creating a
+  worktree checks out the entire tree (minutes on a ~30k-file repository), and
+  an Engineer run spends most of its wall time in the project's own test and
+  lint commands. The V3.0 defaults (`SCENEWORKS_GIT_TIMEOUT_SECONDS=900`,
+  `SCENEWORKS_EXECUTION_TIMEOUT_SECONDS=5400`) were raised after real runs hit
+  the old ceilings. If an Engineer execution does time out, the task goes
+  `FAILED` with its work left **uncommitted in the isolated worktree** — it is
+  not lost, but it is not captured as a commit either, and `retry` starts a
+  fresh execution rather than resuming that one. Scoping the task ("run only
+  this test file, do not run repository-wide lint") materially reduces the
+  risk.
+- **`worktree_root_override` is stored but never honoured.** The field exists
+  on `Project`, is accepted by the API and returned by it, but
+  `GitWorktreeService` only reads the global `worktree_root`. Per-project
+  worktree roots are not implemented.
+- **Settings changes are partly runtime, partly restart-only.** Values read
+  live from the shared `Settings` object (worktree root, Gemini executable and
+  model, execution timeout) and the default backend now take effect
+  immediately. Anything captured at construction time elsewhere still needs a
+  restart.
+- **No authentication or authorisation.** Anyone who can reach the API can
+  approve architecture and accept work. Bind to localhost only.
+- **A failed triage degrades to default routing.** If the triage execution does
+  not complete, the workflow proceeds with `architect` selected and
+  `requires_implementation=true`. This is surfaced as a
+  `workflow.triage.degraded` event and a task note rather than failing the
+  task, because the architecture approval gate still stands between that guess
+  and any code change — but the participant selection was not actually
+  decided by triage.
+- **Agents sometimes finish without committing.** Observed with a live model:
+  the Engineer edited files and ended its turn without running `git commit`.
+  SceneWorks now commits leftover worktree changes on the Engineer's behalf,
+  using `git add -A`. If the repository lacks a `.gitignore`, build artefacts
+  produced during the run can be swept into that safety-net commit. The human
+  reviews the diff before integrating.
+- **Worktrees leave `fsmonitor` daemons behind.** If a managed repository has
+  `core.fsmonitor=true`, git starts a long-lived `git fsmonitor--daemon` for
+  each worktree, and removing the worktree does not reliably reap it. Across
+  one afternoon of testing on a repository with fsmonitor enabled, **308**
+  orphaned `git.exe` processes accumulated and slowed every git operation on
+  the machine (a trivial `init`+`commit` went from sub-second to ~3 s), which
+  in turn caused unrelated test-suite timeouts. SceneWorks does not manage
+  these daemons. If you run many tasks against an fsmonitor-enabled
+  repository, either disable it for that repository
+  (`git config core.fsmonitor false`) or reap the daemons periodically
+  (`taskkill /F /IM git.exe` on Windows, `git fsmonitor--daemon stop` per
+  worktree).
+- **Concurrent live agents are resource-hungry.** Two Gemini CLI processes
+  starting simultaneously exceeded the previous 30 s ACP `initialize` timeout
+  on this machine. The default is now 120 s, but throughput remains bounded by
+  agent process startup, which is slow on Windows.
+
 ### OpenHands backend specifics
 
 - **Experimental/unvalidated**: The OpenHands backend has not been tested

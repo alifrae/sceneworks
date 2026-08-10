@@ -38,11 +38,25 @@ class Settings(BaseSettings):
     gemini_extra_args: list[str] = Field(default_factory=list)
     gemini_model: str | None = None
     gemini_environment: dict[str, str] = Field(default_factory=dict)
-    # Timeout used for Gemini subprocess startup/diagnostics (seconds).
-    gemini_startup_timeout_seconds: int = 30
+    # Timeout for Gemini subprocess startup, `--version` probes and the ACP
+    # `initialize` handshake (seconds). Node startup alone measured ~20s on a
+    # cold Windows run, and the handshake exceeded 30s whenever two agents
+    # started at once, failing executions with "ACP request initialize timed
+    # out". Kept generous: this bounds startup only, not the agent's work
+    # (that is execution_timeout_seconds).
+    gemini_startup_timeout_seconds: int = 120
+
+    # Timeout for a single git command (seconds). Creating a worktree checks
+    # out the whole tree, which on a large repository takes minutes — the
+    # previous hard-coded 120s aborted worktree creation and failed the task.
+    git_timeout_seconds: int = 900
 
     # Hard limit for a single agent execution (seconds).
-    execution_timeout_seconds: int = 1800
+    # A real Engineer run on a large repository spends most of its time in the
+    # project's own test and lint commands: a single additive test file on a
+    # ~30k-file repo exceeded 1800s while iterating pytest/ruff, and the whole
+    # task failed with the work stranded (uncommitted) in its worktree.
+    execution_timeout_seconds: int = 5400
     # Grace period after cancellation before the engine force-kills (seconds).
     cancel_grace_seconds: int = 15
 

@@ -7,8 +7,9 @@ interrupted executions. API handlers access services through this context.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -48,11 +49,23 @@ class AppContext:
     memory: MemoryService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
+    health_warmup: asyncio.Task | None = field(default=None)
 
     async def shutdown(self) -> None:
+        if self.health_warmup is not None and not self.health_warmup.done():
+            self.health_warmup.cancel()
         await self.execution_engine.shutdown()
         await self.workflow_manager.shutdown()
         await close_db(self.db_engine)
+
+
+async def _warm_backend_health(backends: BackendRegistry) -> None:
+    try:
+        await backends.health_all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - warm-up must never break startup
+        logger.debug("backend health warm-up failed", exc_info=True)
 
 
 async def build_context(settings: Settings | None = None) -> AppContext:
@@ -114,6 +127,10 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         settings_store=settings_store,
         settings_overrides=overrides,
     )
+
+    # Probe backend health in the background so the first dashboard/settings
+    # request is served from cache instead of waiting on agent CLI startup.
+    ctx.health_warmup = asyncio.create_task(_warm_backend_health(backends))
 
     interrupted = await execution_engine.recover_interrupted()
     if interrupted:

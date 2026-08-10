@@ -67,7 +67,18 @@ async def update_settings(
     if patch:
         overrides = await ctx.settings_store.update(patch)
         ctx.settings_overrides = overrides
+        # apply_overrides mutates the shared Settings instance, so services
+        # holding a reference to it (engine, git, backends) pick the new values
+        # up immediately.
         ctx.settings = apply_overrides(ctx.settings, overrides)
         ctx.git = GitWorktreeService(ctx.settings)
         ctx.backends = BackendRegistry(ctx.settings)
+        # The role registry captured the default backend at startup; update it
+        # in place, otherwise the Settings page reports a backend change that
+        # nothing actually honours until a restart.
+        ctx.roles.set_default_backend(
+            ctx.settings.default_backend
+            if ctx.settings.default_backend != "gemini_acp"
+            else None
+        )
     return await get_settings(ctx)

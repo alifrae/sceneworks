@@ -13,18 +13,10 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config.settings import Settings
-from app.domain.task_states import (
-    RUNNING,
-    InvalidTransition,
-    TaskStateMachine,
-    TaskStatus,
-)
-from app.events import types as event_types
 from app.events.bus import EventBus
 from app.events.store import EventStore
 from app.execution.engine import ExecutionEngine
@@ -91,53 +83,6 @@ class TaskWorkflowService:
             raise WorkflowError(f"project {project_id} not found", 404)
         return project
 
-    async def _transition(
-        self,
-        task: Task,
-        action: str,
-        actor: str,
-        session: AsyncSession,
-    ) -> TaskStatus:
-        current = TaskStatus(task.status)
-        try:
-            new_status = TaskStateMachine.transition(current, action)
-        except InvalidTransition as exc:
-            raise WorkflowError(
-                f"invalid transition: task is {current.value}, "
-                f"cannot apply action {action!r}",
-                409,
-            ) from exc
-        task.status = new_status.value
-        task.updated_at = datetime.now(timezone.utc)
-        await session.commit()
-        await self._events.append(
-            execution_id=None,
-            task_id=task.id,
-            type=event_types.TASK_TRANSITIONED,
-            payload={
-                "from": current.value,
-                "to": new_status.value,
-                "action": action,
-                "actor": actor,
-            },
-        )
-        await self._bus.publish(
-            {
-                "id": 0,
-                "execution_id": None,
-                "task_id": task.id,
-                "type": event_types.TASK_TRANSITIONED,
-                "payload": {
-                    "from": current.value,
-                    "to": new_status.value,
-                    "action": action,
-                    "actor": actor,
-                },
-                "severity": "info",
-            }
-        )
-        return new_status
-
     async def create_execution(
         self,
         *,
@@ -176,25 +121,6 @@ class TaskWorkflowService:
             type="task.note",
             payload={"title": title, "detail": detail[:4000]},
         )
-
-    # -------------------------------------------------------- worktree cleanup
-
-    async def cleanup_worktree(self, task_id: int) -> None:
-        async with self._session_factory() as session:
-            task = await self._get_task(session, task_id)
-            if task.status in RUNNING:
-                raise WorkflowError("cannot clean up while the task is running", 409)
-            repo = (await self._get_project(session, task.project_id)).repository_path
-            from pathlib import Path
-
-            worktree_path = task.worktree_path
-            branch = task.task_branch
-            task.worktree_path = None
-            task.task_branch = None
-            await session.commit()
-        if worktree_path:
-            await self._git.remove_worktree(Path(repo), Path(worktree_path), branch)
-        await self._append_task_note(task_id, "worktree cleaned up", "")
 
 
 def parse_review_verdict(text: str) -> str:

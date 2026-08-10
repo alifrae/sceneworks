@@ -15,7 +15,18 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Literal, Protocol
+from typing import Awaitable, Literal, Protocol
+
+
+class EmitCallback(Protocol):
+    def __call__(
+        self,
+        type: str,
+        payload: dict,
+        severity: str = "info",
+        *,
+        execution_id: str | None = None,
+    ) -> Awaitable[None]: ...
 
 
 @dataclass
@@ -66,7 +77,7 @@ class AgentEventSink:
         self,
         execution_id: str,
         task_id: int | None,
-        emit_callback: Callable[[str, dict], Awaitable[None]],
+        emit_callback: EmitCallback,
     ):
         self.execution_id = execution_id
         self.task_id = task_id
@@ -74,7 +85,14 @@ class AgentEventSink:
         self._cancel_event = asyncio.Event()
 
     async def emit(self, type: str, payload: dict, severity: str = "info") -> None:
-        await self._emit_callback(type, payload, severity)
+        # The execution id must travel with the event. Without it every
+        # agent event (text deltas, tool calls, file changes, command output)
+        # was persisted with execution_id and task_id NULL, so none of it was
+        # reachable from /api/tasks/{id}/events or /api/executions/{id}/events
+        # and the UI event log showed no agent activity at all.
+        await self._emit_callback(
+            type, payload, severity, execution_id=self.execution_id
+        )
 
     def cancel(self) -> None:
         self._cancel_event.set()

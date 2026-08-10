@@ -298,11 +298,37 @@ Permissions are enforced by the backend adapter:
     my-app-detached-7/          ← architect worktree (detached HEAD)
 ```
 
-- Architect gets a **detached HEAD** worktree (no branch, no commits)
+- Triage, Architect and the advisory roles get a **detached HEAD** worktree
+  (no branch, no commits)
 - Engineer gets a **branch worktree** (`sw-task-<id>`) with full write access
 - Reviewer gets a **disposable worktree** for inspection
+- Manual company asks that name a project get a **detached snapshot
+  worktree** (`<repo>-sw-ask-<label>`), removed when the ask finishes
 - Worktrees are cleaned up on task completion
 - The human tree never contains agent changes
+
+### The repository snapshot invariant
+
+**No agent ever reads the human working tree.** Every execution — workflow
+role *and* manual company ask — runs with its `cwd` set to a worktree pinned
+to a specific commit, and the ACP file-system proxy rejects any path outside
+that worktree (`AgentPolicy` / `_within_workspace`). The main checkout is not
+an allowed read location, so uncommitted or staged edits in the human
+checkout can never enter an answer.
+
+The commit is pinned **once**, at the first node that touches the repository
+(triage), and stored on `task.base_commit`. Architect, Engineer and Reviewer
+all reuse it. This matters on the architecture-revision loop, where the
+Architect node runs a second time: re-resolving the branch head there would
+silently move the base between the analysis and the implementation.
+
+Manual asks resolve the default branch head, record it as the execution's
+`base_commit`, and prefix the stored decision artifact with the commit that
+was analyzed, so a reader can tell which snapshot a conclusion applies to.
+
+Consequence worth stating plainly: **a repository-grounded answer describes
+committed state.** If the human has uncommitted work, the agent will not see
+it, and will report on the repository as committed.
 
 ## Restart / cancellation behavior
 

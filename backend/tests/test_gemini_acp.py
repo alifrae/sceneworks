@@ -182,3 +182,71 @@ async def test_health_with_mock(tmp_path, mock_executable):
     health = await backend.health()
     assert health.available is True
     assert "0.53.1" in (health.version or "") or health.version is not None
+
+
+# --------------------------------------------------------- workspace confinement
+
+
+def _policy(worktree: Path, repo: Path):
+    """An AgentPolicy shaped like a real execution: cwd is a pinned worktree
+    inside the repository's checkout hierarchy is NOT implied — the worktree
+    lives under the worktree root, the repo root is the human checkout."""
+    from app.agents.gemini_acp import AgentPolicy
+
+    return AgentPolicy(
+        workspace_root=worktree, repo_root=repo, allow_write=True, allow_shell=True
+    )
+
+
+def _client_with(policy):
+    from app.agents.gemini_acp import AcpStdioClient
+
+    client = AcpStdioClient.__new__(AcpStdioClient)
+    client._policy = policy
+    return client
+
+
+def test_human_working_tree_is_outside_the_workspace(tmp_path):
+    """The repository checkout must never be an allowed path.
+
+    It previously was: `_within_workspace` accepted anything under repo_root
+    in addition to the worktree. A read-only role could therefore read the
+    human's uncommitted edits — breaking the snapshot invariant — and the
+    Engineer, which holds write permission, could modify the human checkout.
+    """
+    repo = tmp_path / "human-checkout"
+    worktree = tmp_path / "worktrees" / "repo-sw-task-1"
+    (repo / "src").mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    (repo / "src" / "secret.py").write_text("uncommitted human work\n", encoding="utf-8")
+
+    client = _client_with(_policy(worktree, repo))
+
+    assert client._within_workspace(worktree / "anything.py") is True
+    assert client._within_workspace(repo / "src" / "secret.py") is False
+    assert client._within_workspace(repo) is False
+    assert client._within_workspace(tmp_path / "elsewhere.txt") is False
+
+
+def test_denial_message_names_the_human_working_tree(tmp_path):
+    repo = tmp_path / "human-checkout"
+    worktree = tmp_path / "worktrees" / "repo-sw-task-1"
+    repo.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+
+    client = _client_with(_policy(worktree, repo))
+    reason = client._outside_reason(repo / "pcs" / "session.py")
+    assert "human working tree" in reason
+    assert str(worktree) in reason
+
+
+def test_worktree_path_traversal_out_of_workspace_is_denied(tmp_path):
+    repo = tmp_path / "human-checkout"
+    worktree = tmp_path / "worktrees" / "repo-sw-task-1"
+    repo.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+
+    client = _client_with(_policy(worktree, repo))
+    client._policy.workspace_root = worktree
+    escaped = client._resolve_path("../../human-checkout/src/secret.py")
+    assert client._within_workspace(escaped) is False

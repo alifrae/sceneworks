@@ -13,13 +13,11 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      api.dashboard().catch(() => null),
-      api.backends().catch(() => []),
-    ]).then(([dash, be]) => {
-      if (dash) setData(dash);
-      setBackends(be as Backend[]);
-    }).catch((e) => setError(String(e)));
+    // Resolved independently: a backend health probe shells out to the agent
+    // CLI and can take seconds, and the dashboard must not wait on it to
+    // render.
+    api.dashboard().then(setData).catch((e) => setError(String(e)));
+    api.backends().then((b) => setBackends(b as Backend[])).catch(() => undefined);
 
     const timer = setInterval(() => {
       api.dashboard().then(setData).catch(() => undefined);
