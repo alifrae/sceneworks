@@ -44,14 +44,33 @@ Open http://localhost:3000
 
 ```bash
 cd backend
-uv run pytest                    # all tests
-uv run pytest tests/test_api.py  # specific test file
-uv run pytest -k "openhands"     # tests matching pattern
-uv run pytest --collect-only     # list all tests
+uv run python -m pytest                    # all tests
+uv run python -m pytest tests/test_api.py  # specific test file
+uv run python -m pytest -k "openhands"     # tests matching pattern
+uv run python -m pytest --collect-only     # list all tests
 ```
 
-The test suite uses an in-memory SQLite database and does not require any
-live services or model access.
+The test suite uses an in-memory SQLite database and the FakeAgentBackend.
+No live services or model access required.
+
+### Browser E2E tests
+
+```bash
+# Terminal 1: Start the backend with fake backend
+cd backend
+SCENEWORKS_DEFAULT_BACKEND=fake uv run uvicorn app.main:app --port 8010
+
+# Terminal 2: Start the frontend (in dev mode)
+cd web
+npm run dev
+
+# Terminal 3: Run E2E tests
+cd web
+npx playwright test
+```
+
+E2E tests create their own temporary Git repositories. No `E2E_REPO_PATH`
+environment variable needed.
 
 ### Code conventions
 

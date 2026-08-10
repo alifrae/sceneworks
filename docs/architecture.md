@@ -212,10 +212,25 @@ the role specifies `approval_authority`.
   backend cancels process/session → engine finalizes as `CANCELLED`
 - **Grace period**: `SCENEWORKS_CANCEL_GRACE_SECONDS` (default 15s) before
   forced task cancellation
-- **Recovery**: On startup, the engine marks all `QUEUED`/`STARTING`/`RUNNING`
-  executions as `INTERRUPTED` and corresponding tasks as `FAILED`
+- **Execution recovery**: On startup, all `QUEUED`/`STARTING`/`RUNNING`
+  executions are marked `INTERRUPTED`. Tasks with actively running executions
+  (`ARCHITECTURE_ANALYSIS`, `IMPLEMENTING`, `REVIEWING`) are marked `FAILED`.
+  Tasks in human-waiting states (`AWAITING_ARCHITECTURE_APPROVAL`,
+  `CHANGES_REQUESTED`) are preserved as-is.
+- **Workflow recovery**: Checkpointed workflows in `READY_TO_IMPLEMENT` or
+  `CHANGES_REQUESTED` are automatically resumed to the Engineer node on
+  restart. Completed side effects (Git commits, terminal execution results)
+  never replay — the idempotency check in the Engineer node prevents
+  duplicate execution.
 - **LangGraph checkpoints**: Workflow state is durably checkpointed in
-  SQLite; interrupted workflows can resume from their last checkpoint
+  SQLite after each graph node. Thread key is `task-<task_id>`, enabling
+  checkpoint lookup across restarts.
+- **Cannot safely resume**: States where an agent execution was mid-flight
+  (`ARCHITECTURE_ANALYSIS`, `IMPLEMENTING`, `REVIEWING`) are marked
+  `FAILED` because the in-progress agent work is unrecoverable.
+- **Human-waiting states**: `AWAITING_ARCHITECTURE_APPROVAL` (paused at
+  LangGraph `interrupt()`) is preserved. The human must re-approve,
+  reject, or request revision through the UI.
 
 ## Persistence
 
@@ -295,5 +310,8 @@ Permissions are enforced by the backend adapter:
   executions, marks them `INTERRUPTED`, and shuts down the workflow manager
 - **Cancellation**: `ExecutionEngine.cancel()` signals the backend, then
   force-cancels the asyncio task after the grace period
-- **LangGraph resume**: Checkpointed graphs can resume from where they left
-  off after a restart
+- **Recovery on restart**: Interrupted executions are marked and corresponding
+  running tasks fail. Workflows in safe-to-resume states (architecture approved,
+  repair loop) are automatically resumed. Human-waiting states require
+  human action. See `backend/app/execution/recovery.py` for the detailed
+  state-by-state recovery contract.

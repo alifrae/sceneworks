@@ -40,6 +40,12 @@
   orchestration.
 - **No automatic merging**: SceneWorks never merges agent branches into
   the human tree. All integration is manual.
+- **Recovery limitations**: Workflows with in-flight agent executions
+  (`ARCHITECTURE_ANALYSIS`, `IMPLEMENTING`, `REVIEWING`) cannot be
+  recovered on restart — the in-progress agent work is unrecoverable.
+  These tasks are marked `FAILED`. Workflows in human-waiting or
+  between-node states can auto-resume. See `backend/app/execution/recovery.py`
+  for the full state-by-state contract.
 
 ### OpenHands backend specifics
 

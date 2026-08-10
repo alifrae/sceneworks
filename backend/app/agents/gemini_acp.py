@@ -655,7 +655,10 @@ class GeminiACPBackend(AgentBackend):
                 label=self.label,
                 available=True,
                 version=version,
-                detail=f"executable: {executable}",
+                detail=(
+                    f"executable: {executable}"
+                    + (f", model: {self._settings.gemini_model}" if self._settings.gemini_model else ", model: auto")
+                ),
             )
         except FileNotFoundError:
             return BackendHealth(

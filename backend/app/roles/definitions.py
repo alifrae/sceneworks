@@ -6,6 +6,13 @@ backends — the same role can run on any registered backend.
 
 Roles are deliberately free of project-specific instructions. Project
 architecture rules arrive separately as project context files.
+
+**model_profile**: Guidance-only metadata indicating the role's
+recommended reasoning depth (strongest, coding, research). At present
+model_profile is NOT bound to backend model selection — the actual model
+is controlled by backend configuration (SCENEWORKS_GEMINI_MODEL,
+SCENEWORKS_OPENHANDS_MODEL, or backend defaults). A profile→model mapping
+is a candidate for V3.
 """
 
 from __future__ import annotations

@@ -78,10 +78,11 @@ class PromptBuilder:
         extra: dict | None = None,
         is_correction: bool = False,
         upstream_contexts: dict[str, str] | None = None,
+        context_worktree_path: str | None = None,
     ) -> BuiltPrompt:
         extra = extra or {}
         upstream_contexts = upstream_contexts or {}
-        context_files = await self._read_project_context(project)
+        context_files = await self._read_project_context(project, context_worktree_path)
         context_block = ""
         if context_files:
             context_block = (
@@ -225,16 +226,21 @@ class PromptBuilder:
 
     # ------------------------------------------------------------------ files
 
-    async def _read_project_context(self, project: Project | None) -> str:
-        """Read configured + default context files from the repository.
+    async def _read_project_context(
+        self, project: Project | None, worktree_path: str | None = None,
+    ) -> str:
+        """Read configured + default context files from the repository or a
+        specified worktree.
 
-        Plain file reads only — no RAG, no embeddings, no vector store.
-        Paths are validated to stay inside the repository.
+        When worktree_path is provided, context is read from that snapshot
+        (committed state). Otherwise falls back to project.repository_path
+        (human working tree — only for conversational company asks without a
+        task).
         """
         if project is None:
             return ""
-        repo = Path(project.repository_path).resolve()
-        if not repo.is_dir():
+        base = Path(worktree_path).resolve() if worktree_path else Path(project.repository_path).resolve()
+        if not base.is_dir():
             return ""
         candidates: list[str] = []
         for p in project.architecture_context_paths or []:
@@ -250,9 +256,9 @@ class PromptBuilder:
             if rel in seen:
                 continue
             seen.add(rel)
-            path = (repo / rel).resolve()
+            path = (base / rel).resolve()
             try:
-                if not path.is_relative_to(repo):
+                if not path.is_relative_to(base):
                     logger.warning("context path escapes repository: %s", rel)
                     continue
             except ValueError:

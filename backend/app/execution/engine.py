@@ -324,7 +324,14 @@ class ExecutionEngine:
     # -------------------------------------------------------------- recovery
 
     async def recover_interrupted(self) -> list[str]:
-        """Reconcile executions that were active when SceneWorks stopped."""
+        """Reconcile executions that were active when SceneWorks stopped.
+
+        Marks all active (QUEUED/STARTING/RUNNING) executions as INTERRUPTED.
+        Only fails tasks that had an interrupted execution AND are in a
+        running state (ARCHITECTURE_ANALYSIS, IMPLEMENTING, REVIEWING).
+        Human-waiting states (AWAITING_ARCHITECTURE_APPROVAL, CHANGES_REQUESTED,
+        READY_FOR_HUMAN, ACCEPTED, REJECTED) are left as-is.
+        """
         interrupted: list[str] = []
         failed_task_ids: list[int] = []
         async with self._session_factory() as session:
@@ -338,21 +345,14 @@ class ExecutionEngine:
                 row.error = "interrupted by SceneWorks restart; check logs before retrying"
                 row.finished_at = datetime.now(timezone.utc)
                 interrupted.append(row.id)
-            task_rows = (
-                (
-                    await session.execute(
-                        select(Task).where(
-                            Task.status.in_(["ARCHITECTURE_ANALYSIS", "IMPLEMENTING", "REVIEWING"])
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            for task in task_rows:
-                task.status = "FAILED"
-                task.updated_at = datetime.now(timezone.utc)
-                failed_task_ids.append(task.id)
+                if row.task_id is not None:
+                    task = await session.get(Task, row.task_id)
+                    if task is not None and task.status in (
+                        "ARCHITECTURE_ANALYSIS", "IMPLEMENTING", "REVIEWING",
+                    ):
+                        task.status = "FAILED"
+                        task.updated_at = datetime.now(timezone.utc)
+                        failed_task_ids.append(task.id)
             await session.commit()
         for execution_id in interrupted:
             await self._emit(

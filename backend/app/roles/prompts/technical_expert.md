@@ -31,3 +31,4 @@ Return a structured markdown response with sections:
 4. **Risks / invalid assumptions** — what could go wrong or what assumptions appear incorrect.
 5. **Recommendation** — chosen approach and rationale.
 6. **Implications for architecture/implementation** — what the Architect and Engineer should consider.
+7. **Verification strategy** — how this technical recommendation can be validated: tests, benchmarks, static analysis, or manual checks that would confirm correctness.

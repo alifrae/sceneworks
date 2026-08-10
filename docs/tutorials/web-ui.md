@@ -62,7 +62,8 @@ By default, SceneWorks auto-discovers `gemini` on PATH. Optional overrides:
 
 ```env
 SCENEWORKS_GEMINI_EXECUTABLE=gemini
-SCENEWORKS_GEMINI_MODEL=gemini-2.5-pro
+# SCENEWORKS_GEMINI_MODEL=auto          # let Gemini CLI pick (recommended)
+# SCENEWORKS_GEMINI_MODEL=<model/alias> # explicit override
 ```
 
 ### OpenHands configuration (optional)
@@ -71,7 +72,7 @@ SCENEWORKS_GEMINI_MODEL=gemini-2.5-pro
 SCENEWORKS_OPENHANDS_URL=http://localhost:8000
 # or for CLI mode:
 # SCENEWORKS_OPENHANDS_EXECUTABLE=openhands
-SCENEWORKS_OPENHANDS_MODEL=claude-sonnet-4-20250514
+# SCENEWORKS_OPENHANDS_MODEL=claude-sonnet-4-20250514  # example; set per your LLM provider
 ```
 
 ### Default backend selection
@@ -213,6 +214,16 @@ When the task reaches **Ready for Human Review**:
 
 ## 15. Selecting/configuring an agent backend
 
+SceneWorks distinguishes between two concepts:
+
+| Layer | Meaning | Examples |
+|---|---|---|
+| **Model Provider** | The AI model that generates text | DeepSeek, Gemini, OpenAI, Claude |
+| **Agent Backend** | The runtime that executes the agent (repo access, shell, permissions) | Gemini CLI ACP, OpenHands |
+
+A raw model API is not an engineering agent by itself — SceneWorks also
+needs repository tools, shell control, cancellation, and event streaming.
+
 ### Per-role backend selection
 
 Each role can use a different backend. Edit
@@ -226,7 +237,7 @@ RoleDefinition(
 )
 ```
 
-Or via the Settings page in the web UI (if supported by current version).
+Or via the Settings page in the web UI.
 
 ### Global default
 
@@ -237,14 +248,28 @@ SCENEWORKS_DEFAULT_BACKEND=openhands
 ```
 
 Available backends:
-- `gemini_acp` — Gemini CLI via ACP (default)
-- `openhands` — OpenHands Agent Server
+- `gemini_acp` — Gemini CLI via ACP (default, validated)
+- `openhands` — OpenHands Agent Server (experimental)
 - `fake` — Scripted fake backend (tests/demos only)
+
+### Model selection
+
+Each backend selects its model independently:
+
+- **Gemini ACP**: `SCENEWORKS_GEMINI_MODEL` (unset = CLI auto)
+- **OpenHands**: `SCENEWORKS_OPENHANDS_MODEL` (falls back to server default)
+- **Fake**: No model (scripted)
+
+The `model_profile` field on role definitions (`strongest`, `coding`,
+`research`) is metadata only in V2 — it describes the recommended reasoning
+depth but does not influence model selection. A profile→model mapping is
+a V3 candidate.
 
 ### Verifying backend health
 
 Navigate to **Settings** in the web UI. Each backend shows its availability
-status, version, and details.
+status, version, and details including the configured model selector where
+applicable.
 
 ## 16. Common troubleshooting
 

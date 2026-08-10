@@ -85,6 +85,62 @@ class WorkflowManager:
             self._checkpointer_conn = None
             self._checkpointer = None
 
+    async def recover_workflows(self) -> list[int]:
+        """Attempt to resume workflows that were checkpointed before restart.
+
+        Returns list of task IDs that were resumed.
+        """
+        resumed: list[int] = []
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(Task).where(
+                    Task.status.in_([
+                        "AWAITING_ARCHITECTURE_APPROVAL",
+                        "READY_TO_IMPLEMENT",
+                        "CHANGES_REQUESTED",
+                    ])
+                )
+            )
+            tasks = result.scalars().all()
+
+        for task in tasks:
+            checkpointer = await self._ensure_checkpointer()
+            config = self._config(task.id)
+            try:
+                state = await checkpointer.aget(config)
+            except Exception:
+                continue
+
+            if state is None:
+                continue
+
+            if task.status == "AWAITING_ARCHITECTURE_APPROVAL":
+                await self._emit_workflow_event(
+                    task.id, "workflow.interrupted",
+                    {"node": "architecture_approval",
+                     "reason": "workflow paused — human approval required after restart"},
+                )
+
+            elif task.status == "READY_TO_IMPLEMENT":
+                if task.architecture_result:
+                    try:
+                        await self.start_implementation(task.id)
+                        resumed.append(task.id)
+                        logger.info("auto-resumed task %s from READY_TO_IMPLEMENT", task.id)
+                    except Exception as exc:
+                        logger.warning("could not auto-resume task %s: %s", task.id, exc)
+
+            elif task.status == "CHANGES_REQUESTED":
+                try:
+                    await self.start_implementation(task.id)
+                    resumed.append(task.id)
+                    logger.info("auto-resumed task %s from CHANGES_REQUESTED (repair)", task.id)
+                except Exception as exc:
+                    logger.warning("could not auto-resume repair for task %s: %s", task.id, exc)
+
+        return resumed
+
     # ------------------------------------------------------------ checkpoint
 
     def _thread_id(self, task_id: int) -> str:
@@ -377,6 +433,7 @@ class WorkflowManager:
                 }
                 prompt = await self._prompts.build(
                     role=role, project=project, task=task, workspace=workspace,
+                    context_worktree_path=str(worktree.worktree_path),
                 )
                 execution = await self._create_execution(
                     task=task, role=role, workspace=workspace,
@@ -880,6 +937,7 @@ class WorkflowManager:
             prompt = await self._prompts.build(
                 role=role, project=project, task=task, workspace=workspace,
                 upstream_contexts=upstream or None,
+                context_worktree_path=str(worktree.worktree_path),
             )
             execution = await self._create_execution(
                 task=task, role=role, workspace=workspace,
@@ -939,6 +997,7 @@ class WorkflowManager:
             prompt = await self._prompts.build(
                 role=role, project=project, task=task, workspace=workspace,
                 is_correction=is_correction, upstream_contexts=upstream or None,
+                context_worktree_path=str(worktree_path),
             )
             execution = await self._create_execution(
                 task=task, role=role, workspace=workspace,
@@ -1000,7 +1059,8 @@ class WorkflowManager:
                 "Commits": "\n".join(f"- {c['sha']} {c['subject']}" for c in commits),
             }
             prompt = await self._prompts.build(
-                role=role, project=project, task=task, workspace=workspace, extra=extra
+                role=role, project=project, task=task, workspace=workspace, extra=extra,
+                context_worktree_path=str(review_worktree.worktree_path),
             )
             execution = await self._create_execution(
                 task=task, role=role, workspace=workspace,

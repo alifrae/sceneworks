@@ -118,19 +118,70 @@ async def test_cancel_inactive_execution_returns_false(context):
 
 
 async def test_restart_recovery_marks_running_executions(context):
-    execution_id = await _create_execution(context, steps=[ScriptStep(kind="sleep", seconds=30)])
     async with context.engine_factory() as session:
-        row = await session.get(Execution, execution_id)
-        row.status = "RUNNING"
         task = Task(project_id=1, title="t", status="IMPLEMENTING")
         session.add(task)
         await session.commit()
+        await session.refresh(task)
         task_id = task.id
+    execution_id = await _create_execution(
+        context, steps=[ScriptStep(kind="sleep", seconds=30)], task_id=task_id,
+    )
+    async with context.engine_factory() as session:
+        row = await session.get(Execution, execution_id)
+        row.status = "RUNNING"
+        await session.commit()
     interrupted = await context.execution_engine.recover_interrupted()
     assert execution_id in interrupted
     async with context.engine_factory() as session:
         row = await session.get(Execution, execution_id)
         assert row.status == "INTERRUPTED"
+        task_row = await session.get(Task, task_id)
+        assert task_row.status == "FAILED"
+
+
+async def test_recovery_non_running_tasks_not_failed(context):
+    """Tasks in human-waiting states are not failed during recovery."""
+    async with context.engine_factory() as session:
+        task = Task(project_id=1, title="waiting for human", status="AWAITING_ARCHITECTURE_APPROVAL")
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    execution_id = await _create_execution(
+        context, steps=[ScriptStep(kind="sleep", seconds=30)], task_id=task_id,
+    )
+    async with context.engine_factory() as session:
+        row = await session.get(Execution, execution_id)
+        row.status = "RUNNING"
+        await session.commit()
+
+    await context.execution_engine.recover_interrupted()
+    async with context.engine_factory() as session:
+        task_row = await session.get(Task, task_id)
+        assert task_row.status == "AWAITING_ARCHITECTURE_APPROVAL"
+
+
+async def test_recovery_marks_exec_only_when_task_in_running_state(context):
+    """Tasks in ARCHITECTURE_ANALYSIS with interrupted execution -> FAILED."""
+    async with context.engine_factory() as session:
+        task = Task(project_id=1, title="mid-flight", status="ARCHITECTURE_ANALYSIS")
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    execution_id = await _create_execution(
+        context, steps=[ScriptStep(kind="sleep", seconds=30)], task_id=task_id,
+    )
+    async with context.engine_factory() as session:
+        row = await session.get(Execution, execution_id)
+        row.status = "RUNNING"
+        await session.commit()
+
+    await context.execution_engine.recover_interrupted()
+    async with context.engine_factory() as session:
         task_row = await session.get(Task, task_id)
         assert task_row.status == "FAILED"
 

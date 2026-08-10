@@ -118,3 +118,29 @@ def test_naming_convention(git_repo: Path, svc: GitWorktreeService):
     ws = asyncio_run(svc.create_branch_worktree(git_repo, base, 42, "sw-task-42"))
     assert ws.worktree_path.name == f"{git_repo.name}-sw-task-42"
     asyncio_run(svc.remove_worktree(git_repo, ws.worktree_path, "sw-task-42"))
+
+
+def test_snapshot_isolation_uncommitted_change_not_in_worktree(
+    git_repo: Path, svc: GitWorktreeService,
+):
+    """Regression: an uncommitted change in the human repo must not appear
+    in a detached worktree pinned to the earlier commit."""
+    repo_file = git_repo / "app.py"
+    committed_content = repo_file.read_text(encoding="utf-8")
+
+    base = asyncio_run(svc.resolve_base_commit(git_repo, "main"))
+    ws = asyncio_run(svc.create_detached_worktree(git_repo, base, 50))
+
+    try:
+        # Modify the original repo file (uncommitted)
+        repo_file.write_text(committed_content + "\n# uncommitted change", encoding="utf-8")
+
+        # Read from the worktree — should be the committed version
+        worktree_file = ws.worktree_path / "app.py"
+        assert worktree_file.exists()
+        worktree_content = worktree_file.read_text(encoding="utf-8")
+        assert worktree_content == committed_content
+        assert "# uncommitted" not in worktree_content
+    finally:
+        asyncio_run(svc.remove_worktree(git_repo, ws.worktree_path, None))
+        repo_file.write_text(committed_content, encoding="utf-8")

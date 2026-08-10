@@ -118,4 +118,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     interrupted = await execution_engine.recover_interrupted()
     if interrupted:
         logger.warning("reconciled %d interrupted executions from previous run", len(interrupted))
+    recovered = await workflow_manager.recover_workflows()
+    if recovered:
+        logger.info("recovered %d workflows after restart", len(recovered))
     return ctx

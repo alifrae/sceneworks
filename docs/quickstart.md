@@ -76,10 +76,12 @@ Memory items are automatically injected into relevant workflow nodes.
 
 ## Choose Gemini ACP vs OpenHands
 
-- **Gemini ACP** (default): Set `SCENEWORKS_GEMINI_EXECUTABLE` in `backend/.env`
-  or ensure `gemini` is on PATH.
-- **OpenHands** (optional): Set `SCENEWORKS_OPENHANDS_URL` in `backend/.env`
-  pointing to a running OpenHands Agent Server.
+- **Gemini ACP** (default, validated): Ensure `gemini` is on PATH or set
+  `SCENEWORKS_GEMINI_EXECUTABLE` in `backend/.env`.
+  The model is selected by the Gemini CLI (`auto` by default). Override
+  with `SCENEWORKS_GEMINI_MODEL` if needed.
+- **OpenHands** (experimental): Set `SCENEWORKS_OPENHANDS_URL` in
+  `backend/.env` pointing to a running OpenHands Agent Server.
 
 Check Settings page to verify backend health.
 

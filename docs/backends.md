@@ -1,5 +1,49 @@
 # Agent Backends
 
+## Architecture: Model Providers vs Agent Backends
+
+SceneWorks separates two layers:
+
+```text
+Model Provider
+DeepSeek / Gemini / OpenAI / Claude / etc.
+        │  (provides text generation)
+        ↓
+Agent Runtime / Backend
+Gemini CLI ACP / OpenHands / future runtime
+        │  (provides repo tools, shell, permissions, cancellation, streaming)
+        ↓
+SceneWorks AgentBackend
+```
+
+A raw model API (e.g. OpenAI chat completions) is **not** automatically an
+engineering agent. SceneWorks also needs:
+- Repository tools (file read/write with path enforcement)
+- Shell control and command execution
+- Permission enforcement per role
+- Cancellation signaling
+- Structured event streaming
+
+These are provided by the Agent Backend layer. The model is only one
+component of the backend.
+
+## Current backend support
+
+| Backend | Status | Model selection |
+|---|---|---|
+| Gemini CLI ACP | Supported / default | `SCENEWORKS_GEMINI_MODEL` (unset = CLI auto) |
+| OpenHands | Experimental (unvalidated) | `SCENEWORKS_OPENHANDS_MODEL` |
+| Fake | Testing only | Scripted (no model) |
+
+**DeepSeek direct**: Not currently a SceneWorks AgentBackend. DeepSeek is a
+model provider; SceneWorks needs an agent runtime that wraps it with
+filesystem/shell/permission capabilities. DeepSeek via OpenHands is possible
+in principle, dependent on OpenHands validation and configuration.
+
+**Provider-neutral runtime**: An OpenAI-compatible agent runtime that
+supports arbitrary provider models is a V3 candidate. V2 ships with Gemini
+CLI ACP as the validated default.
+
 ## Adding a Backend
 
 SceneWorks isolates execution providers behind the `AgentBackend` protocol.

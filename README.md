@@ -1,4 +1,4 @@
-# SceneWorks V2.5
+# SceneWorks V2.5.1
 
 SceneWorks is an **AI-native software company control plane**: a standalone web
 application for operating software projects through virtual company roles
@@ -229,18 +229,19 @@ applicable actions for the current state.
 | Role | Key | Permissions | Invocation |
 |---|---|---|---|
 | CEO | `ceo` | read, network | Manual ask |
-| CTO | `cto` | read, network | Manual ask |
+| CTO | `cto` | read, network | Workflow (triage) + Manual ask |
 | Chief Architect | `architect` | read-only | Workflow (architecture phase) |
-| Product | `product` | read, network | Manual ask |
+| Product | `product` | read, network | Workflow (triage) + Manual ask |
 | Engineer | `engineer` | read, write, shell, git | Workflow (implementation) |
 | Reviewer / QA | `reviewer` | read, shell | Workflow (review) |
-| Technical Expert | `technical_expert` | read, shell | Manual ask |
+| Technical Expert | `technical_expert` | read, shell | Workflow (triage) + Manual ask |
 | GTM | `gtm` | read, network | Manual ask |
 
 Roles are configuration — purpose, permissions, backend, model profile —
-not running processes. Manual roles (CEO, CTO, Product, GTM, Technical Expert)
-are invoked via "Ask" and their outputs are stored as company artifacts. They
-never modify code and never trigger chains of other agents.
+not running processes. Product, CTO, and Technical Expert participate in
+the workflow when the triage node selects them for a given task; they can
+also be invoked manually via "Ask". CEO and GTM are manual only. Manual
+roles never modify code and never trigger chains of other agents.
 
 ## Testing
 
