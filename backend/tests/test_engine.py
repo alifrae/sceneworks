@@ -194,17 +194,17 @@ async def test_workflow_continuation_runs(context, git_repo):
     while True:
         async with context.engine_factory() as session:
             task_row = await session.get(Task, task_id)
-            if task_row.status in ("TESTING", "READY_FOR_HUMAN"):
+            if task_row.status in ("TESTING", "REVIEWING", "READY_FOR_HUMAN"):
                 break
         if asyncio.get_event_loop().time() > deadline:
             raise AssertionError(
-                f"task never reached testing/ready; status={task_row.status if task_row else '?'}"
+                f"task never reached testing/reviewing/ready; status={task_row.status if task_row else '?'}"
             )
         await asyncio.sleep(0.05)
 
     async with context.engine_factory() as session:
         task_row = await session.get(Task, task_id)
-        assert task_row.status in ("TESTING", "READY_FOR_HUMAN")
+        assert task_row.status in ("TESTING", "REVIEWING", "READY_FOR_HUMAN")
         assert task_row.implementation_summary == "implemented"
         assert task_row.worktree_path
     # Change landed in the worktree, never in the human tree.

@@ -48,7 +48,7 @@ async def _noop():
 async def test_key_and_label_identity():
     backend = OpenHandsBackend(Settings())
     assert backend.key == "openhands"
-    assert backend.label == "OpenHands Agent Server"
+    assert backend.label.startswith("OpenHands Agent Server")
 
 
 async def test_missing_executable_reports_not_available(tmp_path):
@@ -77,7 +77,7 @@ async def test_fake_backend_key_in_registry_does_not_leak_openhands_deps(context
     assert "openhands" in keys
     backend = context.backends.get("openhands")
     assert backend.key == "openhands"
-    assert backend.label == "OpenHands Agent Server"
+    assert backend.label.startswith("OpenHands Agent Server")
 
 
 async def test_run_without_url_or_executable_reports_failure(tmp_path):
@@ -106,7 +106,7 @@ async def test_openhands_backend_in_registry(context):
     backend = context.backends.get("openhands")
     health = await backend.health()
     assert health.key == "openhands"
-    assert health.label == "OpenHands Agent Server"
+    assert health.label.startswith("OpenHands Agent Server")
 
 
 async def test_openhands_backend_health_all(context):

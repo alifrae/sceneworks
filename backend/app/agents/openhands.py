@@ -8,7 +8,7 @@ Preferred production architecture:
        ↓
     OpenHandsBackend
        ↓
-    official OpenHands SDK/client (WebSocket preferred)
+    official OpenHands SDK (openhands.sdk.Workspace / Conversation)
        ↓
     OpenHands Agent Server
        ↓
@@ -16,27 +16,35 @@ Preferred production architecture:
 
 Supports three modes (tried in order of preference):
 1. SDK/WebSocket mode (preferred production): Connect to a running
-   OpenHands Agent Server using the official OpenHands SDK with WebSocket
-   streaming. Configure `SCENEWORKS_OPENHANDS_URL`.
+   OpenHands Agent Server using the official openhands-sdk package
+   (Workspace + Conversation + WebSocket streaming).
+   Configure `SCENEWORKS_OPENHANDS_URL`.
 2. HTTP/polling mode (compatible fallback): Same REST API but without the
    OpenHands SDK — uses httpx for conversation lifecycle and polls for
    status. Events are deduplicated by index.
 3. CLI/headless mode (development fallback only): Launch OpenHands as a
    one-off subprocess. Configure `SCENEWORKS_OPENHANDS_EXECUTABLE`.
 
-OpenHands (https://github.com/OpenHands/openhands) is an open-source AI
+OpenHands (https://github.com/OpenHands/OpenHands) is an open-source AI
 coding agent platform. This adapter maps its conversation lifecycle to the
 SceneWorks AgentBackend protocol.
 
 The preferred path uses the supported OpenHands SDK/Agent Server
-abstractions for WebSocket streaming, event mapping, and lifecycle
-management.
+abstractions (openhands.sdk.Workspace, openhands.sdk.Conversation,
+openhands.sdk.LLM, openhands.sdk.Agent) for WebSocket streaming, event
+mapping, and lifecycle management.
 
-The CLI/headless mode is a fallback for local development only and may
-not reflect the latest OpenHands CLI flags.
+IMPORTANT: This backend is labelled EXPERIMENTAL / UNVALIDATED.
+No live integration test has been performed against a running OpenHands
+Agent Server. The adapter code reflects the documented SDK API as of the
+Software Agent SDK docs but has not been verified end-to-end.
+Gemini ACP is the validated and default backend.
+
+The CLI/headless mode is a fallback for local development only.
 
 This module is the ONLY place that knows about:
-- OpenHands API URLs, WebSocket, and message formats;
+- OpenHands SDK imports, Workspace, Conversation, LLM, Agent classes;
+- OpenHands HTTP API URLs/paths and message formats;
 - OpenHands CLI launch and flags;
 - OpenHands-specific event shapes.
 
@@ -75,15 +83,17 @@ from app.config.settings import Settings
 OPENHANDS_HEALTH_TIMEOUT = 10.0
 OPENHANDS_RUN_TIMEOUT_FACTOR = 1.2
 
+_EXPERIMENTAL_BANNER = "[EXPERIMENTAL / UNVALIDATED — no live integration test performed]"
+
 
 class OpenHandsBackend(AgentBackend):
     key = "openhands"
-    label = "OpenHands Agent Server"
+    label = f"OpenHands Agent Server {_EXPERIMENTAL_BANNER}"
 
     def __init__(self, settings: Settings):
         self._settings = settings
         self._cancel_events: dict[str, asyncio.Event] = {}
-        self._ws_connections: dict[str, Any] = {}
+        self._sessions: dict[str, Any] = {}
 
     # ---------------------------------------------------------------- helpers
 
@@ -108,19 +118,25 @@ class OpenHandsBackend(AgentBackend):
     def _api_key(self) -> str:
         return os.environ.get("SCENEWORKS_OPENHANDS_API_KEY") or ""
 
+    def _session_key(self) -> str:
+        return os.environ.get("OH_SESSION_API_KEYS_0") or ""
+
     def _http_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         api_key = self._api_key()
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        session_key = self._session_key()
+        if session_key:
+            headers["X-Session-API-Key"] = session_key
         return headers
 
     def _sdk_available(self) -> bool:
         try:
             import importlib
-            importlib.import_module("openhands")
-            return True
-        except ImportError:
+            spec = importlib.util.find_spec("openhands.sdk")
+            return spec is not None
+        except (ImportError, ModuleNotFoundError):
             return False
 
     # ------------------------------------------------------- AgentBackend API
@@ -154,15 +170,11 @@ class OpenHandsBackend(AgentBackend):
             )
         sdk_info = ""
         if self._sdk_available():
-            try:
-                import openhands
-                sdk_info = f" [OpenHands SDK v{getattr(openhands, '__version__', '?')} available]"
-            except Exception:
-                pass
+            sdk_info = f" [openhands-sdk available{_EXPERIMENTAL_BANNER}]"
         try:
             async with httpx.AsyncClient(timeout=OPENHANDS_HEALTH_TIMEOUT) as client:
                 resp = await client.get(
-                    f"{server_url.rstrip('/')}/api/health",
+                    f"{server_url.rstrip('/')}/health",
                     headers=self._http_headers(),
                 )
             if resp.status_code == 200:
@@ -238,10 +250,10 @@ class OpenHandsBackend(AgentBackend):
         event = self._cancel_events.get(execution_id)
         if event:
             event.set()
-        ws = self._ws_connections.pop(execution_id, None)
-        if ws is not None:
+        session = self._sessions.pop(execution_id, None)
+        if session is not None and hasattr(session, "close"):
             try:
-                await ws.close()
+                session.close()
             except Exception:
                 pass
 
@@ -253,7 +265,9 @@ class OpenHandsBackend(AgentBackend):
     ) -> AgentResult:
         server_url = self._server_url()
         if server_url:
-            return await self._run_server(request, workspace, event_sink, server_url)
+            if self._sdk_available():
+                return await self._run_sdk(request, workspace, event_sink, server_url)
+            return await self._run_http(request, workspace, event_sink, server_url)
 
         executable = self._executable()
         if executable:
@@ -267,19 +281,6 @@ class OpenHandsBackend(AgentBackend):
             ),
         )
 
-    # ------------------------------------------------------- server execution
-
-    async def _run_server(
-        self,
-        request: AgentRequest,
-        workspace: Workspace,
-        event_sink: AgentEventSink,
-        server_url: str,
-    ) -> AgentResult:
-        if self._sdk_available():
-            return await self._run_sdk(request, workspace, event_sink, server_url)
-        return await self._run_http(request, workspace, event_sink, server_url)
-
     # ------------------------------------------------------- SDK/WebSocket execution
 
     async def _run_sdk(
@@ -292,76 +293,73 @@ class OpenHandsBackend(AgentBackend):
         cancel_event = asyncio.Event()
         self._cancel_events[request.execution_id] = cancel_event
         try:
-            import openhands
-
             await event_sink.emit(
                 "agent.event",
                 {
                     "name": "backend.connecting",
-                    "message": f"Connecting to OpenHands Agent Server at {server_url} (SDK/WebSocket)",
+                    "message": (
+                        f"Connecting to OpenHands Agent Server at {server_url}"
+                        f" (SDK/WebSocket) {_EXPERIMENTAL_BANNER}"
+                    ),
                     "diagnostics": True,
                 },
             )
+
+            from openhands.sdk import Agent, Conversation, LLM, Workspace as OHWorkspace
+            from openhands.tools.preset.default import get_default_agent
 
             user_prompt = (
                 f"# Role instructions\n{request.system_prompt}\n\n"
                 f"# Request\n{request.user_prompt}"
             )
 
-            configuration = {
-                "directory": str(workspace.path),
-            }
+            llm_kwargs: dict[str, Any] = {}
             if self._model():
-                configuration["model"] = self._model()
+                llm_kwargs["model"] = self._model()
             api_key = self._api_key()
             if api_key:
-                configuration["api_key"] = api_key
+                llm_kwargs["api_key"] = api_key
 
-            runtime = openhands.Runtime(
-                server_url=server_url,
-                api_key=api_key,
+            llm = LLM(**llm_kwargs) if llm_kwargs else LLM()
+            agent = get_default_agent(llm=llm)
+
+            oh_workspace = OHWorkspace(
+                host=server_url.rstrip("/"),
+                api_key=self._session_key() or None,
+                working_dir=str(workspace.path),
             )
+
+            conversation = Conversation(agent=agent, workspace=oh_workspace)
+            self._sessions[request.execution_id] = conversation
+
+            conversation.send_message(user_prompt)
 
             summary_parts: list[str] = []
-
-            async for event in runtime.run(
-                task=user_prompt,
-                configuration=configuration,
-            ):
+            try:
+                conversation.run()
+            except Exception as exc:
                 if event_sink.cancelled() or cancel_event.is_set():
-                    await runtime.close()
                     return AgentResult(status="cancelled", error="cancelled by user")
+                return AgentResult(status="failed", error=f"{type(exc).__name__}: {exc}"[:2000])
 
-                event_type = getattr(event, "type", None) or getattr(event, "event", "")
-                event_data = getattr(event, "data", None) or getattr(event, "content", "")
-
-                if event_type in ("text", "message", "thought", "agent.message"):
-                    if isinstance(event_data, str) and event_data.strip():
-                        summary_parts.append(event_data)
-                        await event_sink.emit(
-                            "agent.text_delta",
-                            {"delta": event_data[:2000]},
-                        )
-                elif event_type in ("tool.start", "tool.started"):
+            for event in getattr(conversation, "events", []):
+                if event_sink.cancelled() or cancel_event.is_set():
+                    break
+                event_dict = event if isinstance(event, dict) else {}
+                event_type = event_dict.get("type") or getattr(event, "type", None) or ""
+                event_data = event_dict.get("content") or getattr(event, "content", None) or ""
+                if isinstance(event_data, str) and event_data.strip():
+                    summary_parts.append(event_data)
                     await event_sink.emit(
-                        "tool.started",
-                        {"name": str(event_data)[:200]},
-                    )
-                elif event_type in ("tool.complete", "tool.completed"):
-                    await event_sink.emit(
-                        "tool.completed",
-                        {"name": str(event_data)[:200]},
-                    )
-                elif event_type == "error":
-                    return AgentResult(
-                        status="failed",
-                        error=str(event_data)[:2000],
+                        "agent.text_delta",
+                        {"delta": str(event_data)[:2000]},
                     )
 
-            return AgentResult(
-                status="completed",
-                summary="\n".join(summary_parts[-5:]) or "OpenHands SDK completed.",
-            )
+            if event_sink.cancelled() or cancel_event.is_set():
+                return AgentResult(status="cancelled", error="cancelled by user")
+
+            summary = "\n".join(summary_parts[-5:]) or "OpenHands SDK completed."
+            return AgentResult(status="completed", summary=summary)
 
         except ImportError:
             return await self._run_http(request, workspace, event_sink, server_url)
@@ -371,6 +369,12 @@ class OpenHandsBackend(AgentBackend):
                 error=f"OpenHands SDK error: {exc}"[:2000],
             )
         finally:
+            session = self._sessions.pop(request.execution_id, None)
+            if session is not None and hasattr(session, "close"):
+                try:
+                    session.close()
+                except Exception:
+                    pass
             self._cancel_events.pop(request.execution_id, None)
 
     # ------------------------------------------------------- HTTP execution
@@ -395,7 +399,10 @@ class OpenHandsBackend(AgentBackend):
                     "agent.event",
                     {
                         "name": "backend.connecting",
-                        "message": f"Connecting to OpenHands at {server_url}",
+                        "message": (
+                            f"Connecting to OpenHands at {server_url}"
+                            f" [HTTP polling — compatibility fallback]"
+                        ),
                         "diagnostics": True,
                     },
                 )
@@ -534,7 +541,7 @@ class OpenHandsBackend(AgentBackend):
             "agent.event",
             {
                 "name": "backend.starting",
-                "message": f"Launching OpenHands: {' '.join(cmd[:2])} ...",
+                "message": f"Launching OpenHands CLI: {' '.join(cmd[:2])} ... [headless — development fallback]",
                 "diagnostics": True,
             },
         )
@@ -558,7 +565,7 @@ class OpenHandsBackend(AgentBackend):
             stdout_chunks: list[str] = []
             stderr_chunks: list[str] = []
 
-            async def read_stream(stream, chunks, label, emit_label):
+            async def read_stream(stream, chunks, emit_label):
                 try:
                     while True:
                         if event_sink.cancelled() or cancel_event.is_set():
@@ -578,10 +585,10 @@ class OpenHandsBackend(AgentBackend):
                     pass
 
             stdout_task = asyncio.create_task(
-                read_stream(proc.stdout, stdout_chunks, "stdout", "agent.text_delta")
+                read_stream(proc.stdout, stdout_chunks, "agent.text_delta")
             )
             stderr_task = asyncio.create_task(
-                read_stream(proc.stderr, stderr_chunks, "stderr", "agent.event")
+                read_stream(proc.stderr, stderr_chunks, "agent.event")
             )
 
             try:

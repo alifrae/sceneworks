@@ -3,24 +3,36 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import type { Dashboard } from "@/lib/types";
+import type { Backend, Dashboard } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import { timeAgo } from "@/lib/format";
 
 export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
+  const [backends, setBackends] = useState<Backend[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.dashboard().then(setData).catch((e) => setError(String(e)));
+    Promise.all([
+      api.dashboard().catch(() => null),
+      api.backends().catch(() => []),
+    ]).then(([dash, be]) => {
+      if (dash) setData(dash);
+      setBackends(be as Backend[]);
+    }).catch((e) => setError(String(e)));
+
     const timer = setInterval(() => {
       api.dashboard().then(setData).catch(() => undefined);
+      api.backends().then((b) => setBackends(b as Backend[])).catch(() => undefined);
     }, 10_000);
     return () => clearInterval(timer);
   }, []);
 
   if (error) return <div className="notice error">Cannot reach the SceneWorks API: {error}</div>;
-  if (!data) return <div className="empty">Loading…</div>;
+  if (!data) return <div className="empty">Loading...</div>;
+
+  const geminiUp = backends.find((b) => b.key === "gemini_acp")?.available ?? false;
+  const openhandsUp = backends.find((b) => b.key === "openhands")?.available ?? false;
 
   return (
     <div>
@@ -43,6 +55,27 @@ export default function DashboardPage() {
         <div className="kpi">
           <div className="value">{data.failed_executions.length}</div>
           <div className="label">Recent failed executions</div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Backend status</h2>
+        <div className="row" style={{ gap: 12, marginTop: 8 }}>
+          {backends.map((be) => (
+            <span
+              key={be.key}
+              className={`badge ${be.available ? "success" : "error"}`}
+              title={be.detail || ""}
+              style={{ fontSize: 13 }}
+            >
+              {be.available ? "●" : "○"} {be.label || be.key}
+            </span>
+          ))}
+          {!geminiUp && !openhandsUp && (
+            <span className="muted small" style={{ marginLeft: 4 }}>
+              No live backends. Using fake/simulated agents (development mode).
+            </span>
+          )}
         </div>
       </div>
 
@@ -71,6 +104,36 @@ export default function DashboardPage() {
                     <StatusBadge status={task.status} />
                   </td>
                   <td className="muted small">{timeAgo(task.updated_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>Failed executions</h2>
+        {data.failed_executions.length === 0 ? (
+          <div className="empty">No failures.</div>
+        ) : (
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Backend</th>
+                <th>Error</th>
+                <th>Finished</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.failed_executions.map((ex) => (
+                <tr key={ex.id}>
+                  <td>{ex.role}</td>
+                  <td>{ex.backend}</td>
+                  <td className="small" style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {ex.error || "—"}
+                  </td>
+                  <td className="muted small">{ex.finished_at ? timeAgo(ex.finished_at) : "—"}</td>
                 </tr>
               ))}
             </tbody>

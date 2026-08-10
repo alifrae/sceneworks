@@ -4,7 +4,7 @@ Step-by-step guide from installation to accepting a task result.
 
 ## 1. Prerequisites
 
-- **Python 3.12+** with `pip`
+- **Python 3.12+** (via `uv`, the included Python dependency manager)
 - **Node.js >= 20** with `npm`
 - **Git** (must be on PATH)
 - **Windows:** PowerShell or Windows Terminal
@@ -295,7 +295,7 @@ status, version, and details.
 
 ### macOS/Linux-specific notes
 
-- Use `source .venv/bin/activate` instead of `.venv\Scripts\activate`
+- All commands use `uv run` — no manual virtual environment activation needed
 - Path separators are forward slashes `/`
 - No extra console windows appear for subprocesses
 

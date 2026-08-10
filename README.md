@@ -1,4 +1,4 @@
-# SceneWorks V2.4
+# SceneWorks V2.5
 
 SceneWorks is an **AI-native software company control plane**: a standalone web
 application for operating software projects through virtual company roles
@@ -121,22 +121,25 @@ and command through the ACP client proxy, enforcing role permissions.
 Configuration: `SCENEWORKS_GEMINI_EXECUTABLE`, `SCENEWORKS_GEMINI_MODEL`,
 `SCENEWORKS_GEMINI_EXTRA_ARGS`.
 
-### OpenHands backend (V2.3) — productionised in V2.4
+### OpenHands backend (V2.3) — experimental in V2.5
 
 [OpenHands](https://github.com/OpenHands/openhands) is an open-source AI
-coding agent platform. The OpenHands backend supports two modes:
+coding agent platform. The OpenHands backend supports three modes:
 
-1. **HTTP mode** (recommended): Connect to a running OpenHands Agent Server.
+1. **SDK/WebSocket mode** (preferred): Connect via the official
+   `openhands-sdk` package with WebSocket streaming.
    Set `SCENEWORKS_OPENHANDS_URL=http://localhost:8000`.
-2. **CLI mode**: Launch OpenHands as a one-off headless task runner.
+2. **HTTP polling mode** (compatibility fallback): Same REST API without SDK.
+3. **CLI/headless mode** (development fallback only): Launch as subprocess.
    Set `SCENEWORKS_OPENHANDS_EXECUTABLE` or put `openhands` on PATH.
 
 Configuration: `SCENEWORKS_OPENHANDS_URL`, `SCENEWORKS_OPENHANDS_EXECUTABLE`,
 `SCENEWORKS_OPENHANDS_MODEL`, `SCENEWORKS_OPENHANDS_API_KEY`.
 
-OpenHands is optional and **not the default**. Gemini ACP remains fully
-supported as the primary backend. See [docs/backends.md](docs/backends.md) for
-evaluation comparison and selection guidance.
+**Status: EXPERIMENTAL / UNVALIDATED.** No live integration test has been
+performed against a running OpenHands Agent Server. The adapter reflects the
+documented SDK API but has not been verified end-to-end. Gemini ACP is the
+validated and default backend. See [docs/backends.md](docs/backends.md).
 
 ### Backend selection
 
@@ -242,9 +245,18 @@ never modify code and never trigger chains of other agents.
 ## Testing
 
 ```bash
+# Backend tests (no live model required)
 cd backend
 uv sync
-uv run pytest                # 82 tests, no live model access required
+uv run pytest                # 105 tests
+
+# Frontend lint and build
+cd web
+npm run build
+npm run lint
+
+# Browser E2E tests (requires running backend + frontend)
+npm run test:e2e
 ```
 
 Test categories:
@@ -264,10 +276,13 @@ Test categories:
   persistence, approval/rejection/revision, auto-repair, repair limits,
   idempotency, worktree continuity, cancellation.
 - **OpenHands tests** (`test_openhands.py`): Contract validation,
-  health checks, configuration, registry integration.
-
-Tests never call live models. A live smoke test is optional: run the app
-with a real project and execute a task as described above.
+  health checks, configuration, registry integration, experimental label.
+- **Memory tests** (`test_memory.py`): CRUD, search, archival,
+  injection context, provenance.
+- **Browser E2E tests** (`web/e2e/`): Playwright-based UI → API →
+  workflow flow. Uses FakeAgentBackend. No live models.
+- **Live smoke test** (optional): Run the app with a real Gemini project
+  and execute a task as described above.
 
 ## Documentation
 
@@ -282,6 +297,34 @@ with a real project and execute a task as described above.
 - [Development](docs/development.md) — Developer setup and conventions.
 - [Known Limitations](docs/limitations.md) — Current boundaries and
   non-goals.
+
+## V2.5 changes
+
+V2.5 is the final V2 release — closing gaps, hardening reliability, and
+adding browser E2E tests.
+
+- **Dashboard race fixed**: Dashboard queries use consistent transaction
+  snapshots, preventing stale KPI data.
+- **OpenHands SDK audit**: Backend rewritten to use the documented
+  `openhands-sdk` API (`Workspace`, `Conversation`, `LLM`, `Agent`).
+  Marked experimental/unvalidated until live tested.
+- **6 reliability bugs fixed**: `retry` from FAILED state (critical);
+  cancellation now terminates asyncio graph tasks; SSE event deduplication
+  fixed; workflow events stream live; execution-wait race resolved;
+  `parse_review_verdict` no longer auto-approves empty output.
+- **Recovery improvements**: `recover_interrupted` emits transition events
+  and updates timestamps; advisory role worktrees auto-cleaned up.
+- **uv cleanup**: dev deps moved to `[dependency-groups]`; OpenHands
+  optional dep narrowed to `openhands-sdk`; lock file pruned of 200+
+  transitive packages.
+- **Documentation residue removed**: no more pip/manual venv references.
+- **UI enhancements**: Workflow progress stepper with per-phase status
+  (done/active/waiting); backend health indicators on dashboard; failed
+  execution table with error details; human-waiting state highlighted.
+- **Browser E2E tests**: Playwright-based tests for the full UI→API→
+  workflow path using FakeAgentBackend.
+- **Evaluation framework**: Repeatable scenario-based evaluation for bug
+  fixes, features, refactors, architecture decisions, and more.
 
 ## Security and trust assumptions
 

@@ -1,6 +1,6 @@
 [project]
 name = "sceneworks"
-version = "2.4.0"
+version = "2.5.0"
 description = "AI-native software company control plane"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,13 +16,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+openhands = [
+    "openhands-sdk",
+]
+
+[dependency-groups]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "asgi-lifespan>=2.1",
-]
-openhands = [
-    "openhands-ai",
 ]
 
 [tool.pytest.ini_options]

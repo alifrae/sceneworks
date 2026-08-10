@@ -1,6 +1,6 @@
 # Known Limitations
 
-## Current limitations (V2.4)
+## Current limitations (V2.5)
 
 ### Deployment
 
@@ -43,13 +43,18 @@
 
 ### OpenHands backend specifics
 
-- **Server dependency**: HTTP mode requires a separately running OpenHands
-  Agent Server. SceneWorks does not manage the OpenHands lifecycle.
+- **Experimental/unvalidated**: The OpenHands backend has not been tested
+  against a live OpenHands Agent Server. SDK imports reflect documented API
+  but have not been verified end-to-end.
+- **SDK/WebSocket mode (preferred)**, HTTP polling (compatibility fallback),
+  CLI/headless (development fallback only).
+- **Server dependency**: SDK and HTTP modes require a separately running
+  OpenHands Agent Server. SceneWorks does not manage the OpenHands lifecycle.
 - **Event polling**: HTTP mode polls for conversation status rather than
   receiving streaming updates. This adds latency compared to Gemini's ACP
   streaming.
 - **API version compatibility**: The OpenHands API is under active
-  development. The adapter targets the current stable API surface.
+  development. The adapter targets the current documented API surface.
   Custom API endpoints may require adapter modifications.
 - **No ACP-level permission mediation**: Unlike Gemini ACP where every
   file read/write is approved per-request, OpenHands relies on workspace
@@ -84,7 +89,7 @@
 - **No responsive mobile layout**: Designed for desktop browser use.
 - **No internationalization**: English only.
 
-## Non-goals (not planned for V2.4)
+## Non-goals (not planned for V2)
 
 - RAG / embeddings / vector DB
 - Knowledge graph

@@ -111,16 +111,22 @@ When adding a new backend, evaluate against these criteria:
 
 | Criterion | Gemini ACP | OpenHands |
 |---|---|---|
-| Protocol | ACP v1 over stdio | REST API (HTTP) or CLI |
+| Protocol | ACP v1 over stdio | SDK/WebSocket, REST API (HTTP), or CLI |
 | Setup | Install Gemini CLI + authenticate | Deploy Agent Server or install CLI |
 | Permission model | SceneWorks mediates all I/O via ACP proxy | Workspace confinement |
 | File access control | Per-request approval/rejection | Directory scoping |
 | Shell control | ACP terminal proxy | Agent-side configuration |
-| Event granularity | Structured ACP update notifications | Polling-based or streaming |
+| Event granularity | Structured ACP update notifications | WebSocket streaming, polling, or stdout |
 | Resource footprint | Single process per execution | Server + agent processes |
 | Reliability | Tied to Gemini CLI stability | Tied to Agent Server availability |
-| Authentication | Gemini CLI's own auth | API key (optional) |
+| Authentication | Gemini CLI's own auth | API key or session key |
+| Status | Validated (default) | Experimental / unvalidated |
 | Recommended for | Direct integration, permission enforcement | Teams, cloud deployment, shared infrastructure |
+
+OpenHands execution modes (tried in order):
+1. **SDK/WebSocket** (preferred): official `openhands-sdk` with WebSocket streaming
+2. **HTTP polling** (compatibility fallback): REST API, polls for status
+3. **CLI/headless** (development fallback only): one-off subprocess
 
 **Strengths of Gemini ACP:**
 - Fine-grained permission enforcement at the protocol level

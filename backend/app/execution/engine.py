@@ -85,10 +85,10 @@ class ExecutionEngine:
             return
         sink = AgentEventSink(execution_id, task_id, self._emit)
         run = ActiveRun(task=None, sink=sink, backend_key=backend_key)
+        self._active[execution_id] = run
         run.task = asyncio.create_task(
             self._execute(execution_id, sink), name=f"exec-{execution_id}"
         )
-        self._active[execution_id] = run
 
     async def cancel(self, execution_id: str) -> bool:
         """Signal cancellation. The backend observes it and cleans up its
@@ -326,6 +326,7 @@ class ExecutionEngine:
     async def recover_interrupted(self) -> list[str]:
         """Reconcile executions that were active when SceneWorks stopped."""
         interrupted: list[str] = []
+        failed_task_ids: list[int] = []
         async with self._session_factory() as session:
             rows = (
                 (await session.execute(select(Execution).where(Execution.status.in_(ACTIVE_STATUSES))))
@@ -337,7 +338,6 @@ class ExecutionEngine:
                 row.error = "interrupted by SceneWorks restart; check logs before retrying"
                 row.finished_at = datetime.now(timezone.utc)
                 interrupted.append(row.id)
-            # Tasks whose agent run died with the process must not stay RUNNING.
             task_rows = (
                 (
                     await session.execute(
@@ -351,6 +351,8 @@ class ExecutionEngine:
             )
             for task in task_rows:
                 task.status = "FAILED"
+                task.updated_at = datetime.now(timezone.utc)
+                failed_task_ids.append(task.id)
             await session.commit()
         for execution_id in interrupted:
             await self._emit(
@@ -358,6 +360,18 @@ class ExecutionEngine:
                 {"reason": "SceneWorks restart"},
                 severity="warning",
                 execution_id=execution_id,
+            )
+        for task_id in failed_task_ids:
+            await self._event_store.append(
+                execution_id=None,
+                task_id=task_id,
+                type=event_types.TASK_TRANSITIONED,
+                payload={
+                    "from": "active",
+                    "to": "FAILED",
+                    "action": "recovery",
+                    "actor": "system",
+                },
             )
         return interrupted
 

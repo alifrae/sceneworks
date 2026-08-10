@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_context
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 @router.get("")
 async def dashboard(ctx: AppContext = Depends(get_context)) -> DashboardOut:
     async with ctx.engine_factory() as session:
+        await session.execute(text("BEGIN IMMEDIATE"))
         active_tasks = (
             await session.execute(
                 select(func.count(Task.id)).where(
@@ -55,6 +56,7 @@ async def dashboard(ctx: AppContext = Depends(get_context)) -> DashboardOut:
                 .limit(8)
             )
         ).scalars().all()
+        await session.commit()
 
     task_outs = []
     for t in recent_tasks:

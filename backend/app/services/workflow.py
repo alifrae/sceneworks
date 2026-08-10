@@ -203,6 +203,8 @@ def parse_review_verdict(text: str) -> str:
         return match.group(1).upper()
     if "CHANGES_REQUESTED" in text.upper():
         return "CHANGES_REQUESTED"
+    if not text.strip():
+        return "CHANGES_REQUESTED"
     return "APPROVED"
 
 

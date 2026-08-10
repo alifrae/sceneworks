@@ -390,6 +390,11 @@ class WorkflowManager:
             await self._engine.start(execution.id)
             final = await self._wait_for_execution(execution.id)
 
+            try:
+                await self._git.remove_worktree(repo, worktree.worktree_path, None)
+            except Exception:
+                logger.debug("failed to clean up %s worktree for task %s", role_key, task_id)
+
             if final.status == "COMPLETED":
                 result_content = final.result or f"({display} produced no output)"
                 await self._store_task_advisory_result(task_id, role_key, result_content)
@@ -803,6 +808,12 @@ class WorkflowManager:
         event = asyncio.Event()
         self._pending_executions[execution_id] = event
         try:
+            async with self._session_factory() as session:
+                row = await session.get(Execution, execution_id)
+                if row is not None and row.status in ("COMPLETED", "FAILED", "CANCELLED"):
+                    event.set()
+                elif row is None:
+                    raise RuntimeError(f"execution {execution_id} vanished")
             await event.wait()
             async with self._session_factory() as session:
                 row = await session.get(Execution, execution_id)
@@ -1313,18 +1324,23 @@ class WorkflowManager:
             await self._transition(task, "cancel", "founder", session)
         if execution_id:
             await self._engine.cancel(execution_id)
-        self._active_graphs.pop(task_id, None)
+        graph_task = self._active_graphs.pop(task_id, None)
+        if graph_task and not graph_task.done():
+            graph_task.cancel()
 
     async def retry(self, task_id: int) -> None:
         async with self._session_factory() as session:
             task = await self._get_task(session, task_id)
             if task.status != TaskStatus.FAILED.value:
                 raise WorkflowError("retry is only available for FAILED tasks", 409)
+            await self._transition(task, "retry", "founder", session)
 
-        if task.architecture_result:
-            await self.start_implementation(task_id)
-        else:
-            await self.start_workflow(task_id)
+        async with self._session_factory() as session:
+            task = await self._get_task(session, task_id)
+            if task.architecture_result:
+                await self.start_implementation(task_id)
+            else:
+                await self.start_workflow(task_id)
 
     async def cleanup_worktree(self, task_id: int) -> None:
         async with self._session_factory() as session:
@@ -1396,7 +1412,7 @@ class WorkflowManager:
         task.status = new_status.value
         task.updated_at = datetime.now(timezone.utc)
         await session.commit()
-        await self._events.append(
+        event_row = await self._events.append(
             execution_id=None,
             task_id=task.id,
             type=event_types.TASK_TRANSITIONED,
@@ -1404,7 +1420,7 @@ class WorkflowManager:
                       "action": action, "actor": actor},
         )
         await self._bus.publish({
-            "id": 0,
+            "id": event_row.id,
             "execution_id": None,
             "task_id": task.id,
             "type": event_types.TASK_TRANSITIONED,
@@ -1424,7 +1440,7 @@ class WorkflowManager:
             task.status = status.value
             task.updated_at = datetime.now(timezone.utc)
             await session.commit()
-            await self._events.append(
+            event_row = await self._events.append(
                 execution_id=None,
                 task_id=task_id,
                 type=event_types.TASK_TRANSITIONED,
@@ -1432,7 +1448,7 @@ class WorkflowManager:
                           "to": status.value, "action": "workflow", "actor": actor},
             )
             await self._bus.publish({
-                "id": 0,
+                "id": event_row.id,
                 "execution_id": None,
                 "task_id": task_id,
                 "type": event_types.TASK_TRANSITIONED,
@@ -1477,12 +1493,20 @@ class WorkflowManager:
         return sorted(p.value for p in role.permissions)
 
     async def _emit_workflow_event(self, task_id: int, event_type: str, payload: dict) -> None:
-        await self._events.append(
+        row = await self._events.append(
             execution_id=None,
             task_id=task_id,
             type=event_type,
             payload=payload,
         )
+        await self._bus.publish({
+            "id": row.id,
+            "execution_id": None,
+            "task_id": task_id,
+            "type": event_type,
+            "payload": payload,
+            "severity": "info",
+        })
 
     async def _inject_memory(
         self, project_id: int, task_description: str, types: list[str] | None = None,
