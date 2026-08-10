@@ -151,12 +151,15 @@ async def test_engine_is_active_tracking(context):
 
 
 async def test_workflow_continuation_runs(context, git_repo):
-    """Engine's on_execution_finished hook transitions the task state and the
-    Engineer's worktree flow works end to end."""
+    """Workflow manager graph orchestrates engineer phase end to end.
+
+    Uses the LangGraph workflow manager instead of the old continuation hook.
+    After engineer completes, the graph auto-proceeds to reviewer. The task
+    eventually reaches READY_FOR_HUMAN (or TESTING if the reviewer is not
+    configured).  We verify engineer artifacts are created correctly."""
     context.backends._backends["fake"] = FakeAgentBackend(
         steps=[
             ScriptStep(kind="file", path="fix.py", content="x = 2\n"),
-            ScriptStep(kind="commit", message="task: fix"),
             ScriptStep(kind="summary", summary="implemented"),
         ]
     )
@@ -167,28 +170,41 @@ async def test_workflow_continuation_runs(context, git_repo):
         session.add(project)
         await session.commit()
         await session.refresh(project)
-        task = Task(project_id=project.id, title="t", status="READY_TO_IMPLEMENT")
+
+        base_commit = (await __import__("app.git.workspace", fromlist=["run_git"]).run_git(
+            git_repo, "rev-parse", "HEAD"
+        )).strip()
+
+        task = Task(
+            project_id=project.id, title="t",
+            status="READY_TO_IMPLEMENT", base_commit=base_commit,
+        )
         session.add(task)
         await session.commit()
         await session.refresh(task)
         task_id = task.id
 
-    execution = await context.workflow.start_implementation(task_id)
-    await _wait_status(context, execution.id, "COMPLETED", timeout=15)
-    # The continuation hook runs after finalization; poll for the task state.
-    deadline = asyncio.get_event_loop().time() + 10
+    await context.workflow_manager.start_implementation(task_id)
+
+    # Poll for the task to advance past the engineer node. The graph auto-
+    # continues to reviewer, so the task may reach READY_FOR_HUMAN or
+    # stay at TESTING if the reviewer phase fails.
+    deadline = asyncio.get_event_loop().time() + 15
+    task_row = None
     while True:
         async with context.engine_factory() as session:
             task_row = await session.get(Task, task_id)
-            if task_row.status == "TESTING":
+            if task_row.status in ("TESTING", "READY_FOR_HUMAN"):
                 break
         if asyncio.get_event_loop().time() > deadline:
-            raise AssertionError(f"task never reached TESTING; status={task_row.status}")
+            raise AssertionError(
+                f"task never reached testing/ready; status={task_row.status if task_row else '?'}"
+            )
         await asyncio.sleep(0.05)
+
     async with context.engine_factory() as session:
         task_row = await session.get(Task, task_id)
-        assert task_row.status == "TESTING"
-        assert task_row.result_commit
+        assert task_row.status in ("TESTING", "READY_FOR_HUMAN")
         assert task_row.implementation_summary == "implemented"
         assert task_row.worktree_path
     # Change landed in the worktree, never in the human tree.

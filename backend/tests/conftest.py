@@ -32,6 +32,8 @@ def settings(tmp_path) -> Settings:
         execution_timeout_seconds=120,
         cancel_grace_seconds=2,
         cors_origins=["http://test"],
+        checkpoint_db_path=str(tmp_path / "checkpoints.db"),
+        max_review_iterations=3,
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.agents.base import AgentBackend, BackendHealth
 from app.agents.fake import FakeAgentBackend
 from app.agents.gemini_acp import GeminiACPBackend
+from app.agents.openhands import OpenHandsBackend
 from app.config.settings import Settings
 
 
@@ -13,10 +14,12 @@ class BackendNotFoundError(KeyError):
 
 
 class BackendRegistry:
-    def __init__(self, settings: Settings, include_fake: bool = True):
+    def __init__(self, settings: Settings, include_fake: bool = True, include_openhands: bool = True):
         self._backends: dict[str, AgentBackend] = {
             "gemini_acp": GeminiACPBackend(settings),
         }
+        if include_openhands:
+            self._backends["openhands"] = OpenHandsBackend(settings)
         if include_fake:
             self._backends["fake"] = FakeAgentBackend()
 

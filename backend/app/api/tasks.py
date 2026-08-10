@@ -159,32 +159,33 @@ async def task_action(
     ctx: AppContext = Depends(get_context),
 ) -> TaskOut:
     body = body or ActionRequest()
+    wm = ctx.workflow_manager
     workflow = ctx.workflow
     try:
         if action == "start-architecture":
-            await workflow.start_architecture(task_id)
+            await wm.start_workflow(task_id)
         elif action == "approve-architecture":
-            await workflow.approve_architecture(task_id)
+            await wm.resume_approval(task_id, "approve")
         elif action == "reject-architecture":
-            await workflow.reject_architecture(task_id, body.reason)
+            await wm.resume_approval(task_id, "reject", body.reason)
         elif action == "request-architecture-revision":
-            await workflow.request_architecture_revision(task_id, body.notes)
+            await wm.resume_approval(task_id, "revision", body.notes)
         elif action == "start-implementation":
-            await workflow.start_implementation(task_id)
+            await wm.start_implementation(task_id)
         elif action == "start-review":
-            await workflow.start_review(task_id)
+            await wm.start_review(task_id)
         elif action == "accept":
-            await workflow.accept(task_id)
+            await wm.accept(task_id)
         elif action == "reject":
-            await workflow.reject(task_id, body.reason)
+            await wm.reject(task_id, body.reason)
         elif action == "send-back":
-            await workflow.send_back_to_engineer(task_id, body.notes)
+            await wm.send_back_to_engineer(task_id, body.notes)
         elif action == "cancel":
-            await workflow.cancel(task_id)
+            await wm.cancel(task_id)
         elif action == "retry":
-            await workflow.retry(task_id)
+            await wm.retry(task_id)
         elif action == "cleanup-worktree":
-            await workflow.cleanup_worktree(task_id)
+            await wm.cleanup_worktree(task_id)
         else:
             raise HTTPException(404, f"unknown action: {action}")
     except WorkflowError as exc:

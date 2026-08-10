@@ -32,6 +32,28 @@ GIT_COMMIT = "git.commit"
 TASK_TRANSITIONED = "task.transitioned"
 ARTIFACT_CREATED = "artifact.created"
 
+WORKFLOW_STARTED = "workflow.started"
+WORKFLOW_NODE_STARTED = "workflow.node.started"
+WORKFLOW_NODE_COMPLETED = "workflow.node.completed"
+WORKFLOW_INTERRUPTED = "workflow.interrupted"
+WORKFLOW_RESUMED = "workflow.resumed"
+WORKFLOW_COMPLETED = "workflow.completed"
+WORKFLOW_FAILED = "workflow.failed"
+
+# V2.2 workflow-orchestration events
+WORKFLOW_TRIAGE_COMPLETED = "workflow.triage.completed"
+WORKFLOW_ROLE_SELECTED = "workflow.role.selected"
+WORKFLOW_ROLE_SKIPPED = "workflow.role.skipped"
+WORKFLOW_REPAIR_STARTED = "workflow.repair.started"
+WORKFLOW_REPAIR_LIMIT_REACHED = "workflow.repair.limit_reached"
+
+# V2.4 memory events
+MEMORY_CREATED = "memory.created"
+MEMORY_UPDATED = "memory.updated"
+MEMORY_ARCHIVED = "memory.archived"
+MEMORY_SUPERSEDED = "memory.superseded"
+MEMORY_INJECTED = "memory.injected"
+
 # Human-facing labels used by the frontend to render events readably.
 EVENT_LABELS: dict[str, str] = {
     EXECUTION_STARTED: "Execution started",
@@ -52,4 +74,21 @@ EVENT_LABELS: dict[str, str] = {
     GIT_COMMIT: "Git commit",
     TASK_TRANSITIONED: "Task state changed",
     ARTIFACT_CREATED: "Artifact created",
+    WORKFLOW_STARTED: "Workflow started",
+    WORKFLOW_NODE_STARTED: "Workflow node started",
+    WORKFLOW_NODE_COMPLETED: "Workflow node completed",
+    WORKFLOW_INTERRUPTED: "Workflow paused (human input needed)",
+    WORKFLOW_RESUMED: "Workflow resumed",
+    WORKFLOW_COMPLETED: "Workflow completed",
+    WORKFLOW_FAILED: "Workflow failed",
+    WORKFLOW_TRIAGE_COMPLETED: "Triage completed",
+    WORKFLOW_ROLE_SELECTED: "Role selected",
+    WORKFLOW_ROLE_SKIPPED: "Role skipped",
+    WORKFLOW_REPAIR_STARTED: "Repair iteration started",
+    WORKFLOW_REPAIR_LIMIT_REACHED: "Repair limit reached",
+    MEMORY_CREATED: "Memory created",
+    MEMORY_UPDATED: "Memory updated",
+    MEMORY_ARCHIVED: "Memory archived",
+    MEMORY_SUPERSEDED: "Memory superseded",
+    MEMORY_INJECTED: "Memory injected into workflow",
 }

@@ -198,3 +198,61 @@ class DashboardOut(BaseModel):
     recently_completed: list[TaskOut]
     failed_executions: list[ExecutionOut]
     roles: list[dict]
+
+
+# --- Project Memory schemas (V2.4) ---
+
+VALID_MEMORY_TYPES = {
+    "initiative_summary",
+    "architecture_decision",
+    "product_decision",
+    "technology_decision",
+    "constraint",
+}
+
+
+class MemoryCreate(BaseModel):
+    project_id: int
+    type: str
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1)
+    status: str = "proposed"
+    tags: list[str] = []
+    source: str | None = None
+    source_task_id: int | None = None
+    source_execution_id: str | None = None
+
+
+class MemoryUpdate(BaseModel):
+    type: str | None = None
+    title: str | None = None
+    content: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+    source: str | None = None
+
+
+class MemoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    type: str
+    title: str
+    content: str
+    status: str
+    tags: list
+    source: str | None
+    source_task_id: int | None
+    source_execution_id: str | None
+    supersedes_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemorySearchParams(BaseModel):
+    query: str = ""
+    types: list[str] | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+    limit: int = Field(default=20, ge=1, le=100)

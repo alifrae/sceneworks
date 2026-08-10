@@ -2,7 +2,7 @@
 
 A role is *configuration*: purpose, responsibilities, permissions, backend,
 model profile, and whether it may modify source. Roles are decoupled from
-backends â€” the same role can run on any registered backend.
+backends — the same role can run on any registered backend.
 
 Roles are deliberately free of project-specific instructions. Project
 architecture rules arrive separately as project context files.
@@ -36,6 +36,7 @@ _WRITE = _READ | frozenset(
     {Permission.REPOSITORY_WRITE, Permission.SHELL_EXECUTE, Permission.GIT_COMMIT}
 )
 _RESEARCH = _READ
+_TECHNICAL_EXPERT = _READ | frozenset({Permission.SHELL_EXECUTE})
 
 
 def default_roles() -> list[RoleDefinition]:
@@ -90,6 +91,28 @@ def default_roles() -> list[RoleDefinition]:
                 "performance risks",
                 "dependency direction",
             ),
+        ),
+        RoleDefinition(
+            key="technical_expert",
+            display_name="Technical Expert",
+            description=(
+                "Evaluates domain/technical correctness, challenges incorrect "
+                "assumptions, evaluates algorithmic approaches, identifies "
+                "specialized constraints and performance implications. "
+                "Read-only; does not modify implementation."
+            ),
+            backend="gemini_acp",
+            model_profile="strongest",
+            permissions=_TECHNICAL_EXPERT,
+            responsibilities=(
+                "evaluate domain/technical correctness",
+                "challenge incorrect technical assumptions",
+                "evaluate algorithmic approaches",
+                "identify specialized constraints",
+                "identify performance implications",
+                "distinguish architecture concerns from domain concerns",
+            ),
+            prompt_file="technical_expert.md",
         ),
         RoleDefinition(
             key="product",

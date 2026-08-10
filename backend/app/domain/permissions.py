@@ -19,6 +19,7 @@ class Permission(str, Enum):
     GIT_COMMIT = "git_commit"
     NETWORK_ACCESS = "network_access"
     TASK_STATE_CHANGE = "task_state_change"
+    RESEARCH = "research"
 
 
 def role_can(permissions: set[Permission], perm: Permission) -> bool:

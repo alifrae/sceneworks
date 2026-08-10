@@ -51,6 +51,7 @@ class TaskStateMachine:
         "send_back_to_engineer",
         "cancel",
         "retry",
+        "advisory_completed",
     }
 
     _TRANSITIONS: dict[tuple[TaskStatus, str], TaskStatus] = {
@@ -87,6 +88,10 @@ class TaskStateMachine:
         (TaskStatus.READY_FOR_HUMAN, "reject"): TaskStatus.REJECTED,
         (TaskStatus.READY_FOR_HUMAN, "send_back_to_engineer"): (
             TaskStatus.CHANGES_REQUESTED
+        ),
+        # Advisory-only (non-implementation) tasks complete here.
+        (TaskStatus.ARCHITECTURE_ANALYSIS, "advisory_completed"): (
+            TaskStatus.READY_FOR_HUMAN
         ),
         # Recoverable failure: retry re-enters the appropriate phase.
         (TaskStatus.FAILED, "retry"): TaskStatus.READY_TO_IMPLEMENT,

@@ -8,6 +8,7 @@ import type {
   Diff,
   Execution,
   Project,
+  ProjectMemory,
   RepoStatus,
   Role,
   Settings,
@@ -95,6 +96,33 @@ export const api = {
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (body: Record<string, unknown>) =>
     request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(body) }),
+
+  // memory (V2.4)
+  memoryList: (projectId: number, params?: Record<string, string>) => {
+    const query = new URLSearchParams(params ?? {}).toString();
+    return request<ProjectMemory[]>(
+      `/api/projects/${projectId}/memory${query ? `?${query}` : ""}`,
+    );
+  },
+  memoryCreate: (projectId: number, body: Record<string, unknown>) =>
+    request<ProjectMemory>(`/api/projects/${projectId}/memory`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  memoryUpdate: (projectId: number, memoryId: number, body: Record<string, unknown>) =>
+    request<ProjectMemory>(`/api/projects/${projectId}/memory/${memoryId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  memoryArchive: (projectId: number, memoryId: number) =>
+    request<ProjectMemory>(`/api/projects/${projectId}/memory/${memoryId}/archive`, {
+      method: "POST",
+    }),
+  memorySupersede: (projectId: number, memoryId: number, replacementId: number) =>
+    request<{ superseded: ProjectMemory; replacement: ProjectMemory }>(
+      `/api/projects/${projectId}/memory/${memoryId}/supersede?replacement_id=${replacementId}`,
+      { method: "POST" },
+    ),
 };
 
 export function eventsUrl(taskId?: number, executionId?: string): string {

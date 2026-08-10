@@ -7,6 +7,7 @@ prompt. No API route handler ever builds prompts directly.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,35 @@ DEFAULT_CONTEXT_FILES = ("AGENTS.md", "ARCHITECTURE.md", "CONTRIBUTING.md", "ROA
 REVIEW_VERDICT_LINE = (
     "\nEnd your response with exactly one line: `VERDICT: APPROVED` or "
     "`VERDICT: CHANGES_REQUESTED`."
+)
+
+TRIAGE_SYSTEM_PROMPT = (
+    "You are a request triage classifier. Your job is to analyze a task "
+    "description and determine what kind of work it represents and which "
+    "company roles should participate.\n\n"
+    "Classify the request into one of these types:\n"
+    "- bug\n"
+    "- feature\n"
+    "- architecture\n"
+    "- technical_investigation\n"
+    "- refactor\n"
+    "- product_question\n"
+    "- technology_decision\n\n"
+    "For each advisory role, decide whether it materially contributes:\n"
+    "- Product: when user-facing behavior, requirements, scope, or "
+    "acceptance criteria need definition.\n"
+    "- CTO: when technology choices, build-vs-buy, migrations, platform "
+    "decisions, or major feasibility/risk questions are involved.\n"
+    "- Technical Expert: when specialized domain/algorithmic correctness, "
+    "constraints, or performance implications need evaluation.\n"
+    "- Architect: almost always, unless the request is purely a product "
+    "question or simple question that does not involve the codebase.\n\n"
+    "Also determine whether code implementation is needed.\n\n"
+    "Return ONLY a valid JSON object with this schema:\n"
+    '{"request_type": "...", "use_product": bool, "use_cto": bool, '
+    '"use_architect": bool, "use_technical_expert": bool, '
+    '"requires_implementation": bool, "reasoning_summary": "..."}\n\n'
+    "Do not include any other text outside the JSON."
 )
 
 
@@ -46,8 +76,11 @@ class PromptBuilder:
         task: Task | None,
         workspace: dict,
         extra: dict | None = None,
+        is_correction: bool = False,
+        upstream_contexts: dict[str, str] | None = None,
     ) -> BuiltPrompt:
         extra = extra or {}
+        upstream_contexts = upstream_contexts or {}
         context_files = await self._read_project_context(project)
         context_block = ""
         if context_files:
@@ -81,6 +114,17 @@ class PromptBuilder:
                     + _cap(task.review_result, 10_000)
                 )
 
+        # Upstream advisory context for Architect and Engineer.
+        upstream_block = ""
+        if upstream_contexts and role.key in ("architect", "engineer"):
+            for label, content in upstream_contexts.items():
+                if content:
+                    upstream_block += (
+                        f"\n\n## {label}\n" + _cap(content, 30_000)
+                    )
+        if upstream_block:
+            upstream_block = "\n\n# Upstream analysis\n" + upstream_block
+
         workspace_block = (
             "\n\n# Workspace\n"
             f"- Working directory (cwd): {workspace.get('cwd', '')}\n"
@@ -112,16 +156,72 @@ class PromptBuilder:
             if value:
                 extra_block += f"\n\n# {key.replace('_', ' ').title()}\n{value}"
 
+        # Correction iteration prefix for engineer.
+        correction_prefix = ""
+        if is_correction and role.key == "engineer":
+            correction_prefix = (
+                "This is a correction iteration.\n\n"
+                "Do not reimplement the task from scratch.\n"
+                "Address the Reviewer findings only, plus any directly "
+                "required supporting changes.\n\n"
+                "Continue from the current implementation state in the "
+                "worktree — do not discard previous commits.\n\n"
+            )
+
         user = (
+            f"{correction_prefix}"
             f"Execute your responsibilities for this request. Be precise and "
             f"concise; do not invent facts."
-            f"{project_block}{task_block}{context_block}{workspace_block}{extra_block}"
+            f"{project_block}{task_block}{upstream_block}{context_block}"
+            f"{workspace_block}{extra_block}"
         )
         if role.key == "reviewer":
             user += REVIEW_VERDICT_LINE
 
         system = self._roles.system_instructions(role.key)
         return BuiltPrompt(system=system, user=user, context_files=[])
+
+    @staticmethod
+    def build_triage_prompt(task: Task, project: Project) -> tuple[str, str]:
+        """Build a system/user prompt pair for the triage node."""
+        system = TRIAGE_SYSTEM_PROMPT
+        user = (
+            "Classify the following task:\n\n"
+            f"Project: {project.name}\n"
+            f"Task: {task.title}\n"
+            f"Description: {task.description or '(none)'}"
+        )
+        return system, user
+
+    @staticmethod
+    def parse_triage_result(text: str) -> dict:
+        """Extract a triage JSON blob from model output. Returns dict with
+        sensible defaults on parse failure."""
+        import re
+        match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                return {
+                    "request_type": str(parsed.get("request_type", "feature")),
+                    "use_product": bool(parsed.get("use_product", False)),
+                    "use_cto": bool(parsed.get("use_cto", False)),
+                    "use_architect": bool(parsed.get("use_architect", True)),
+                    "use_technical_expert": bool(parsed.get("use_technical_expert", False)),
+                    "requires_implementation": bool(parsed.get("requires_implementation", True)),
+                    "reasoning_summary": str(parsed.get("reasoning_summary", "")),
+                }
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {
+            "request_type": "feature",
+            "use_product": False,
+            "use_cto": False,
+            "use_architect": True,
+            "use_technical_expert": False,
+            "requires_implementation": True,
+            "reasoning_summary": "triage parse failed; defaulting to architect path",
+        }
 
     # ------------------------------------------------------------------ files
 

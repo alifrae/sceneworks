@@ -151,4 +151,24 @@ class AppSetting(Base):
     )
 
 
-all_models = (Project, Task, Execution, Event, Artifact, AppSetting)
+class ProjectMemory(Base):
+    __tablename__ = "project_memory"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    type: Mapped[str] = mapped_column(String(50))
+    title: Mapped[str] = mapped_column(String(500))
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="proposed")
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
+    source_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("project_memory.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+all_models = (Project, Task, Execution, Event, Artifact, AppSetting, ProjectMemory)

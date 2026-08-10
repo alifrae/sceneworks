@@ -24,6 +24,7 @@ from app.api import (
     dashboard_router,
     events_router,
     executions_router,
+    memory_router,
     projects_router,
     roles_router,
     settings_router,
@@ -73,7 +74,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(
         title="SceneWorks",
-        version="1.0.0",
+        version="2.4.0",
         lifespan=lifespan,
         description="AI-native software company control plane.",
     )
@@ -96,6 +97,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(events_router)
     app.include_router(dashboard_router)
+    app.include_router(memory_router)
 
     @app.get("/api/health")
     async def health() -> dict:

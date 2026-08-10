@@ -56,11 +56,22 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # LangGraph workflow checkpoint database path (plain file path, not a URL).
+    checkpoint_db_path: str = "data/workflow_checkpoints.db"
+    # Maximum review-repair iterations before forcing human intervention.
+    max_review_iterations: int = 3
+
     # Path to directory containing editable role prompt files (roles/*.md).
     roles_dir: Path = BACKEND_DIR / "app" / "roles" / "prompts"
 
+    # OpenHands backend.
+    openhands_url: str | None = None
+    openhands_executable: str | None = None
+    openhands_model: str | None = None
+    openhands_environment: dict[str, str] = Field(default_factory=dict)
+
     # When set to "fake", the default backend is the scripted FakeAgentBackend.
-    default_backend: Literal["gemini_acp", "fake"] = "gemini_acp"
+    default_backend: Literal["gemini_acp", "openhands", "fake"] = "gemini_acp"
 
 
 def resolve_path(path: Path, base: Path | None = None) -> Path:

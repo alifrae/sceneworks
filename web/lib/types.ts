@@ -135,3 +135,19 @@ export interface Diff {
   status: string;
   error: string | null;
 }
+
+export interface ProjectMemory {
+  id: number;
+  project_id: number;
+  type: string;
+  title: string;
+  content: string;
+  status: string;
+  tags: string[];
+  source: string | null;
+  source_task_id: number | null;
+  source_execution_id: string | null;
+  supersedes_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
