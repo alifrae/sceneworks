@@ -250,3 +250,274 @@ def test_worktree_path_traversal_out_of_workspace_is_denied(tmp_path):
     client._policy.workspace_root = worktree
     escaped = client._resolve_path("../../human-checkout/src/secret.py")
     assert client._within_workspace(escaped) is False
+
+
+# ---------------------------------------------------- permission boundary tests
+#
+# These tests verify that every supported role cannot exceed its permissions
+# through any ACP client method the mock agent exercises.  Each test mode is
+# driven by an env var on the mock server.
+
+
+def _role_permissions(role: str) -> tuple[str, ...]:
+    from app.roles.definitions import default_roles
+
+    for r in default_roles():
+        if r.key == role:
+            return tuple(p.value for p in r.permissions)
+    return ()
+
+
+def _run_with_mode(tmp_path, mock: str, mode_env: dict[str, str], role: str) -> tuple:
+    settings = make_settings(tmp_path, mock)
+    backend = GeminiACPBackend(settings)
+    perms = _role_permissions(role)
+    workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+    sink = RecordingSink()
+    request = AgentRequest(
+        execution_id="perm-test",
+        role=role,
+        system_prompt=f"you are {role}",
+        user_prompt="do your job",
+    )
+    for k, v in mode_env.items():
+        os.environ[k] = v
+    result = None
+    try:
+        result = backend.run(request, workspace, sink)
+    finally:
+        for k in mode_env:
+            os.environ.pop(k, None)
+    # We need to await it since run is async but our test helpers are sync-ish
+    return result, sink.events
+
+
+async def test_architect_write_denied(tmp_path, mock_executable):
+    """Architect (read-only) cannot write files through ACP."""
+    os.environ["MOCK_ACP_WRITE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("architect")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("arch-write", "architect", "sys", "write a file")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        assert not (tmp_path / "mock.txt").exists()
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "fs_write_denied"
+        ]
+        assert denied, "expected fs_write_denied for Architect"
+    finally:
+        os.environ.pop("MOCK_ACP_WRITE_MODE", None)
+
+
+async def test_architect_shell_denied(tmp_path, mock_executable):
+    """Architect cannot create a terminal."""
+    os.environ["MOCK_ACP_TERMINAL_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("architect")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("arch-shell", "architect", "sys", "run a command")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "shell_denied"
+        ]
+        assert denied, "expected shell_denied for Architect"
+    finally:
+        os.environ.pop("MOCK_ACP_TERMINAL_MODE", None)
+
+
+async def test_architect_execute_permission_denied(tmp_path, mock_executable):
+    """Architect's execute permission request is denied."""
+    os.environ["MOCK_ACP_EXECUTE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("architect")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("arch-exec", "architect", "sys", "run tests")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "permission_denied"
+        ]
+        assert denied, "expected permission_denied for Architect execute"
+    finally:
+        os.environ.pop("MOCK_ACP_EXECUTE_MODE", None)
+
+
+async def test_engineer_write_allowed(tmp_path, mock_executable):
+    """Engineer can write files."""
+    os.environ["MOCK_ACP_WRITE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("engineer")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("eng-write", "engineer", "sys", "write a file")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        assert (tmp_path / "mock.txt").exists()
+        assert any(t == "file.changed" for t, _, _ in sink.events)
+    finally:
+        os.environ.pop("MOCK_ACP_WRITE_MODE", None)
+
+
+async def test_engineer_terminal_allowed(tmp_path, mock_executable):
+    """Engineer can create terminals."""
+    os.environ["MOCK_ACP_TERMINAL_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("engineer")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("eng-term", "engineer", "sys", "run echo")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "shell_denied"
+        ]
+        assert not denied, "Engineer shell should NOT be denied"
+    finally:
+        os.environ.pop("MOCK_ACP_TERMINAL_MODE", None)
+
+
+async def test_engineer_execute_permission_allowed(tmp_path, mock_executable):
+    """Engineer's execute permission request is allowed."""
+    os.environ["MOCK_ACP_EXECUTE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("engineer")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("eng-exec", "engineer", "sys", "run tests")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "permission_denied"
+        ]
+        assert not denied, "Engineer execute permission should NOT be denied"
+    finally:
+        os.environ.pop("MOCK_ACP_EXECUTE_MODE", None)
+
+
+async def test_reviewer_write_denied(tmp_path, mock_executable):
+    """Reviewer (read+shell) cannot write files."""
+    os.environ["MOCK_ACP_WRITE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("reviewer")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("rev-write", "reviewer", "sys", "write a file")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        assert not (tmp_path / "mock.txt").exists()
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "fs_write_denied"
+        ]
+        assert denied, "expected fs_write_denied for Reviewer"
+    finally:
+        os.environ.pop("MOCK_ACP_WRITE_MODE", None)
+
+
+async def test_reviewer_terminal_allowed(tmp_path, mock_executable):
+    """Reviewer can create terminals (has shell_execute)."""
+    os.environ["MOCK_ACP_TERMINAL_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("reviewer")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("rev-term", "reviewer", "sys", "run validation")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "shell_denied"
+        ]
+        assert not denied, "Reviewer shell should NOT be denied"
+    finally:
+        os.environ.pop("MOCK_ACP_TERMINAL_MODE", None)
+
+
+async def test_technical_expert_write_denied(tmp_path, mock_executable):
+    """Technical Expert (read+shell) cannot write files."""
+    os.environ["MOCK_ACP_WRITE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("technical_expert")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("te-write", "technical_expert", "sys", "write")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "fs_write_denied"
+        ]
+        assert denied, "expected fs_write_denied for Technical Expert"
+    finally:
+        os.environ.pop("MOCK_ACP_WRITE_MODE", None)
+
+
+async def test_ceo_write_denied(tmp_path, mock_executable):
+    """CEO (read-only) cannot write files."""
+    os.environ["MOCK_ACP_WRITE_MODE"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("ceo")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("ceo-write", "ceo", "sys", "write")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "fs_write_denied"
+        ]
+        assert denied, "expected fs_write_denied for CEO"
+    finally:
+        os.environ.pop("MOCK_ACP_WRITE_MODE", None)
+
+
+async def test_unknown_client_method_fails_closed(tmp_path, mock_executable):
+    """An unknown ACP client method receives an error, not a pass-through."""
+    os.environ["MOCK_ACP_UNKNOWN_METHOD"] = "1"
+    try:
+        settings = make_settings(tmp_path, mock_executable)
+        backend = GeminiACPBackend(settings)
+        perms = _role_permissions("engineer")
+        workspace = Workspace(path=tmp_path, repo_path=tmp_path, permissions=perms)
+        sink = RecordingSink()
+        request = AgentRequest("unknown", "engineer", "sys", "try unknown")
+        result = await backend.run(request, workspace, sink)
+        assert result.status == "completed"
+        capability_denied = [
+            p for t, p, _ in sink.events
+            if t == "agent.event" and p.get("name") == "capability_denied"
+        ]
+        assert capability_denied, "unknown method must be denied (fail closed)"
+        assert capability_denied[0].get("method") == "unsupported/capability"
+    finally:
+        os.environ.pop("MOCK_ACP_UNKNOWN_METHOD", None)

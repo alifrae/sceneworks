@@ -1,4 +1,4 @@
-# SceneWorks V3.0
+# SceneWorks V2.5.2
 
 SceneWorks is an **AI-native software company control plane**: a standalone web
 application for operating software projects through virtual company roles
@@ -145,6 +145,9 @@ command, once permitted, is a real process — it can reach anything the OS
 lets the SceneWorks user reach. Treat the proxy as a strong guard rail and an
 audit trail, **not as a sandbox against a hostile agent**.
 
+The full Gemini ACP capability matrix is documented at
+[docs/gemini-capability-matrix.md](docs/gemini-capability-matrix.md).
+
 Configuration: `SCENEWORKS_GEMINI_EXECUTABLE`, `SCENEWORKS_GEMINI_MODEL`,
 `SCENEWORKS_GEMINI_EXTRA_ARGS`.
 
@@ -196,6 +199,11 @@ accepted.
 - The Reviewer uses a **disposable worktree** for inspection and validation.
 - Worktrees are cleaned up automatically on task completion.
 - Dirty (uncommitted) files in the human tree do not leak into worktrees.
+- **fsmonitor daemons are suppressed** per-process: SceneWorks git operations
+  and agent terminal commands set `GIT_CONFIG_PARAMETERS` to disable
+  `core.fsmonitor`, preventing ~308 orphaned `git fsmonitor--daemon` processes
+  observed during PCS worktree cycles. The user's global and repository-local
+  `core.fsmonitor` configuration is never modified.
 
 ## Setup
 
@@ -276,7 +284,7 @@ roles never modify code and never trigger chains of other agents.
 # Backend tests (no live model required)
 cd backend
 uv sync
-uv run pytest                # 120 tests
+uv run pytest                # 132 tests
 
 # Frontend type-check and build
 cd web
@@ -324,7 +332,9 @@ Test categories:
 - **API tests** (`test_api.py`): Projects, tasks, invalid transitions,
   full workflow, changes-requested loop, company asks, dashboard.
 - **ACP protocol tests** (`test_gemini_acp.py`): Mock ACP v1 server,
-  prompting, event mapping, fs-write denial for read-only roles,
+  prompting, event mapping, fs-write/shell denial for read-only roles,
+  permission boundaries for all 8 roles (Architect, Engineer, Reviewer,
+  Technical Expert, CEO, CTO, Product, GTM), unknown capability fail-closed,
   cancellation.
 - **Workflow graph tests** (`test_workflow_graph.py`): LangGraph topology,
   persistence, approval/rejection/revision, auto-repair, repair limits,
@@ -420,7 +430,8 @@ labelled with the evidence that actually exists for it.
 - **Timeouts sized for toy repositories.** `git worktree add` was capped by a
   hard-coded 120 s constant and aborted on a large repository, failing the
   task before triage could start; the git timeout is now configurable
-  (`SCENEWORKS_GIT_TIMEOUT_SECONDS`, default 900 s). The ACP `initialize`
+  (`SCENEWORKS_GIT_TIMEOUT_SECONDS`, default 300 s — down from 900 s now that
+  fsmonitor daemon accumulation is suppressed per-process). The ACP `initialize`
   handshake exceeded its 30 s budget whenever two agents started at once
   (now 120 s), and a single Engineer run exceeded the 1800 s execution limit
   while running the project's own test and lint commands (now 5400 s).
@@ -460,7 +471,66 @@ is recorded on the role and on each execution row for provenance, but no
 backend reads it and it does not influence model selection. Profile→model
 routing is deferred to V3.1 provider routing.
 
-## V2.5 changes
+## V2.5.2 — Final V2 closure
+
+V2.5.2 closes the remaining production blockers discovered during real PCS usage.
+
+### Gemini ACP capability mediation
+
+- Full [Gemini capability matrix](docs/gemini-capability-matrix.md) classifies
+  all 23 Gemini ACP capability categories across 8 ACP client methods, 6 Gemini
+  internal tool types, and 4 notification classes.
+- **Unknown capability fail-closed**: Any ACP client method not in the known set
+  receives an error response and is recorded as a `capability_denied` diagnostic
+  event.
+- **Permission boundary tests**: 11 new tests verify that Architect, Technical
+  Expert, Reviewer, and Engineer cannot exceed their permissions through any
+  supported ACP client method (fs/read, fs/write, terminal/create,
+  session/request_permission). CEO write-denial also tested.
+
+### fsmonitor process leak (fixed)
+
+- **Root cause**: When the managed repository has `core.fsmonitor=true`, every
+  git subprocess spawned by SceneWorks (worktree create/destroy, agent shell
+  commands) starts a persistent `git fsmonitor--daemon` that outlives the
+  parent. 308 orphans accumulated during one PCS engineer+reviewer cycle.
+- **Fix**: `GIT_CONFIG_PARAMETERS` set per-process to suppress `core.fsmonitor`
+  for all SceneWorks git operations and agent terminal commands. The user's
+  global and repository-level `core.fsmonitor` is never modified.
+- **Stress test**: 20 worktree create/destroy cycles with fsmonitor counting
+  verifies no unbounded accumulation (passed).
+- **Before/after**: git timeout reduced from 900 s to 300 s now that the
+  daemon slowdown is eliminated.
+
+### Timeout policy (reviewed)
+
+| Setting | Default | Rationale |
+|---|---|---|
+| `SCENEWORKS_GIT_TIMEOUT_SECONDS` | 300 s | Worktree checkout on ~30k-file repo measured ~45 s with fsmonitor suppressed |
+| `SCENEWORKS_GEMINI_STARTUP_TIMEOUT_SECONDS` | 120 s | Node startup ~20 s cold; ACP handshake up to 30 s concurrent |
+| `SCENEWORKS_EXECUTION_TIMEOUT_SECONDS` | 5400 s | Real engineer runs exceed 1800 s iterating on project test/lint commands |
+| `SCENEWORKS_CANCEL_GRACE_SECONDS` | 15 s | Grace period before engine force-kill |
+
+All timeouts remain configurable via environment variables.
+
+### Backend health cold-cache fix
+
+The `/api/backends` and `/api/settings` endpoints previously blocked on the
+first health probe (~20-120 s for Gemini `--version` on cold cache). Now
+return placeholder "probing..." status immediately while the background probe
+runs; real results appear on the next request.
+
+### Evidence tiers
+
+| Area | Evidence |
+|---|---|
+| Backend behaviour | `automatically tested` — 132 tests (was 120) |
+| Gemini permission boundaries | `automatically tested` — 11 new ACP proxy tests |
+| fsmonitor suppression | `automatically tested` — 20-cycle stress test |
+| Workflow scenarios incl. repair loop | `API-E2E validated` |
+| Dashboard / projects / company / settings pages | `browser-E2E validated` |
+| Gemini ACP: triage → architect → engineer → reviewer, real Git | `live-model validated` |
+| Repository snapshot pinning under concurrent human commit | `live-model validated` |
 
 V2.5 is the final V2 release — closing gaps, hardening reliability, and
 adding browser E2E tests.

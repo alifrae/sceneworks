@@ -87,3 +87,15 @@ If you have uncommitted edits in your PCS working tree:
 - Review the architecture analysis before approving
 - Inspect the diff and review verdict before accepting
 - Decide manually how to integrate completed work into your branch
+
+## Performance notes
+
+- **fsmonitor**: If PCS has `core.fsmonitor` enabled, SceneWorks
+  automatically suppresses it per-process during git operations and agent
+  terminal commands. No configuration change is needed — your PCS
+  `core.fsmonitor` setting is never modified.
+- **Git timeout**: The default `SCENEWORKS_GIT_TIMEOUT_SECONDS` is 300 s,
+  sufficient for worktree checkout on large repositories. Raise it via
+  environment variable only if you see "git command timed out" errors.
+- **Execution timeout**: Default 5400 s (90 min). Long-running engineer
+  iterations (test/lint loops) are expected; keep tasks scoped.

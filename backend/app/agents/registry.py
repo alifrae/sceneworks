@@ -52,20 +52,47 @@ class BackendRegistry:
 
         A probe shells out to the agent CLI and can take tens of seconds, so a
         request must never wait on one. Cached results are returned
-        immediately and refreshed in the background when stale; only the very
-        first call (cold cache) awaits a probe. Pass force=True to await a
-        fresh probe regardless.
+        immediately and refreshed in the background when stale. When the cache
+        is cold (first request or after a restart) and a probe is already
+        running, a placeholder "probing" status is returned immediately;
+        the real result appears on the next request. Pass force=True to
+        await a fresh probe regardless.
         """
         if force:
             return await self._probe()
 
         cached = self._health_cache
-        if cached is None:
-            return await self._probe()
+        if cached is not None:
+            if (time.monotonic() - self._health_checked_at) >= HEALTH_CACHE_SECONDS:
+                self._schedule_refresh()
+            return cached
 
-        if (time.monotonic() - self._health_checked_at) >= HEALTH_CACHE_SECONDS:
+        # Cold cache: if a probe is already running, return placeholders.
+        if self._health_lock.locked():
             self._schedule_refresh()
-        return cached
+            return [
+                BackendHealth(
+                    key=key,
+                    label=getattr(backend, "label", key),
+                    available=False,
+                    detail="probing...",
+                )
+                for key, backend in self._backends.items()
+            ]
+
+        # No probe running: schedule one in the background and return
+        # placeholders immediately. The warm-up task or the next request
+        # will populate the cache.
+        self._schedule_refresh()
+        return [
+            BackendHealth(
+                key=key,
+                label=getattr(backend, "label", key),
+                available=False,
+                detail="probing...",
+            )
+            for key, backend in self._backends.items()
+        ]
 
     def _schedule_refresh(self) -> None:
         if self._refresh_task is not None and not self._refresh_task.done():

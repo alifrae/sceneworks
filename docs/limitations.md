@@ -102,18 +102,16 @@ are deliberately carried forward.
   using `git add -A`. If the repository lacks a `.gitignore`, build artefacts
   produced during the run can be swept into that safety-net commit. The human
   reviews the diff before integrating.
-- **Worktrees leave `fsmonitor` daemons behind.** If a managed repository has
-  `core.fsmonitor=true`, git starts a long-lived `git fsmonitor--daemon` for
-  each worktree, and removing the worktree does not reliably reap it. Across
+- **Worktrees previously leaked `fsmonitor` daemons.** If a managed repository had
+  `core.fsmonitor=true`, git started a long-lived `git fsmonitor--daemon` for
+  each worktree, and removing the worktree did not reliably reap it. Across
   one afternoon of testing on a repository with fsmonitor enabled, **308**
-  orphaned `git.exe` processes accumulated and slowed every git operation on
-  the machine (a trivial `init`+`commit` went from sub-second to ~3 s), which
-  in turn caused unrelated test-suite timeouts. SceneWorks does not manage
-  these daemons. If you run many tasks against an fsmonitor-enabled
-  repository, either disable it for that repository
-  (`git config core.fsmonitor false`) or reap the daemons periodically
-  (`taskkill /F /IM git.exe` on Windows, `git fsmonitor--daemon stop` per
-  worktree).
+  orphaned `git.exe` processes accumulated and slowed every git operation.
+  **Fixed in V2.5.2:** SceneWorks git operations and agent terminal commands
+  now suppress fsmonitor per-process via `GIT_CONFIG_PARAMETERS`. The user's
+  global and repository-level `core.fsmonitor` configuration is never modified.
+  A stress test of 20 worktree create/destroy cycles confirms no unbounded
+  daemon accumulation.
 - **Concurrent live agents are resource-hungry.** Two Gemini CLI processes
   starting simultaneously exceeded the previous 30 s ACP `initialize` timeout
   on this machine. The default is now 120 s, but throughput remains bounded by

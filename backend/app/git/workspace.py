@@ -21,9 +21,21 @@ from pathlib import Path
 
 from app.config.settings import Settings
 
-GIT_TIMEOUT_SECONDS = 120
+GIT_TIMEOUT_SECONDS = 300
 
-_AGENT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
+_AGENT_ENV = {
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_PAGER": "cat",
+    # Suppress fsmonitor globally for SceneWorks git operations.
+    # A managed repo may have core.fsmonitor set (PCS does); every git
+    # subprocess that runs inside that repo would then spawn a persistent
+    # `git fsmonitor--daemon` process that outlives the parent.  SceneWorks
+    # never communicates with the managed repo's own working tree, so the
+    # daemon is pure waste — it accumulated to ~308 orphans during a single
+    # engineer+reviewer cycle.  These env vars tell Git to skip fsmonitor
+    # for this process tree without touching the user's repo config.
+    "GIT_CONFIG_PARAMETERS": "'core.fsmonitor=' 'core.useBuiltinFSMonitor=false'",
+}
 
 
 class GitError(Exception):

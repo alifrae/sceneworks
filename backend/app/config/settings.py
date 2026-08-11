@@ -47,15 +47,17 @@ class Settings(BaseSettings):
     gemini_startup_timeout_seconds: int = 120
 
     # Timeout for a single git command (seconds). Creating a worktree checks
-    # out the whole tree, which on a large repository takes minutes — the
-    # previous hard-coded 120s aborted worktree creation and failed the task.
-    git_timeout_seconds: int = 900
+    # out the whole tree, which takes tens of seconds on a typical repository.
+    # Previously set to 900 s to paper over fsmonitor daemon accumulation;
+    # now that fsmonitor is suppressed per-process, 300 s is generous even
+    # for large repositories (~30k files measured ~45 s here).
+    git_timeout_seconds: int = 300
 
     # Hard limit for a single agent execution (seconds).
-    # A real Engineer run on a large repository spends most of its time in the
-    # project's own test and lint commands: a single additive test file on a
-    # ~30k-file repo exceeded 1800s while iterating pytest/ruff, and the whole
-    # task failed with the work stranded (uncommitted) in its worktree.
+    # Long enough for an Engineer to iterate on tests and linting inside a
+    # real repository. 5400 s (90 min) covers multi-pass tool-calling loops
+    # on large codebases.  Keep configurable — a small task should never
+    # need this much, and an observer should not assume the UI is frozen.
     execution_timeout_seconds: int = 5400
     # Grace period after cancellation before the engine force-kills (seconds).
     cancel_grace_seconds: int = 15

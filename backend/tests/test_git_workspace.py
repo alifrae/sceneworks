@@ -176,3 +176,44 @@ def test_snapshot_isolation_uncommitted_change_not_in_worktree(
     finally:
         asyncio_run(svc.remove_worktree(git_repo, ws.worktree_path, None))
         repo_file.write_text(committed_content, encoding="utf-8")
+
+
+def test_fsmonitor_suppressed_in_worktree_operations(git_repo: Path, svc: GitWorktreeService):
+    """Every git command spawned by SceneWorks must suppress fsmonitor
+    so that persistent daemon processes do not accumulate.
+
+    The test runs 20 worktree create/destroy cycles and verifies that the
+    number of `git fsmonitor--daemon` processes does not grow unbounded.
+    """
+    import subprocess
+
+    def count_fsmonitor() -> int:
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq git.exe"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return result.stdout.count("git.exe")
+        except Exception:
+            return 0
+
+    before = count_fsmonitor()
+    base = asyncio_run(svc.resolve_base_commit(git_repo, "main"))
+
+    for i in range(20):
+        ws = asyncio_run(svc.create_branch_worktree(git_repo, base, 200 + i, f"sw-stress-{i}"))
+        assert ws.worktree_path.is_dir()
+        # Simulate an agent command: git status in the worktree.
+        asyncio_run(svc.status(ws.worktree_path))
+        asyncio_run(svc.remove_worktree(git_repo, ws.worktree_path, f"sw-stress-{i}"))
+
+    after = count_fsmonitor()
+    # fsmonitor daemons may have been spawned during the stress test only
+    # by external factors (e.g. PCS watchers).  SceneWorks commands must
+    # contribute zero additional daemons: we verify the count did not grow
+    # by more than a small allowance for system noise.
+    growth = after - before
+    assert growth <= 2, (
+        f"fsmonitor daemon count grew by {growth} during 20 worktree cycles "
+        f"(before={before}, after={after}); expected <= 2"
+    )

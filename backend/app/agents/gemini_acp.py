@@ -294,6 +294,16 @@ class AcpStdioClient:
             elif method == "terminal/release":
                 result = await self._serve_terminal_kill(params)
             else:
+                await self._sink.emit(
+                    "agent.event",
+                    {
+                        "name": "capability_denied",
+                        "method": method,
+                        "reason": "unsupported",
+                        "diagnostics": True,
+                    },
+                    severity="warning",
+                )
                 await self._diagnostic(
                     "unsupported client method requested by agent",
                     {"method": method, "params": str(params)[:300]},
@@ -319,6 +329,27 @@ class AcpStdioClient:
         if not path.is_absolute():
             path = self._policy.workspace_root / path
         return path.resolve()
+
+    # Known ACP v1 client methods.  Any method NOT in this set is an unknown
+    # capability and must fail closed — the agent receives an error response
+    # and the refusal is recorded as a diagnostic event.
+    _KNOWN_CLIENT_METHODS = frozenset({
+        "fs/read_text_file",
+        "fs/write_text_file",
+        "session/request_permission",
+        "terminal/create",
+        "terminal/output",
+        "terminal/wait_for_exit",
+        "terminal/kill",
+        "terminal/release",
+    })
+
+    _KNOWN_NOTIFICATIONS = frozenset({
+        "session/update",
+        "notifications/cancelled",
+        "notifications/progress",
+        "notifications/initialized",
+    })
 
     def _outside_reason(self, path: Path) -> str:
         """Explain why a path was rejected (helps the agent self-correct)."""
@@ -435,6 +466,10 @@ class AcpStdioClient:
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env={
+                **os.environ,
+                "GIT_CONFIG_PARAMETERS": "'core.fsmonitor=' 'core.useBuiltinFSMonitor=false'",
+            },
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
         )
         terminal_id = f"term-{self._next_id}-{len(self._terminals)}"
@@ -504,12 +539,25 @@ class AcpStdioClient:
             await self._map_session_update(params)
         elif method == "notifications/cancelled":
             await self._diagnostic("agent cancelled a request", {}, severity="warning")
-        elif method == "notifications/progress":
+        elif method in ("notifications/progress", "notifications/initialized"):
             pass
         else:
+            # Unknown notification method — log and fail closed.
+            # The agent still receives its response but we record the
+            # unmediated capability for audit.
             await self._sink.emit(
                 "agent.event",
-                {"name": method, "diagnostics": True, "params": str(params)[:500]},
+                {
+                    "name": "capability_unmediated",
+                    "method": method,
+                    "diagnostics": True,
+                    "params": str(params)[:500],
+                },
+                severity="warning",
+            )
+            await self._diagnostic(
+                "unmediated agent notification received",
+                {"method": method, "params": str(params)[:500]},
             )
 
     async def _map_session_update(self, params: dict) -> None:

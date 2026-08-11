@@ -2,14 +2,17 @@
 
 Speaks the same protocol subset as Gemini CLI 0.53.x:
 - agent methods: initialize, session/new, session/prompt, session/cancel, session/close
-- client methods used: fs/write_text_file (with a response wait), session/request_permission
+- client methods used: fs/read_text_file, fs/write_text_file, terminal/create,
+  session/request_permission, and an unknown method for fail-closed testing
 - notifications: session/update (agent_message_chunk, tool_call, agent_thought_chunk)
 
 Behavior is driven by environment variables:
 - MOCK_ACP_WRITE_MODE=1: issue an fs/write_text_file client request for file "mock.txt"
-- MOCK_ACP_DENY_MODE=1: issue a session/request_permission client request with only
-  reject options available
-- MOCK_ACP_FAILDELAY=n: emit a failing agent_error-like event (used for timeout tests)
+- MOCK_ACP_READ_MODE=1: issue an fs/read_text_file client request
+- MOCK_ACP_TERMINAL_MODE=1: issue a terminal/create client request
+- MOCK_ACP_EXECUTE_MODE=1: issue a session/request_permission with kind="execute"
+- MOCK_ACP_UNKNOWN_METHOD=1: issue an unknown client method
+- MOCK_ACP_DENY_MODE=1: issue a session/request_permission with only reject options
 - MOCK_ACP_STOP=refusal|max_tokens|end_turn: stopReason returned
 """
 
@@ -34,12 +37,18 @@ def main() -> int:
         print("0.53.1 (mock)")
         return 0
     write_mode = os.environ.get("MOCK_ACP_WRITE_MODE") == "1"
+    read_mode = os.environ.get("MOCK_ACP_READ_MODE") == "1"
+    terminal_mode = os.environ.get("MOCK_ACP_TERMINAL_MODE") == "1"
+    execute_mode = os.environ.get("MOCK_ACP_EXECUTE_MODE") == "1"
+    unknown_mode = os.environ.get("MOCK_ACP_UNKNOWN_METHOD") == "1"
+    deny_mode = os.environ.get("MOCK_ACP_DENY_MODE") == "1"
     stop = os.environ.get("MOCK_ACP_STOP", "end_turn")
     request_id = 9000
     session_id = "mock-session-1"
     pending_client_requests: dict[int, str] = {}
     prompt_request_id = None
     sent_chunks = False
+    countdown = 0
 
     def send_completion() -> None:
         """Send the remaining chunks and the prompt response (end of turn)."""
@@ -135,7 +144,7 @@ def main() -> int:
         if message_id in pending_client_requests:
             # Response to one of our client requests: finish the turn.
             pending = pending_client_requests.pop(message_id)
-            if pending == "write":
+            if pending in ("write", "read", "terminal", "permission", "unknown"):
                 if "error" in message:
                     send(
                         {
@@ -145,11 +154,46 @@ def main() -> int:
                                 "sessionId": session_id,
                                 "update": {
                                     "sessionUpdate": "agent_thought_chunk",
-                                    "content": {"type": "text", "text": "Write was denied by the client."},
+                                    "content": {"type": "text", "text": f"Client denied {pending} request."},
                                 },
                             },
                         }
                     )
+            if pending == "terminal":
+                # Simulate creating a realish terminal; the backend needs a pid.
+                # We send back a terminalId; the actual subprocess only matters
+                # if the test then reads its output.  We don't.
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "tool_call",
+                                "title": "run_command",
+                                "kind": "execute",
+                                "status": "in_progress",
+                            },
+                        },
+                    }
+                )
+            else:
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "tool_call",
+                                "title": "mock_tool",
+                                "kind": pending,
+                                "status": "in_progress",
+                            },
+                        },
+                    }
+                )
             send_completion()
             continue
 
@@ -183,28 +227,56 @@ def main() -> int:
                 pending_client_requests[request_id] = "write"
                 send_request(
                     "fs/write_text_file",
+                    {"sessionId": session_id, "path": "mock.txt", "content": "created by mock agent\n"},
+                    request_id,
+                )
+            elif read_mode:
+                request_id += 1
+                pending_client_requests[request_id] = "read"
+                send_request(
+                    "fs/read_text_file",
+                    {"sessionId": session_id, "path": "README.md"},
+                    request_id,
+                )
+            elif terminal_mode:
+                request_id += 1
+                pending_client_requests[request_id] = "terminal"
+                send_request(
+                    "terminal/create",
+                    {"sessionId": session_id, "command": "echo", "args": ["hello"]},
+                    request_id,
+                )
+            elif execute_mode:
+                request_id += 1
+                pending_client_requests[request_id] = "permission"
+                send_request(
+                    "session/request_permission",
                     {
                         "sessionId": session_id,
-                        "path": "mock.txt",
-                        "content": "created by mock agent\n",
+                        "toolCall": {"kind": "execute", "title": "run tests"},
+                        "options": [
+                            {"optionId": "allow-once", "name": "allow_once"},
+                            {"optionId": "deny-once", "name": "reject_once"},
+                        ],
                     },
                     request_id,
                 )
-                send(
+            elif deny_mode:
+                request_id += 1
+                pending_client_requests[request_id] = "permission"
+                send_request(
+                    "session/request_permission",
                     {
-                        "jsonrpc": "2.0",
-                        "method": "session/update",
-                        "params": {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": "tool_call",
-                                "title": "edit",
-                                "kind": "edit",
-                                "status": "in_progress",
-                            },
-                        },
-                    }
+                        "sessionId": session_id,
+                        "toolCall": {"kind": "execute", "title": "dangerous command"},
+                        "options": [{"optionId": "reject-1", "name": "reject"}],
+                    },
+                    request_id,
                 )
+            elif unknown_mode:
+                request_id += 1
+                pending_client_requests[request_id] = "unknown"
+                send_request("unsupported/capability", {"param": 1}, request_id)
             else:
                 send_completion()
         elif method == "session/cancel":
