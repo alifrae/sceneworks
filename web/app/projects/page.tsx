@@ -28,7 +28,7 @@ export default function ProjectsPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.createProject({
+      const created = await api.createProject({
         name: form.name,
         description: form.description,
         repository_path: form.repository_path,
@@ -37,9 +37,9 @@ export default function ProjectsPage() {
           .map((s) => s.trim())
           .filter(Boolean),
       });
+      setProjects((current) => [created, ...current]);
       setShowForm(false);
       setForm({ name: "", description: "", repository_path: "", test_commands: "" });
-      refresh();
     } catch (e) {
       setError(String(e));
     } finally {

@@ -20,25 +20,41 @@ export default function ExecutionsPage() {
   const [rows, setRows] = useState<Execution[]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pendingCancel, setPendingCancel] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(() => {
-    const params: Record<string, string> = { limit: "200" };
+    const params: Record<string, string> = { limit: "100" };
     if (status) params.status = status;
     api.executions(params).then(setRows).catch((e) => setError(String(e)));
   }, [status]);
 
   useEffect(() => {
     refresh();
-    const timer = setInterval(refresh, 5000);
-    return () => clearInterval(timer);
   }, [refresh]);
 
+  const hasActiveRows = rows.some((row) => ["QUEUED", "STARTING", "RUNNING", "CANCELLING"].includes(row.status));
+  useEffect(() => {
+    if (!hasActiveRows) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [hasActiveRows, refresh]);
+
   async function cancel(id: string) {
+    setPendingCancel((current) => new Set(current).add(id));
+    setRows((current) => current.map((row) => row.id === id ? { ...row, status: "CANCELLING" } : row));
     try {
       await api.cancelExecution(id);
-      refresh();
     } catch (e) {
+      setRows((current) => current.map((row) => row.id === id ? { ...row, status: "RUNNING" } : row));
       setError(String(e));
+    } finally {
+      setPendingCancel((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   }
 
@@ -96,9 +112,9 @@ export default function ExecutionsPage() {
                   </td>
                   <td className="muted small">{formatTime(execution.started_at)}</td>
                   <td>
-                    {["QUEUED", "STARTING", "RUNNING"].includes(execution.status) && (
-                      <button className="btn small danger" onClick={() => cancel(execution.id)}>
-                        Stop
+                    {["QUEUED", "STARTING", "RUNNING", "CANCELLING"].includes(execution.status) && (
+                      <button className="btn small danger" disabled={pendingCancel.has(execution.id)} onClick={() => cancel(execution.id)}>
+                        {pendingCancel.has(execution.id) ? "Stopping…" : "Stop"}
                       </button>
                     )}
                   </td>

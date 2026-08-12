@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 const NAV = [
   { href: "/", label: "Dashboard" },
@@ -14,8 +15,19 @@ const NAV = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
+
   return (
     <aside className="sidebar">
+      {pendingHref && (
+        <div className="nav-progress" role="status" aria-live="polite">
+          Opening {NAV.find((item) => item.href === pendingHref)?.label ?? "view"}…
+        </div>
+      )}
       <div className="brand">
         SceneWorks
         <small>company control plane</small>
@@ -24,7 +36,17 @@ export default function Sidebar() {
         const active =
           item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         return (
-          <Link key={item.href} href={item.href} className={`nav${active ? " active" : ""}`}>
+          <Link
+            key={item.href}
+            href={item.href}
+            className={`nav${active ? " active" : ""}`}
+            aria-busy={pendingHref === item.href}
+            onClick={(event) => {
+              if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !active) {
+                setPendingHref(item.href);
+              }
+            }}
+          >
             {item.label}
           </Link>
         );

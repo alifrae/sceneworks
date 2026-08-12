@@ -13,10 +13,13 @@ Trust assumptions (V1):
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 
 from app.api import (
     backends_router,
@@ -84,7 +87,25 @@ def create_app(settings=None, context=None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-Process-Time-Ms"],
     )
+
+    @app.middleware("http")
+    async def request_diagnostics(request: Request, call_next):
+        """Attach low-noise correlation/timing headers to API responses.
+
+        The browser API client sends an X-Request-ID and records the matching
+        client duration. Keeping this as response metadata makes slow paths
+        diagnosable in development without adding per-request production log
+        noise or buffering SSE responses.
+        """
+        correlation_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        started = time.perf_counter()
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        response.headers["X-Request-ID"] = correlation_id
+        response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.1f}"
+        return response
     if context is not None:
         # Test helper: context supplied directly, lifespan skipped.
         app.state.context = context

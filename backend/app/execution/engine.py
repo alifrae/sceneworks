@@ -106,6 +106,17 @@ class ExecutionEngine:
         asyncio.create_task(self._force_cancel_after_grace(execution_id))
         return True
 
+    async def fail_before_start(self, execution_id: str, error: str) -> None:
+        """Finalize work that failed before the backend was launched."""
+        await self._finalize(
+            execution_id,
+            status="FAILED",
+            error=error,
+            event_type=event_types.EXECUTION_FAILED,
+            event_payload={"error": error},
+            event_severity="error",
+        )
+
     async def _force_cancel_after_grace(self, execution_id: str) -> None:
         await asyncio.sleep(self._settings.cancel_grace_seconds)
         run = self._active.get(execution_id)

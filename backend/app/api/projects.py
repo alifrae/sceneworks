@@ -32,10 +32,31 @@ async def _to_out(ctx: AppContext, project: Project) -> ProjectOut:
 
 
 @router.get("")
-async def list_projects(ctx: AppContext = Depends(get_context)) -> list[ProjectOut]:
+async def list_projects(limit: int = 200, ctx: AppContext = Depends(get_context)) -> list[ProjectOut]:
     async with ctx.engine_factory() as session:
-        projects = (await session.execute(select(Project).order_by(Project.created_at.desc()))).scalars().all()
-    return [await _to_out(ctx, p) for p in projects]
+        projects = (
+            await session.execute(
+                select(Project).order_by(Project.created_at.desc()).limit(min(limit, 500))
+            )
+        ).scalars().all()
+        project_ids = [project.id for project in projects]
+        active_counts: dict[int, int] = {}
+        if project_ids:
+            rows = (
+                await session.execute(
+                    select(Task.project_id, func.count(Task.id))
+                    .where(
+                        Task.project_id.in_(project_ids),
+                        Task.status.in_(["NEW", "ARCHITECTURE_ANALYSIS", "READY_TO_IMPLEMENT", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED"]),
+                    )
+                    .group_by(Task.project_id)
+                )
+            ).all()
+            active_counts = {project_id: int(count) for project_id, count in rows}
+    return [
+        ProjectOut.model_validate(project).model_copy(update={"active_task_count": active_counts.get(project.id, 0)})
+        for project in projects
+    ]
 
 
 @router.post("", status_code=201)

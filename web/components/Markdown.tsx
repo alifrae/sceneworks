@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, memo } from "react";
 
 // Tiny markdown renderer for agent outputs (headers, bullets, bold, code).
 // Deliberately minimal — agent output is already structured text.
@@ -16,7 +16,7 @@ function renderInline(text: string): React.ReactNode[] {
   });
 }
 
-export default function Markdown({ text }: { text: string }) {
+function Markdown({ text }: { text: string }) {
   const lines = text.split("\n");
   const blocks: { type: string; content: string[] }[] = [];
   let current: { type: string; content: string[] } | null = null;
@@ -94,3 +94,5 @@ export default function Markdown({ text }: { text: string }) {
     </div>
   );
 }
+
+export default memo(Markdown);

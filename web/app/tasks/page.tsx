@@ -26,8 +26,16 @@ export default function TasksPage() {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  useEffect(() => {
     api.projects().then(setProjects).catch(() => undefined);
-    const timer = setInterval(refresh, 8000);
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 8000);
     return () => clearInterval(timer);
   }, [refresh]);
 
@@ -35,15 +43,19 @@ export default function TasksPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.createTask({
+      const created = await api.createTask({
         project_id: Number(form.project_id),
         title: form.title,
         description: form.description,
         priority: form.priority,
       });
+      const matches =
+        (!filters.project_id || filters.project_id === String(created.project_id)) &&
+        (!filters.status || filters.status === created.status) &&
+        (!filters.role || filters.role === created.current_role);
+      if (matches) setTasks((current) => [created, ...current]);
       setShowForm(false);
       setForm({ project_id: "", title: "", description: "", priority: "medium" });
-      refresh();
     } catch (e) {
       setError(String(e));
     } finally {

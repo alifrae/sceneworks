@@ -45,9 +45,10 @@ async def get_execution(
 async def execution_events(
     execution_id: str,
     after_id: int | None = None,
+    limit: int = 500,
     ctx: AppContext = Depends(get_context),
 ):
-    rows = await ctx.event_store.list_for_execution(execution_id, after_id=after_id, limit=1000)
+    rows = await ctx.event_store.list_for_execution(execution_id, after_id=after_id, limit=min(limit, 800))
     return [
         {
             "id": r.id,

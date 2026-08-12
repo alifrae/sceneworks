@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import type { Project, RepoStatus, Task } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import { timeAgo } from "@/lib/format";
+import LoadingShell from "@/components/LoadingShell";
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -17,6 +18,7 @@ export default function ProjectDetailPage() {
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(() => {
     api.project(projectId).then(setProject).catch((e) => setError(String(e)));
@@ -27,12 +29,20 @@ export default function ProjectDetailPage() {
   useEffect(() => refresh(), [refresh]);
 
   async function save() {
-    await api.updateProject(projectId, form);
-    setEdit(false);
-    refresh();
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await api.updateProject(projectId, form);
+      setProject(updated);
+      setEdit(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
   }
 
-  if (!project) return <div className="empty">Loading…</div>;
+  if (!project) return <LoadingShell title="Project" />;
 
   return (
     <div>
@@ -85,8 +95,8 @@ export default function ProjectDetailPage() {
             />
           </label>
           <div className="row">
-            <button className="btn primary" onClick={save}>
-              Save
+            <button className="btn primary" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         </div>

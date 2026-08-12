@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { Diff, Task } from "@/lib/types";
 import ActionBar from "@/components/ActionBar";
@@ -10,6 +10,7 @@ import DiffView from "@/components/DiffView";
 import EventLog from "@/components/EventLog";
 import Markdown from "@/components/Markdown";
 import StatusBadge from "@/components/StatusBadge";
+import LoadingShell from "@/components/LoadingShell";
 
 const STATUS_META: Record<string, { label: string; phase: number; active: boolean; needsHuman: boolean }> = {
   NEW: { label: "New", phase: 0, active: false, needsHuman: false },
@@ -34,35 +35,61 @@ export default function TaskDetailPage() {
   const [diff, setDiff] = useState<Diff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const diffKey = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     const t = await api.task(taskId);
     setTask(t);
     if (t.worktree_path || t.result_commit) {
-      api.taskDiff(taskId).then(setDiff).catch(() => undefined);
+      const nextDiffKey = `${t.worktree_path ?? ""}:${t.result_commit ?? ""}`;
+      if (diffKey.current !== nextDiffKey) {
+        diffKey.current = nextDiffKey;
+        api.taskDiff(taskId).then(setDiff).catch(() => undefined);
+      }
+    } else {
+      diffKey.current = null;
+      setDiff(null);
     }
   }, [taskId]);
 
+  const handleEvent = useCallback((event: { type: string }) => {
+    if (event.type === "task.transitioned" || event.type.startsWith("workflow.")) {
+      refresh().catch(() => undefined);
+    }
+  }, [refresh]);
+
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
-    const timer = setInterval(() => refresh().catch(() => undefined), 4000);
-    return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!task || !["ARCHITECTURE_ANALYSIS", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED"].includes(task.status)) {
+      return;
+    }
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") refresh().catch(() => undefined);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [refresh, task?.status]);
 
   async function onAction(action: string, body?: Record<string, string>) {
     setBusy(true);
+    setPendingAction(action);
     setError(null);
     try {
-      await api.taskAction(taskId, action, body);
-      await refresh();
+      const authoritative = await api.taskAction(taskId, action, body);
+      setTask(authoritative);
+      diffKey.current = null;
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
+      setPendingAction(null);
     }
   }
 
-  if (!task) return <div className="empty">Loading...</div>;
+  if (!task) return <LoadingShell title="Task" />;
 
   const meta = STATUS_META[task.status] || { label: task.status, phase: -1, active: false, needsHuman: false };
   const isTerminal = ["ACCEPTED", "REJECTED", "CANCELLED", "FAILED"].includes(task.status);
@@ -142,7 +169,7 @@ export default function TaskDetailPage() {
       <div className="panel">
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 24 }}>
           <div>
-            <EventLog taskId={taskId} />
+            <EventLog taskId={taskId} onEvent={handleEvent} />
           </div>
           <div>
             <h3>Results</h3>
@@ -207,7 +234,18 @@ export default function TaskDetailPage() {
       {/* --- Actions --- */}
       <div className="panel">
         <h3>Actions</h3>
-        <ActionBar taskId={taskId} allowedActions={task.allowed_actions} onAction={onAction} busy={busy} />
+        {pendingAction && (
+          <div className="notice" role="status" aria-live="polite">
+            Action in progress: {pendingAction.replace(/_/g, " ")}. Waiting for backend acknowledgement…
+          </div>
+        )}
+        <ActionBar
+          taskId={taskId}
+          allowedActions={task.allowed_actions}
+          onAction={onAction}
+          busy={busy}
+          pendingAction={pendingAction}
+        />
         <p className="small muted" style={{ marginTop: 8 }}>
           SceneWorks never merges code automatically. Only the founder approves — you decide what to integrate.
         </p>

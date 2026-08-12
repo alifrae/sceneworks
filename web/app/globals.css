@@ -98,6 +98,11 @@ h3 {
   color: #7c8aa0;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
+.nav-progress {
+  color: #9fb3d1;
+  font-size: 11px;
+  padding: 0 8px 8px;
+}
 
 .content {
   padding: 28px 32px;
@@ -352,6 +357,25 @@ pre {
   color: var(--text-dim);
   padding: 24px 0;
   text-align: center;
+}
+
+.loading-shell {
+  min-height: 180px;
+}
+.loading-panel {
+  display: grid;
+  gap: 10px;
+  min-height: 120px;
+  align-content: center;
+}
+.loading-line {
+  height: 10px;
+  width: 70%;
+  border-radius: 999px;
+  background: #edf1f6;
+}
+.loading-line.short {
+  width: 38%;
 }
 
 .kpi-grid {

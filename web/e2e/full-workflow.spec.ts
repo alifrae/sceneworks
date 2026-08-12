@@ -349,7 +349,7 @@ test.describe("UI smoke tests", () => {
   test("company page shows roles", async ({ page }) => {
     await page.goto("/company");
     await expect(page.locator("h1").first()).toContainText(/Company/i);
-    await expect(page.locator("text=Engineer").or(page.locator("text=architect"))).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("Engineer", { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test("settings page shows backends", async ({ page }) => {

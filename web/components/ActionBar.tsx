@@ -7,6 +7,7 @@ interface ActionBarProps {
   allowedActions: string[];
   onAction: (action: string, body?: Record<string, string>) => Promise<void>;
   busy: boolean;
+  pendingAction?: string | null;
 }
 
 const LABELS: Record<string, string> = {
@@ -30,7 +31,22 @@ const CONFIRM: Record<string, string> = {
   cleanup_worktree: "Remove the task worktree and branch?",
 };
 
-export default function ActionBar({ taskId, allowedActions, onAction, busy }: ActionBarProps) {
+const PROGRESS_LABELS: Record<string, string> = {
+  start_architecture: "Starting…",
+  approve_architecture: "Approving…",
+  reject_architecture: "Rejecting…",
+  request_architecture_revision: "Requesting revision…",
+  start_implementation: "Starting implementation…",
+  start_review: "Starting review…",
+  accept: "Accepting…",
+  reject: "Rejecting…",
+  send_back_to_engineer: "Sending back…",
+  cancel: "Stopping…",
+  retry: "Retrying…",
+  cleanup_worktree: "Cleaning up…",
+};
+
+export default function ActionBar({ allowedActions, onAction, busy, pendingAction }: ActionBarProps) {
   const [notes, setNotes] = useState("");
   const [noteFor, setNoteFor] = useState<string | null>(null);
 
@@ -95,7 +111,9 @@ export default function ActionBar({ taskId, allowedActions, onAction, busy }: Ac
             disabled={busy}
             onClick={() => run(action, action in noteActions)}
           >
-            {LABELS[action] ?? action.replace(/_/g, " ")}
+            {busy && pendingAction === action
+              ? PROGRESS_LABELS[action] ?? "Working…"
+              : LABELS[action] ?? action.replace(/_/g, " ")}
           </button>
         ))}
         {allowedActions.length === 0 && <span className="muted small">No actions available.</span>}

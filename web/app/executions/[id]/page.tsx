@@ -2,31 +2,39 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Execution } from "@/lib/types";
 import EventLog from "@/components/EventLog";
 import Markdown from "@/components/Markdown";
 import { formatTime } from "@/lib/format";
+import LoadingShell from "@/components/LoadingShell";
 
 export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [execution, setExecution] = useState<Execution | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api
-      .execution(id)
-      .then(setExecution)
-      .catch((e) => setError(String(e)));
-    const timer = setInterval(() => {
-      api.execution(id).then(setExecution).catch(() => undefined);
-    }, 4000);
-    return () => clearInterval(timer);
+  const refresh = useCallback(() => {
+    api.execution(id).then(setExecution).catch((e) => setError(String(e)));
   }, [id]);
 
+  const handleEvent = useCallback((event: { type: string }) => {
+    if (event.type.startsWith("execution.")) refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!execution || ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].includes(execution.status)) return;
+    const timer = setInterval(refresh, 10000);
+    return () => clearInterval(timer);
+  }, [execution?.status, refresh]);
+
   if (error) return <div className="notice error">{error}</div>;
-  if (!execution) return <div className="empty">Loading…</div>;
+  if (!execution) return <LoadingShell title="Execution" />;
 
   return (
     <div>
@@ -52,7 +60,7 @@ export default function ExecutionDetailPage() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
         <div className="panel">
-          <EventLog executionId={execution.id} />
+          <EventLog executionId={execution.id} onEvent={handleEvent} />
         </div>
         <div>
           <div className="panel">

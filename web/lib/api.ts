@@ -20,37 +20,141 @@ export const API_URL: string =
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  requestId: string;
+  durationMs: number;
+
+  constructor(status: number, message: string, requestId = "", durationMs = 0) {
     super(message);
     this.status = status;
+    this.requestId = requestId;
+    this.durationMs = durationMs;
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
-    } catch {
-      /* keep statusText */
-    }
-    throw new ApiError(response.status, detail);
+type RequestOptions = {
+  cacheTtlMs?: number;
+  diagnosticCause?: string;
+};
+
+type CacheEntry = { value: unknown; expiresAt: number };
+
+// The app intentionally keeps server state in the API module instead of
+// introducing another global state framework. This prevents duplicate GETs
+// during route transitions and shares a very short-lived snapshot between
+// independently mounted views. Mutations invalidate relevant entries without
+// automatically refetching unrelated pages.
+const GET_CACHE = new Map<string, CacheEntry>();
+const GET_INFLIGHT = new Map<string, Promise<unknown>>();
+const DEFAULT_CACHE_TTL_MS = 2_000;
+
+function requestId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
   }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  return `sw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function isGet(init?: RequestInit): boolean {
+  return !init?.method || init.method.toUpperCase() === "GET";
+}
+
+function invalidateAfterMutation(path: string): void {
+  const resource = path.split("?")[0];
+  const prefixes = resource.startsWith("/api/tasks")
+    ? ["/api/tasks", "/api/dashboard"]
+    : resource.startsWith("/api/projects")
+      ? ["/api/projects", "/api/tasks", "/api/dashboard"]
+      : resource.startsWith("/api/executions") || resource.startsWith("/api/company")
+        ? ["/api/executions", "/api/company", "/api/dashboard"]
+        : [resource];
+  for (const key of GET_CACHE.keys()) {
+    if (prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}?`) || key.startsWith(`${prefix}/`))) {
+      GET_CACHE.delete(key);
+    }
+  }
+}
+
+function diagnostics(meta: {
+  method: string;
+  path: string;
+  requestId: string;
+  durationMs: number;
+  serverDurationMs: string | null;
+  responseSize: string | null;
+  cause: string;
+}): void {
+  if (process.env.NODE_ENV !== "development") return;
+  console.debug("[SceneWorks request]", meta);
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const get = isGet(init);
+  const cacheKey = path;
+  const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+  if (get) {
+    const cached = GET_CACHE.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+    const inFlight = GET_INFLIGHT.get(cacheKey);
+    if (inFlight) return inFlight as Promise<T>;
+  }
+
+  const id = requestId();
+  const started = now();
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const promise = (async () => {
+    const response = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": id,
+        ...(init?.headers ?? {}),
+      },
+    });
+    const durationMs = Math.round(now() - started);
+    diagnostics({
+      method,
+      path,
+      requestId: id,
+      durationMs,
+      serverDurationMs: response.headers.get("x-process-time-ms"),
+      responseSize: response.headers.get("content-length"),
+      cause: options.diagnosticCause ?? (get ? "cache-miss" : "mutation"),
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        const body = await response.json();
+        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
+      } catch {
+        /* keep statusText */
+      }
+      throw new ApiError(response.status, detail, id, durationMs);
+    }
+    if (response.status === 204) return undefined as T;
+    const value = (await response.json()) as T;
+    if (get && ttl > 0) GET_CACHE.set(cacheKey, { value, expiresAt: Date.now() + ttl });
+    return value;
+  })();
+
+  if (get) {
+    GET_INFLIGHT.set(cacheKey, promise);
+    promise.finally(() => GET_INFLIGHT.delete(cacheKey)).catch(() => undefined);
+  } else {
+    invalidateAfterMutation(path);
+  }
+  return promise;
 }
 
 export const api = {
   // dashboard
-  dashboard: () => request<Dashboard>("/api/dashboard"),
+  dashboard: () => request<Dashboard>("/api/dashboard", undefined, { diagnosticCause: "dashboard-load" }),
 
   // projects
-  projects: () => request<Project[]>("/api/projects"),
+  projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load" }),
   project: (id: number) => request<Project>(`/api/projects/${id}`),
   createProject: (body: Record<string, unknown>) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
@@ -61,7 +165,7 @@ export const api = {
   // tasks
   tasks: (params?: Record<string, string>) => {
     const query = new URLSearchParams(params ?? {}).toString();
-    return request<Task[]>(`/api/tasks${query ? `?${query}` : ""}`);
+    return request<Task[]>(`/api/tasks${query ? `?${query}` : ""}`, undefined, { diagnosticCause: "tasks-load" });
   },
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
   createTask: (body: Record<string, unknown>) =>
@@ -69,7 +173,7 @@ export const api = {
   taskEvents: (id: number) => request<AppEvent[]>(`/api/tasks/${id}/events`),
   taskDiff: (id: number) => request<Diff>(`/api/tasks/${id}/diff`),
   taskAction: (id: number, action: string, body?: Record<string, string>) =>
-    request<Task>(`/api/tasks/${id}/actions/${action}`, {
+    request<Task>(`/api/tasks/${id}/actions/${action.replaceAll("_", "-")}`, {
       method: "POST",
       body: JSON.stringify(body ?? {}),
     }),
@@ -77,7 +181,7 @@ export const api = {
   // executions
   executions: (params?: Record<string, string>) => {
     const query = new URLSearchParams(params ?? {}).toString();
-    return request<Execution[]>(`/api/executions${query ? `?${query}` : ""}`);
+    return request<Execution[]>(`/api/executions${query ? `?${query}` : ""}`, undefined, { diagnosticCause: "executions-load" });
   },
   execution: (id: string) => request<Execution>(`/api/executions/${id}`),
   executionEvents: (id: string) => request<AppEvent[]>(`/api/executions/${id}/events`),

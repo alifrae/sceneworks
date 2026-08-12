@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { AppEvent } from "@/lib/types";
 import { api, eventsUrl } from "@/lib/api";
 import { eventLabel, formatTime } from "@/lib/format";
@@ -9,6 +9,7 @@ interface EventLogProps {
   taskId?: number;
   executionId?: string;
   compact?: boolean;
+  onEvent?: (event: AppEvent) => void;
 }
 
 function renderBody(event: AppEvent): string {
@@ -42,7 +43,7 @@ function renderBody(event: AppEvent): string {
   return JSON.stringify(p);
 }
 
-export default function EventLog({ taskId, executionId, compact }: EventLogProps) {
+export default function EventLog({ taskId, executionId, compact, onEvent }: EventLogProps) {
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [connected, setConnected] = useState(false);
 
@@ -59,7 +60,13 @@ export default function EventLog({ taskId, executionId, compact }: EventLogProps
           : executionId
             ? await api.executionEvents(executionId)
             : [];
-        if (!closed) setEvents(rows);
+        if (!closed) {
+          setEvents((previous) => {
+            const merged = new Map(previous.map((event) => [event.id, event]));
+            for (const event of rows) merged.set(event.id, event);
+            return Array.from(merged.values()).sort((a, b) => a.id - b.id).slice(-800);
+          });
+        }
       } catch {
         /* backend may be down; SSE will retry */
       }
@@ -74,6 +81,7 @@ export default function EventLog({ taskId, executionId, compact }: EventLogProps
           if (prev.some((e) => e.id === event.id)) return prev;
           return [...prev, event].slice(-800);
         });
+        onEvent?.(event);
         setConnected(true);
       };
       source.onerror = () => {
@@ -92,9 +100,9 @@ export default function EventLog({ taskId, executionId, compact }: EventLogProps
       if (timer) clearTimeout(timer);
       source?.close();
     };
-  }, [taskId, executionId]);
+  }, [taskId, executionId, onEvent]);
 
-  const visible = compact ? events.slice(-120) : events;
+  const visible = useMemo(() => compact ? events.slice(-120) : events, [compact, events]);
 
   return (
     <div>
@@ -108,20 +116,23 @@ export default function EventLog({ taskId, executionId, compact }: EventLogProps
         <div className="empty">No events yet.</div>
       ) : (
         <div className="log">
-          {visible.map((event) => (
-            <div
-              key={event.id}
-              className={`entry ${event.severity === "error" ? "error" : ""} ${
-                event.severity === "warning" ? "warning" : ""
-              } ${event.payload.diagnostics ? "diag" : ""}`}
-            >
-              <span className="time">{formatTime(event.timestamp).slice(11, 19)}</span>
-              <span className="type">{eventLabel(event.type)}</span>
-              <span className="body">{renderBody(event) || "—"}</span>
-            </div>
-          ))}
+          {visible.map((event) => <EventEntry key={event.id} event={event} />)}
         </div>
       )}
     </div>
   );
 }
+
+const EventEntry = memo(function EventEntry({ event }: { event: AppEvent }) {
+  return (
+    <div
+      className={`entry ${event.severity === "error" ? "error" : ""} ${
+        event.severity === "warning" ? "warning" : ""
+      } ${event.payload.diagnostics ? "diag" : ""}`}
+    >
+      <span className="time">{formatTime(event.timestamp).slice(11, 19)}</span>
+      <span className="type">{eventLabel(event.type)}</span>
+      <span className="body">{renderBody(event) || "—"}</span>
+    </div>
+  );
+});

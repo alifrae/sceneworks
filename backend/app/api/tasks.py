@@ -51,10 +51,11 @@ async def list_tasks(
     project_id: int | None = None,
     status: str | None = None,
     role: str | None = None,
+    limit: int = 200,
     ctx: AppContext = Depends(get_context),
 ) -> list[TaskOut]:
     async with ctx.engine_factory() as session:
-        stmt = select(Task).options(selectinload(Task.project)).order_by(Task.updated_at.desc())
+        stmt = select(Task).options(selectinload(Task.project)).order_by(Task.updated_at.desc()).limit(min(limit, 500))
         if project_id is not None:
             stmt = stmt.where(Task.project_id == project_id)
         if status:
@@ -62,7 +63,24 @@ async def list_tasks(
         if role:
             stmt = stmt.where(Task.current_role == role)
         tasks = (await session.execute(stmt)).scalars().all()
-    return [await _task_out(ctx, t) for t in tasks]
+        execution_ids = [t.current_execution_id for t in tasks if t.current_execution_id]
+        execution_status: dict[str, str] = {}
+        if execution_ids:
+            rows = (
+                await session.execute(
+                    select(Execution.id, Execution.status).where(Execution.id.in_(execution_ids))
+                )
+            ).all()
+            execution_status = {execution_id: status for execution_id, status in rows}
+
+    result: list[TaskOut] = []
+    for task in tasks:
+        out = TaskOut.model_validate(task)
+        out.project_name = task.project.name if task.project else ""
+        out.allowed_actions = TaskStateMachine.allowed_actions(TaskStatus(task.status))
+        out.execution_status = execution_status.get(task.current_execution_id or "")
+        result.append(out)
+    return result
 
 
 @router.post("", status_code=201)
@@ -114,9 +132,10 @@ async def delete_task(task_id: int, ctx: AppContext = Depends(get_context)) -> N
 
 @router.get("/{task_id}/events")
 async def task_events(
-    task_id: int, after_id: int | None = None, ctx: AppContext = Depends(get_context)
+    task_id: int, after_id: int | None = None, limit: int = 500,
+    ctx: AppContext = Depends(get_context)
 ):
-    rows = await ctx.event_store.list_for_task(task_id, after_id=after_id, limit=1000)
+    rows = await ctx.event_store.list_for_task(task_id, after_id=after_id, limit=min(limit, 800))
     return [
         {
             "id": r.id,

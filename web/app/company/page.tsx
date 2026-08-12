@@ -38,12 +38,13 @@ export default function CompanyPage() {
         setError("Write a question first.");
         return;
       }
+      setNotice(`Submitting ${role} request…`);
       await api.companyAsk({
         role,
         project_id: ask.project_id ? Number(ask.project_id) : null,
         question: q,
       });
-      setNotice(`Invoked ${role}. The result will be stored as a company decision.`);
+      setNotice(`Request accepted for ${role}. The result will be stored as a company decision.`);
       setAsk({ role: "", project_id: ask.project_id, question: "" });
       setTimeout(() => api.artifacts().then(setArtifacts).catch(() => undefined), 1500);
     } catch (e) {
@@ -81,7 +82,7 @@ export default function CompanyPage() {
         </div>
         <div className="actions">
           <button className="btn small" disabled={busy} onClick={() => askRole(role.key)}>
-            Ask {role.key === "architect" ? "Architect" : role.display_name}
+          {busy ? "Starting…" : `Ask ${role.key === "architect" ? "Architect" : role.display_name}`}
           </button>
         </div>
       </div>
@@ -150,7 +151,7 @@ export default function CompanyPage() {
             disabled={busy || !ask.question.trim()}
             onClick={() => askRole(ask.role || "cto")}
           >
-            Ask selected role
+            {busy ? "Starting…" : "Ask selected role"}
           </button>
           <select value={ask.role} onChange={(e) => setAsk({ ...ask, role: e.target.value })} style={{ width: 200 }}>
             {roles

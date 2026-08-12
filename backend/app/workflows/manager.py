@@ -1413,7 +1413,6 @@ class WorkflowManager:
             await self._transition(task, "start_architecture", "founder", session)
             project_id = task.project_id
 
-        graph = await self._get_compiled_graph()
         config = self._config(task_id)
 
         initial: InitiativeState = {
@@ -1446,7 +1445,7 @@ class WorkflowManager:
         await self._emit_workflow_event(task_id, "workflow.started", {"task_id": task_id})
 
         task_coro = asyncio.create_task(
-            self._run_graph(graph, initial, config, task_id),
+            self._launch_graph(initial, config, task_id),
             name=f"wf-{task_id}",
         )
         self._active_graphs[task_id] = task_coro
@@ -1465,7 +1464,6 @@ class WorkflowManager:
             elif action == "revision":
                 await self._transition(task, "request_architecture_revision", "founder", session)
 
-        graph = await self._get_compiled_graph()
         config = self._config(task_id)
 
         decision = {"action": action}
@@ -1475,7 +1473,7 @@ class WorkflowManager:
             decision["notes"] = reason
 
         task_asyncio = asyncio.create_task(
-            self._run_graph(graph, Command(resume=decision), config, task_id),
+            self._launch_graph(Command(resume=decision), config, task_id),
             name=f"wf-{task_id}-resume",
         )
         self._active_graphs[task_id] = task_asyncio
@@ -1503,7 +1501,6 @@ class WorkflowManager:
                         "cannot start implementation", 409,
                     )
 
-        graph = await self._get_compiled_graph()
         config = self._config(task_id)
 
         cmd = Command(
@@ -1517,7 +1514,7 @@ class WorkflowManager:
         )
 
         task_asyncio = asyncio.create_task(
-            self._run_graph(graph, cmd, config, task_id),
+            self._launch_graph(cmd, config, task_id),
             name=f"wf-{task_id}-impl",
         )
         self._active_graphs[task_id] = task_asyncio
@@ -1531,7 +1528,6 @@ class WorkflowManager:
             if task.status not in (TaskStatus.REVIEWING.value,):
                 await self._transition(task, "start_review", "founder", session)
 
-        graph = await self._get_compiled_graph()
         config = self._config(task_id)
 
         cmd = Command(
@@ -1545,7 +1541,7 @@ class WorkflowManager:
         )
 
         task_asyncio = asyncio.create_task(
-            self._run_graph(graph, cmd, config, task_id),
+            self._launch_graph(cmd, config, task_id),
             name=f"wf-{task_id}-review",
         )
         self._active_graphs[task_id] = task_asyncio
@@ -1572,7 +1568,6 @@ class WorkflowManager:
         if notes:
             await self._append_task_note(task_id, "sent back to engineer", notes)
 
-        graph = await self._get_compiled_graph()
         config = self._config(task_id)
 
         cmd = Command(
@@ -1591,7 +1586,7 @@ class WorkflowManager:
         )
 
         task_asyncio = asyncio.create_task(
-            self._run_graph(graph, cmd, config, task_id),
+            self._launch_graph(cmd, config, task_id),
             name=f"wf-{task_id}-sendback",
         )
         self._active_graphs[task_id] = task_asyncio
@@ -1644,6 +1639,21 @@ class WorkflowManager:
         await self._append_task_note(task_id, "worktree cleaned up", "")
 
     # ------------------------------------------------------------ graph runner
+
+    async def _launch_graph(self, input_data, config, task_id: int) -> None:
+        """Compile/checkpoint the graph off the mutation acknowledgement path."""
+        try:
+            graph = await self._get_compiled_graph()
+            await self._run_graph(graph, input_data, config, task_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("graph setup failed for task %s", task_id)
+            await self._emit_workflow_event(
+                task_id, "workflow.failed", {"task_id": task_id, "reason": "graph setup error"}
+            )
+            await self._set_task_status(task_id, TaskStatus.FAILED, "system")
+            self._active_graphs.pop(task_id, None)
 
     async def _run_graph(self, graph, input_data, config, task_id: int) -> None:
         try:

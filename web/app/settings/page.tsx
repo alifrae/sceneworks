@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Settings } from "@/lib/types";
+import LoadingShell from "@/components/LoadingShell";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -45,7 +46,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (!settings) return <div className="empty">Loading…</div>;
+  if (!settings) return <LoadingShell title="Settings" />;
 
   return (
     <div>

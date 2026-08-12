@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { Backend, Dashboard } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import { timeAgo } from "@/lib/format";
+import LoadingShell from "@/components/LoadingShell";
 
 export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
@@ -27,7 +28,7 @@ export default function DashboardPage() {
   }, []);
 
   if (error) return <div className="notice error">Cannot reach the SceneWorks API: {error}</div>;
-  if (!data) return <div className="empty">Loading...</div>;
+  if (!data) return <LoadingShell title="Dashboard" />;
 
   const geminiUp = backends.find((b) => b.key === "gemini_acp")?.available ?? false;
   const openhandsUp = backends.find((b) => b.key === "openhands")?.available ?? false;
