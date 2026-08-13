@@ -336,9 +336,15 @@ test.describe("Advisory role routing", () => {
 // ----------------------------------------------------------------- UI smoke tests
 
 test.describe("UI smoke tests", () => {
-  test("dashboard loads", async ({ page }) => {
+  test("homepage loads with the ask-the-team composer", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator("h1").first()).toContainText(/SceneWorks|Dashboard/i);
+    await expect(page.locator("h1").first()).toContainText(/SceneWorks/i);
+    await expect(page.getByPlaceholder(/Ask the team/i)).toBeVisible();
+  });
+
+  test("dashboard loads", async ({ page }) => {
+    await page.goto("/dashboard");
+    await expect(page.locator("h1").first()).toContainText(/Dashboard/i);
   });
 
   test("projects page loads", async ({ page }) => {
@@ -346,9 +352,9 @@ test.describe("UI smoke tests", () => {
     await expect(page.locator("h1").first()).toContainText(/Projects/i);
   });
 
-  test("company page shows roles", async ({ page }) => {
+  test("team page shows roles", async ({ page }) => {
     await page.goto("/company");
-    await expect(page.locator("h1").first()).toContainText(/Company/i);
+    await expect(page.locator("h1").first()).toContainText(/Team/i);
     await expect(page.getByText("Engineer", { exact: true })).toBeVisible({ timeout: 10000 });
   });
 

@@ -61,7 +61,7 @@ test.describe("WP-WEB-1 responsiveness contracts", () => {
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   });
 
-  test("navigation renders a shell while destination data is pending", async ({ page }) => {
+  test("dashboard navigation renders a shell while destination data is pending", async ({ page }) => {
     let releaseDashboard!: () => void;
     const dashboard = new Promise<void>((resolve) => { releaseDashboard = resolve; });
     await page.route("**/api/dashboard", async (route: any) => {
@@ -81,10 +81,35 @@ test.describe("WP-WEB-1 responsiveness contracts", () => {
     });
     await page.route("**/api/backends", (route: any) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 1000 });
     await expect(page.getByText("Loading current data…")).toBeVisible();
     releaseDashboard();
+  });
+
+  test("homepage composer is interactive before the task list resolves", async ({ page }) => {
+    let releaseTasks!: () => void;
+    const tasks = new Promise<void>((resolve) => { releaseTasks = resolve; });
+    await page.route("**/api/tasks?*", async (route: any) => {
+      await tasks;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    await page.route("**/api/projects", (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{ id: 1, name: "Demo", description: "", repository_path: "/tmp/demo", default_branch: "main", status: "active", architecture_context_paths: [], test_commands: [], build_commands: [], worktree_root_override: null, created_at: "2026-08-12T08:00:00Z", updated_at: "2026-08-12T08:00:00Z", active_task_count: 0 }]),
+      }),
+    );
+
+    const started = Date.now();
+    await page.goto("/");
+    await expect(page.getByPlaceholder(/Ask the team/i)).toBeVisible({ timeout: 500 });
+    const composerReadyMs = Date.now() - started;
+    console.log(`composer visible: ${composerReadyMs} ms`);
+    expect(composerReadyMs).toBeLessThan(1000);
+    await expect(page.getByText("Loading…").first()).toBeVisible();
+    releaseTasks();
   });
 
   test("large event history is capped and individual rows are memoized", async ({ page }) => {

@@ -91,11 +91,12 @@ export default function CompanyPage() {
 
   return (
     <div>
-      <h1>Company</h1>
+      <h1>Team</h1>
       <p className="muted">
-        Roles are configuration: purpose, permissions, backend, and model profile. In V1, the
-        Architect, Engineer and Reviewer run task workflows; CEO, CTO, Product and GTM are
-        invoked manually, and their outputs are stored as decisions.
+        Who works on your requests, and what each role is responsible for. Architect, Engineer
+        and Reviewer run automatically as part of every Work Thread — see a specific request's
+        thread for their request-specific status. CEO, CTO, Product and GTM can be asked
+        directly below; their answers are stored as decisions.
       </p>
 
       {error && <div className="notice error">{error}</div>}

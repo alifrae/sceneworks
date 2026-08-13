@@ -146,7 +146,7 @@ export default function ProjectDetailPage() {
         <h2>Tasks</h2>
         {tasks.length === 0 ? (
           <div className="empty">
-            No tasks. <Link href="/tasks">Create one</Link>.
+            No work yet. <Link href={`/?project=${projectId}`}>Ask the team</Link>.
           </div>
         ) : (
           <table className="grid">
@@ -163,7 +163,7 @@ export default function ProjectDetailPage() {
               {tasks.map((task) => (
                 <tr key={task.id}>
                   <td>
-                    <Link href={`/tasks/${task.id}`}>{task.title}</Link>
+                    <Link href={`/work/${task.id}`}>{task.title}</Link>
                   </td>
                   <td>
                     <StatusBadge status={task.status} />
