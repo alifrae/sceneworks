@@ -52,6 +52,7 @@ export default function EventLog({ taskId, executionId, compact, onEvent }: Even
     let closed = false;
     let source: EventSource | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let retry = 0;
 
     async function loadReplay() {
       try {
@@ -74,6 +75,10 @@ export default function EventLog({ taskId, executionId, compact, onEvent }: Even
 
     function connect() {
       source = new EventSource(eventsUrl(taskId, executionId));
+      source.onopen = () => {
+        retry = 0;
+        setConnected(true);
+      };
       source.onmessage = (msg) => {
         const event = JSON.parse(msg.data) as AppEvent;
         if (event.type === "heartbeat") return;
@@ -88,7 +93,12 @@ export default function EventLog({ taskId, executionId, compact, onEvent }: Even
         setConnected(false);
         source?.close();
         if (!closed) {
-          timer = setTimeout(connect, 2000);
+          // Reconnect with exponential backoff (2s → 30s cap) instead of a
+          // fixed 2s loop, so a downed API cannot turn the page into a
+          // constant stream of failing connections.
+          const delay = Math.min(2000 * 2 ** retry, 30_000);
+          retry += 1;
+          timer = setTimeout(connect, delay);
         }
       };
     }

@@ -2,11 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import type { Project } from "@/lib/types";
 
 interface ComposerProps {
   defaultProjectId?: number;
+  // Set by pages that already surface the API outage page-wide, so one
+  // failure cannot stack duplicate "Cannot reach the API" banners.
+  suppressError?: boolean;
 }
 
 // The primary entry point: "ask the team" creates a Task and immediately
@@ -14,7 +17,7 @@ interface ComposerProps {
 // Thread. Both calls are the same acknowledgement-oriented mutations
 // WP-WEB-1 already made fast; the second call is fired without blocking
 // navigation so the click-to-thread transition stays local-first.
-export default function Composer({ defaultProjectId }: ComposerProps) {
+export default function Composer({ defaultProjectId, suppressError = false }: ComposerProps) {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>(defaultProjectId ? String(defaultProjectId) : "");
@@ -23,15 +26,38 @@ export default function Composer({ defaultProjectId }: ComposerProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .projects()
-      .then((rows) => {
-        setProjects(rows);
-        if (!projectId && rows.length > 0) {
-          setProjectId(String(defaultProjectId ?? rows[0].id));
-        }
-      })
-      .catch((e) => setError(String(e)));
+    let cancelled = false;
+    const load = () =>
+      api
+        .projects()
+        .then((rows) => {
+          if (cancelled) return;
+          setProjects(rows);
+          setError(null);
+          if (!projectId && rows.length > 0) {
+            setProjectId(String(defaultProjectId ?? rows[0].id));
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) setError(errorMessage(e));
+        });
+
+    load();
+    // One-shot fetches are the pages that could never recover from a backend
+    // restart; retry gently until the API answers so the composer does not
+    // stay wedged on an error after the server comes back.
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 15_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -50,7 +76,7 @@ export default function Composer({ defaultProjectId }: ComposerProps) {
       api.taskAction(task.id, "start_architecture").catch(() => undefined);
       router.push(`/work/${task.id}`);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
       setBusy(false);
     }
   }
@@ -64,6 +90,13 @@ export default function Composer({ defaultProjectId }: ComposerProps) {
   }
 
   if (projects.length === 0 && error) {
+    if (suppressError) {
+      return (
+        <div className="composer">
+          <div className="empty">Project list unavailable — the API is offline.</div>
+        </div>
+      );
+    }
     return <div className="notice error">Cannot reach the SceneWorks API: {error}</div>;
   }
 

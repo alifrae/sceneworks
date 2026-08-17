@@ -31,6 +31,18 @@ export class ApiError extends Error {
   }
 }
 
+// The message shown to users when the backend never answered. `fetch` rejects
+// with a bare "TypeError: Failed to fetch" for connection refused, CORS
+// blocks, and DNS failures alike; surfacing that raw text taught the user
+// nothing. Status 0 marks transport-level failures distinctly from HTTP ones.
+function unreachableMessage(): string {
+  return `the SceneWorks API at ${API_URL} did not respond (connection failed). Is the backend running?`;
+}
+
+export function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 type RequestOptions = {
   cacheTtlMs?: number;
   diagnosticCause?: string;
@@ -70,7 +82,9 @@ function invalidateAfterMutation(path: string): void {
       ? ["/api/projects", "/api/tasks", "/api/dashboard"]
       : resource.startsWith("/api/executions") || resource.startsWith("/api/company")
         ? ["/api/executions", "/api/company", "/api/dashboard"]
-        : [resource];
+        : resource.startsWith("/api/settings")
+          ? ["/api/settings", "/api/roles", "/api/company", "/api/backends"]
+          : [resource];
   for (const key of GET_CACHE.keys()) {
     if (prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}?`) || key.startsWith(`${prefix}/`))) {
       GET_CACHE.delete(key);
@@ -106,14 +120,19 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   const started = now();
   const method = init?.method?.toUpperCase() ?? "GET";
   const promise = (async () => {
-    const response = await fetch(`${API_URL}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Request-ID": id,
-        ...(init?.headers ?? {}),
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": id,
+          ...(init?.headers ?? {}),
+        },
+      });
+    } catch {
+      throw new ApiError(0, unreachableMessage(), id, Math.round(now() - started));
+    }
     const durationMs = Math.round(now() - started);
     diagnostics({
       method,
@@ -154,7 +173,9 @@ export const api = {
   dashboard: () => request<Dashboard>("/api/dashboard", undefined, { diagnosticCause: "dashboard-load" }),
 
   // projects
-  projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load" }),
+  // Projects change rarely (manual registration); a 30s snapshot prevents
+  // Composer/Work/Team/Sidebar consumers from each refetching on navigation.
+  projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load", cacheTtlMs: 30_000 }),
   project: (id: number) => request<Project>(`/api/projects/${id}`),
   createProject: (body: Record<string, unknown>) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
@@ -189,15 +210,15 @@ export const api = {
     request<{ cancelled: boolean }>(`/api/executions/${id}/cancel`, { method: "POST" }),
 
   // company
-  roles: () => request<Role[]>("/api/roles"),
-  companyRoles: () => request<Role[]>("/api/company/roles"),
+  roles: () => request<Role[]>("/api/roles", undefined, { cacheTtlMs: 60_000 }),
+  companyRoles: () => request<Role[]>("/api/company/roles", undefined, { cacheTtlMs: 60_000 }),
   companyAsk: (body: { role: string; project_id: number | null; question: string }) =>
     request<Execution>("/api/company/ask", { method: "POST", body: JSON.stringify(body) }),
-  artifacts: () => request<Artifact[]>("/api/company/artifacts"),
+  artifacts: () => request<Artifact[]>("/api/company/artifacts", undefined, { cacheTtlMs: 4_000 }),
 
   // system
-  backends: () => request<Backend[]>("/api/backends"),
-  settings: () => request<Settings>("/api/settings"),
+  backends: () => request<Backend[]>("/api/backends", undefined, { cacheTtlMs: 30_000 }),
+  settings: () => request<Settings>("/api/settings", undefined, { cacheTtlMs: 30_000 }),
   updateSettings: (body: Record<string, unknown>) =>
     request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(body) }),
 

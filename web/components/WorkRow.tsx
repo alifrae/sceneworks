@@ -10,7 +10,7 @@ export default function WorkRow({ task, reason }: { task: Task; reason?: string 
   return (
     <Link href={`/work/${task.id}`} className={`work-row ${view.exceptional !== "none" ? `x-${view.exceptional}` : ""}`}>
       <div className="work-row-main">
-        <div className="work-row-title">{task.title}</div>
+        <div className="work-row-title" title={task.title}>{task.title}</div>
         <div className="muted small">
           {task.project_name}
           {reason ? ` · ${reason}` : view.ownerRole ? ` · ${view.ownerLabel} working` : ""}

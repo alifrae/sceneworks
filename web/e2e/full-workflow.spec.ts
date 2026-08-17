@@ -5,7 +5,7 @@
  * Each test creates its own temporary Git repository — no E2E_REPO_PATH needed.
  *
  * Prerequisites:
- *   cd backend && SCENEWORKS_DEFAULT_BACKEND=fake uv run python -m uvicorn app.main:app --port 8010
+ *   cd backend && SCENEWORKS_DEFAULT_BACKEND=fake uv run python -m app.main
  *   cd web && npx playwright test
  */
 import { test, expect } from "@playwright/test";

@@ -1,32 +1,97 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, errorMessage } from "@/lib/api";
 import type { Artifact, Project, Role } from "@/lib/types";
 import Markdown from "@/components/Markdown";
 import { timeAgo } from "@/lib/format";
 
 export default function CompanyPage() {
-  const [roles, setRoles] = useState<Role[]>([]);
+  // `null` means "not resolved yet" — the org chart must not render from an
+  // empty default, which produced a broken diagram of bare connector pipes
+  // whenever the roles request failed or lagged.
+  const [roles, setRoles] = useState<Role[] | null>(null);
+  const [rolesError, setRolesError] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [ask, setAsk] = useState({ role: "", project_id: "", question: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [selected, setSelected] = useState<Artifact | null>(null);
 
-  const refresh = useCallback(() => {
-    api.companyRoles().then(setRoles).catch((e) => setError(String(e)));
-    api.artifacts().then(setArtifacts).catch(() => undefined);
-    api.projects().then(setProjects).catch(() => undefined);
+  const loadRoles = useCallback(() => {
+    api
+      .companyRoles()
+      .then((rows) => {
+        setRoles(rows);
+        setRolesError(null);
+      })
+      .catch((e) => setRolesError(errorMessage(e)));
   }, []);
 
+  const loadArtifacts = useCallback(() => {
+    api
+      .artifacts()
+      .then((rows) => {
+        setArtifacts(rows);
+        setArtifactsError(null);
+      })
+      .catch((e) => setArtifactsError(errorMessage(e)));
+  }, []);
+
+  const loadProjects = useCallback(() => {
+    api
+      .projects()
+      .then((rows) => {
+        setProjects(rows);
+        setProjectsError(null);
+      })
+      .catch((e) => setProjectsError(errorMessage(e)));
+  }, []);
+
+  const retryAll = useCallback(() => {
+    loadRoles();
+    loadArtifacts();
+    loadProjects();
+  }, [loadRoles, loadArtifacts, loadProjects]);
+
+  const rolesRef = useRef<Role[] | null>(null);
+
   useEffect(() => {
-    refresh();
-    const timer = setInterval(() => api.artifacts().then(setArtifacts).catch(() => undefined), 5000);
-    return () => clearInterval(timer);
-  }, [refresh]);
+    loadRoles();
+    loadArtifacts();
+    loadProjects();
+    const artifactsTimer = setInterval(() => {
+      if (document.visibilityState === "visible") loadArtifacts();
+    }, 5000);
+    // Roles and projects change rarely but the page must recover from a
+    // backend restart instead of staying in its failed state forever.
+    const staticTimer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        if (rolesRef.current === null) loadRoles();
+        loadProjects();
+      }
+    }, 30_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        loadArtifacts();
+        if (rolesRef.current === null) loadRoles();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(artifactsTimer);
+      clearInterval(staticTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [loadRoles, loadArtifacts, loadProjects]);
+
+  useEffect(() => {
+    rolesRef.current = roles;
+  }, [roles]);
 
   async function askRole(role: string, question?: string) {
     setBusy(true);
@@ -46,15 +111,15 @@ export default function CompanyPage() {
       });
       setNotice(`Request accepted for ${role}. The result will be stored as a company decision.`);
       setAsk({ role: "", project_id: ask.project_id, question: "" });
-      setTimeout(() => api.artifacts().then(setArtifacts).catch(() => undefined), 1500);
+      setTimeout(() => loadArtifacts(), 1500);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
   }
 
-  const org = (key: string) => roles.find((r) => r.key === key);
+  const org = (key: string) => roles?.find((r) => r.key === key);
   const ceo = org("ceo");
   const cto = org("cto");
   const product = org("product");
@@ -89,6 +154,42 @@ export default function CompanyPage() {
     );
   }
 
+  const orgBody = (() => {
+    if (roles === null && rolesError === null) {
+      return <div className="empty">Loading team…</div>;
+    }
+    if (!roles || roles.length === 0) {
+      return (
+        <div className="empty">
+          {rolesError ? "Team unavailable — the roles API did not respond." : "No roles configured."}
+          <div style={{ marginTop: 8 }}>
+            <button className="btn small" onClick={retryAll}>Retry</button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="role-org">
+        <NodeCard role={ceo} isTop />
+        <div style={{ textAlign: "center" }} className="muted">│</div>
+        {cto && product && gtm && (
+          <div className="org-row">
+            <NodeCard role={cto} />
+            <NodeCard role={product} />
+            <NodeCard role={gtm} />
+          </div>
+        )}
+        <div style={{ textAlign: "center" }} className="muted">│</div>
+        <NodeCard role={architect} />
+        <div style={{ textAlign: "center" }} className="muted">│</div>
+        <div className="org-row">
+          <NodeCard role={engineer} />
+          <NodeCard role={reviewer} />
+        </div>
+      </div>
+    );
+  })();
+
   return (
     <div>
       <h1>Team</h1>
@@ -104,24 +205,7 @@ export default function CompanyPage() {
 
       <div className="panel">
         <h3>Org chart</h3>
-        <div className="role-org">
-          <NodeCard role={ceo} isTop />
-          <div style={{ textAlign: "center" }} className="muted">│</div>
-          {cto && product && gtm && (
-            <div className="org-row">
-              <NodeCard role={cto} />
-              <NodeCard role={product} />
-              <NodeCard role={gtm} />
-            </div>
-          )}
-          <div style={{ textAlign: "center" }} className="muted">│</div>
-          <NodeCard role={architect} />
-          <div style={{ textAlign: "center" }} className="muted">│</div>
-          <div className="org-row">
-            <NodeCard role={engineer} />
-            <NodeCard role={reviewer} />
-          </div>
-        </div>
+        {orgBody}
       </div>
 
       <div className="panel">
@@ -136,6 +220,7 @@ export default function CompanyPage() {
               </option>
             ))}
           </select>
+          {projectsError && <small className="muted">Project list unavailable — {projectsError}</small>}
         </label>
         <label className="field">
           Question
@@ -155,7 +240,7 @@ export default function CompanyPage() {
             {busy ? "Starting…" : "Ask selected role"}
           </button>
           <select value={ask.role} onChange={(e) => setAsk({ ...ask, role: e.target.value })} style={{ width: 200 }}>
-            {roles
+            {(roles ?? [])
               .filter((r) => ["ceo", "cto", "product", "gtm", "architect"].includes(r.key))
               .map((r) => (
                 <option key={r.key} value={r.key}>
@@ -173,7 +258,14 @@ export default function CompanyPage() {
             Clear selection
           </button>
         </div>
-        {artifacts.length === 0 ? (
+        {artifactsError ? (
+          <div className="empty">
+            Decisions unavailable — the API did not respond.
+            <div style={{ marginTop: 8 }}>
+              <button className="btn small" onClick={retryAll}>Retry</button>
+            </div>
+          </div>
+        ) : artifacts.length === 0 ? (
           <div className="empty">No decisions stored yet.</div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 1fr" : "1fr", gap: 24 }}>

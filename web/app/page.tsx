@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import type { Task } from "@/lib/types";
+import { Suspense } from "react";
+import { useTasks } from "@/lib/useTasks";
 import Composer from "@/components/Composer";
 import WorkRow from "@/components/WorkRow";
 import { getWorkView } from "@/lib/workStages";
@@ -16,15 +15,13 @@ import { getWorkView } from "@/lib/workStages";
 function HomeContent() {
   const searchParams = useSearchParams();
   const preselectProject = searchParams.get("project");
-  const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { tasks, error } = useTasks();
 
-  useEffect(() => {
-    const load = () => api.tasks({ limit: "50" }).then(setTasks).catch((e) => setError(String(e)));
-    load();
-    const timer = setInterval(load, 8000);
-    return () => clearInterval(timer);
-  }, []);
+  // The API failure is reported once here, page-wide. The Composer suppresses
+  // its own copy on this page so one outage cannot stack duplicate banners,
+  // and every section below renders its terminal state (data, empty, or
+  // unavailable) instead of being pinned on a loading state by a failed fetch.
+  const unavailable = tasks === null && error !== null;
 
   const needsAttention = (tasks ?? []).filter((t) => getWorkView(t).needsAttention);
   const active = (tasks ?? []).filter((t) => {
@@ -35,17 +32,27 @@ function HomeContent() {
     .filter((t) => ["ACCEPTED", "REJECTED"].includes(t.status))
     .slice(0, 8);
 
+  function sectionBody(emptyText: string) {
+    if (tasks === null && error === null) return <div className="empty">Loading…</div>;
+    if (unavailable) return <div className="empty">Unavailable — API offline.</div>;
+    return <div className="empty">{emptyText}</div>;
+  }
+
   return (
     <div>
-      <h1>SceneWorks</h1>
-      <p className="muted" style={{ marginBottom: 16 }}>
-        What should the team work on?
-      </p>
+      <h1 className="small muted" style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+        SceneWorks
+      </h1>
+      <p style={{ fontSize: 18, fontWeight: 600, margin: "2px 0 16px" }}>What should the team work on?</p>
 
-      <Composer defaultProjectId={preselectProject ? Number(preselectProject) : undefined} />
+      <Composer defaultProjectId={preselectProject ? Number(preselectProject) : undefined} suppressError />
 
-      <section className="panel" style={{ marginTop: 24 }}>
-        <div className="row space-between">
+      {unavailable && (
+        <div className="notice error">Cannot reach the SceneWorks API: {error}</div>
+      )}
+
+      <section className={`section${tasks !== null && !error && needsAttention.length > 0 ? " attention" : ""}`}>
+        <div className="section-head">
           <h3>Needs your attention</h3>
           {needsAttention.length > 8 && (
             <Link href="/work?filter=attention" className="small">
@@ -53,10 +60,8 @@ function HomeContent() {
             </Link>
           )}
         </div>
-        {tasks === null && !error ? (
-          <div className="empty">Loading…</div>
-        ) : error ? (
-          <div className="notice error">Cannot reach the SceneWorks API: {error}</div>
+        {tasks === null ? (
+          sectionBody("Nothing needs you right now.")
         ) : needsAttention.length === 0 ? (
           <div className="empty">Nothing needs you right now.</div>
         ) : (
@@ -68,15 +73,15 @@ function HomeContent() {
         )}
       </section>
 
-      <section className="panel">
-        <div className="row space-between">
+      <section className="section">
+        <div className="section-head">
           <h3>Active work</h3>
           <Link href="/work?filter=active" className="small">
             View all →
           </Link>
         </div>
         {tasks === null ? (
-          <div className="empty">Loading…</div>
+          sectionBody("No active work. Ask the team something above.")
         ) : active.length === 0 ? (
           <div className="empty">No active work. Ask the team something above.</div>
         ) : (
@@ -88,10 +93,12 @@ function HomeContent() {
         )}
       </section>
 
-      <section className="panel">
-        <h3>Recent results</h3>
+      <section className="section">
+        <div className="section-head">
+          <h3>Recent results</h3>
+        </div>
         {tasks === null ? (
-          <div className="empty">Loading…</div>
+          sectionBody("Nothing completed yet.")
         ) : recent.length === 0 ? (
           <div className="empty">Nothing completed yet.</div>
         ) : (
@@ -103,7 +110,7 @@ function HomeContent() {
         )}
       </section>
 
-      <p className="small muted" style={{ marginTop: 8 }}>
+      <p className="meta" style={{ marginTop: 24 }}>
         Looking for operational counters? See the <Link href="/dashboard">dashboard</Link>.
       </p>
     </div>

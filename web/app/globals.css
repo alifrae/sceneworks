@@ -1,12 +1,71 @@
+/* ==========================================================================
+   Design tokens
+   ========================================================================== */
 :root {
+  /* surfaces */
   --bg: #f6f7f9;
+  --surface-page: var(--bg);
   --panel: #ffffff;
-  --border: #e2e5ea;
+  --surface-primary: var(--panel);
+  --surface-subtle: #f2f4f7;
+  --surface-hover: #f6f8fa;
+  --surface-attention: #fffbeb;
+  --surface-attention-border: #fde68a;
+
+  /* borders / text */
+  --border: #e3e6eb;
+  --border-strong: #cdd3dc;
   --text: #1c2430;
   --text-dim: #5b6572;
+  --text-faint: #8b96a5;
+  --on-accent: #ffffff;
+
+  /* accent + semantics */
   --accent: #2f6fed;
   --accent-dark: #2255c4;
+  --accent-subtle: #eff4ff;
+  --danger: #dc2626;
+  --danger-subtle: #fef2f2;
+
+  --stage-neutral-bg: #eef2f7;
+  --stage-neutral-fg: #475569;
+  --stage-info-bg: #dbeafe;
+  --stage-info-fg: #1d4ed8;
+  --stage-progress-bg: #ede9fe;
+  --stage-progress-fg: #6d28d9;
+  --stage-success-bg: #dcfce7;
+  --stage-success-fg: #15803d;
+  --stage-warning-bg: #fef3c7;
+  --stage-warning-fg: #92400e;
+  --stage-danger-bg: #fee2e2;
+  --stage-danger-fg: #b91c1c;
+  --stage-muted-bg: #f1f5f9;
+  --stage-muted-fg: #64748b;
+
+  /* type scale */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --text-page-title: 20px;
+  --text-section-title: 14px;
+  --text-thread-title: 17px;
+  --text-body: 13.5px;
+  --text-secondary: 12.5px;
+  --text-meta: 12px;
+  --text-code: 12.5px;
+
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* shape */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --focus-ring: 0 0 0 2px var(--surface-primary), 0 0 0 4px var(--accent);
 }
 
 * {
@@ -17,11 +76,11 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  background: var(--surface-page);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.55;
 }
 
 a {
@@ -32,56 +91,71 @@ a:hover {
   text-decoration: underline;
 }
 
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
 h1 {
-  font-size: 20px;
+  font-size: var(--text-page-title);
+  font-weight: 650;
+  letter-spacing: -0.01em;
   margin: 0 0 4px;
 }
 h2 {
-  font-size: 15px;
+  font-size: var(--text-section-title);
+  font-weight: 600;
   margin: 0 0 12px;
 }
 h3 {
-  font-size: 13px;
+  font-size: 11.5px;
   margin: 0 0 8px;
-  color: var(--text-dim);
+  color: var(--text-faint);
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
+/* ==========================================================================
+   Layout / shell
+   ========================================================================== */
 .layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 216px 1fr;
   min-height: 100vh;
 }
 
 .sidebar {
   background: #101623;
   color: #c8d0de;
-  padding: 20px 12px;
+  padding: 16px 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .sidebar .brand {
-  font-size: 17px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 14.5px;
   font-weight: 700;
   color: #fff;
-  padding: 0 8px 16px;
-  letter-spacing: 0.02em;
+  padding: 2px 8px 14px;
+  letter-spacing: 0.01em;
 }
-.sidebar .brand small {
-  display: block;
+.sidebar .brand .brand-sub {
   font-weight: 400;
   color: #7c8aa0;
-  font-size: 11px;
-  margin-top: 2px;
+  font-size: 10.5px;
 }
 .sidebar a.nav {
   display: block;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
   color: #c8d0de;
   font-weight: 500;
+  font-size: 13px;
 }
 .sidebar a.nav:hover {
   background: rgba(255, 255, 255, 0.07);
@@ -91,12 +165,39 @@ h3 {
   background: var(--accent);
   color: #fff;
 }
+.sidebar a.nav:focus-visible {
+  box-shadow: 0 0 0 2px #101623, 0 0 0 4px var(--accent);
+}
+.sidebar-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sidebar-section-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7c8aa0;
+  padding: 0 10px 4px;
+}
+.sidebar a.nav.recent {
+  font-weight: 400;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar a.nav.secondary {
+  font-weight: 400;
+  color: #9aa7bb;
+  font-size: 12.5px;
+}
 .sidebar .side-note {
   margin-top: auto;
-  padding: 10px;
+  padding: 10px 10px 2px;
   font-size: 11px;
-  color: #7c8aa0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  line-height: 1.5;
+  color: #6b788c;
 }
 .nav-progress {
   color: #9fb3d1;
@@ -105,59 +206,31 @@ h3 {
 }
 
 .content {
-  padding: 28px 32px;
+  padding: var(--space-5) var(--space-6);
   max-width: 1280px;
   min-width: 0;
 }
 
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-}
-.panel + .panel {
-  margin-top: 16px;
-}
-
-.row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.space-between {
-  justify-content: space-between;
-}
-
-.badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  white-space: nowrap;
-}
-.badge.role {
-  background: #334155;
-}
-
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
 button,
 .btn {
   font: inherit;
+  font-size: 13px;
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--surface-primary);
   color: var(--text);
-  padding: 6px 14px;
-  border-radius: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-weight: 500;
+  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 button:hover:not(:disabled),
 .btn:hover:not(:disabled) {
-  border-color: #b8c0cc;
-  background: #fafbfc;
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
 }
 button:disabled,
 .btn:disabled {
@@ -168,94 +241,244 @@ button:disabled,
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+  font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-dark);
+  border-color: var(--accent-dark);
 }
+/* Destructive actions stay legible without being alarming — a light-weight
+   outline that only strengthens on hover/focus, not a solid red fill. See
+   WP-WEB-3 section 8: "destructive/subtle", not equal weight to primary. */
 .btn.danger {
-  border-color: #e11d48;
-  color: #e11d48;
+  border-color: var(--border);
+  color: var(--danger);
+  background: var(--surface-primary);
 }
 .btn.danger:hover:not(:disabled) {
-  background: #fff1f2;
+  border-color: var(--danger);
+  background: var(--danger-subtle);
 }
 .btn.small {
-  padding: 3px 10px;
+  padding: 3px 9px;
   font-size: 12px;
 }
 
+/* ==========================================================================
+   Forms
+   ========================================================================== */
 input,
 select,
 textarea {
   font: inherit;
+  font-size: 13px;
   padding: 7px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
   color: var(--text);
   width: 100%;
 }
 label.field {
   display: block;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   font-weight: 500;
+  font-size: 13px;
 }
 label.field small {
   display: block;
   color: var(--text-dim);
   font-weight: 400;
+  font-size: var(--text-meta);
   margin-top: 2px;
 }
 
+/* ==========================================================================
+   Surfaces
+   ========================================================================== */
+.panel {
+  background: var(--surface-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+.panel + .panel {
+  margin-top: var(--space-4);
+}
+
+/* A section that reads as a work queue, not a boxed dashboard card: header
+   + list, no border. Used on the homepage per WP-WEB-3 section 4. */
+.section {
+  margin-top: var(--space-6);
+}
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: var(--space-2);
+}
+.section.attention {
+  background: var(--surface-attention);
+  border: 1px solid var(--surface-attention-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-top: var(--space-5);
+}
+.section.attention .section-head {
+  margin-bottom: var(--space-2);
+}
+
+.row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.space-between {
+  justify-content: space-between;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.stack.sm {
+  gap: var(--space-2);
+}
+.split-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+/* ==========================================================================
+   Badges
+   ========================================================================== */
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--stage-neutral-bg);
+  color: var(--stage-neutral-fg);
+}
+.badge.role {
+  background: #334155;
+  color: #fff;
+}
+.badge.success {
+  background: var(--stage-success-bg);
+  color: var(--stage-success-fg);
+}
+.badge.error {
+  background: var(--stage-danger-bg);
+  color: var(--stage-danger-fg);
+}
+
+/* Raw/technical status values (legacy Tasks & Executions pages, Advanced
+   tab): a neutral mono chip, deliberately NOT colorful, so it never reads
+   as a second, competing interpretation of the workStages vocabulary. */
+.status-chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.permission-chip {
+  display: inline-block;
+  font-size: 11px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin: 1px 2px;
+  color: var(--text-dim);
+}
+
+/* ==========================================================================
+   Tables
+   ========================================================================== */
 table.grid {
   width: 100%;
   border-collapse: collapse;
 }
 table.grid th {
   text-align: left;
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-weight: 600;
-  font-size: 12px;
-  padding: 8px 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 table.grid td {
-  padding: 10px;
+  padding: var(--space-3);
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+  font-size: 13px;
 }
 table.grid tr:last-child td {
   border-bottom: none;
 }
 table.grid tr:hover td {
-  background: #fafbfc;
+  background: var(--surface-hover);
 }
 
+/* ==========================================================================
+   Code / mono
+   ========================================================================== */
 .mono,
 pre,
 code {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--text-code);
 }
 pre {
   background: #0f1521;
   color: #d6deeb;
-  padding: 14px;
-  border-radius: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.55;
   margin: 8px 0;
 }
+code {
+  background: var(--surface-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+}
 
 .muted {
   color: var(--text-dim);
 }
 .small {
-  font-size: 12px;
+  font-size: var(--text-secondary);
+}
+.meta {
+  font-size: var(--text-meta);
+  color: var(--text-faint);
 }
 
+/* ==========================================================================
+   Stepper (legacy /tasks/[id] workflow strip)
+   ========================================================================== */
 .stepper {
   display: flex;
   gap: 6px;
@@ -268,36 +491,44 @@ pre {
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--text-dim);
-  background: #fff;
+  background: var(--surface-primary);
 }
 .step.done {
   border-color: #86efac;
-  background: #f0fdf4;
-  color: #166534;
+  background: var(--stage-success-bg);
+  color: var(--stage-success-fg);
 }
 .step.current {
   border-color: var(--accent);
-  background: #eff4ff;
+  background: var(--accent-subtle);
   color: var(--accent-dark);
   font-weight: 600;
 }
 
+/* ==========================================================================
+   Event log (Activity tab + legacy execution/task pages)
+   ========================================================================== */
 .log {
   max-height: 480px;
   overflow-y: auto;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
 .log .entry {
   display: grid;
-  grid-template-columns: 130px 110px 1fr;
+  grid-template-columns: 120px 110px 1fr;
   gap: 8px;
-  padding: 5px 8px;
-  border-bottom: 1px solid #f0f2f5;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--surface-subtle);
   align-items: baseline;
 }
+.log .entry:last-child {
+  border-bottom: none;
+}
 .log .entry .time {
-  color: #9aa4b2;
+  color: var(--text-faint);
 }
 .log .entry .type {
   color: var(--accent-dark);
@@ -309,7 +540,7 @@ pre {
   word-break: break-word;
 }
 .log .entry.error .type {
-  color: #e11d48;
+  color: var(--danger);
 }
 .log .entry.warning .type {
   color: #b45309;
@@ -318,17 +549,85 @@ pre {
   opacity: 0.55;
 }
 
+/* ==========================================================================
+   Diff
+   ========================================================================== */
+.diff-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+.diff-stat-pill {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.diff-count {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.diff-count.add {
+  color: #15803d;
+}
+.diff-count.del {
+  color: #b91c1c;
+}
+.diff-files {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.diff-file {
+  border-bottom: 1px solid var(--border);
+}
+.diff-file:last-child {
+  border-bottom: none;
+}
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface-primary);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.diff-file-head:hover {
+  background: var(--surface-hover);
+}
+.diff-file-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-file-caret {
+  color: var(--text-faint);
+  width: 12px;
+  text-align: center;
+}
 .diff {
   max-height: 480px;
   overflow: auto;
   font-family: var(--mono);
   font-size: 12px;
   background: #0f1521;
-  border-radius: 8px;
 }
 .diff pre {
   margin: 0;
   background: transparent;
+  border-radius: 0;
+  white-space: pre;
 }
 .diff .add {
   color: #4ade80;
@@ -341,24 +640,28 @@ pre {
 }
 
 .result-box {
-  background: #fafbfc;
+  background: var(--surface-subtle);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
   max-height: 420px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--text-code);
 }
 
 .empty {
-  color: var(--text-dim);
-  padding: 24px 0;
+  color: var(--text-faint);
+  padding: var(--space-5) 0;
   text-align: center;
+  font-size: 13px;
 }
 
+/* ==========================================================================
+   Loading skeleton
+   ========================================================================== */
 .loading-shell {
   min-height: 180px;
 }
@@ -372,55 +675,61 @@ pre {
   height: 10px;
   width: 70%;
   border-radius: 999px;
-  background: #edf1f6;
+  background: var(--surface-subtle);
 }
 .loading-line.short {
   width: 38%;
 }
 
+/* ==========================================================================
+   Dashboard KPIs (operational page only — never the homepage)
+   ========================================================================== */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 .kpi {
-  background: var(--panel);
+  background: var(--surface-primary);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  padding: 12px var(--space-4);
 }
 .kpi .value {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 650;
 }
 .kpi .label {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
+/* ==========================================================================
+   Team org chart (Company page)
+   ========================================================================== */
 .role-org {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  margin: 16px 0;
+  margin: var(--space-4) 0;
 }
 .org-node {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 16px;
-  background: #fff;
+  border-radius: var(--radius-md);
+  padding: 12px var(--space-4);
+  background: var(--surface-primary);
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
 }
 .org-node .name {
-  font-weight: 700;
+  font-weight: 650;
 }
 .org-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 .org-row .org-node {
   flex-direction: column;
@@ -428,27 +737,19 @@ pre {
 }
 .org-row .org-node .actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
-.permission-chip {
-  display: inline-block;
-  font-size: 11px;
-  background: #eef2f7;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 6px;
-  margin: 1px 2px;
-  color: var(--text-dim);
-}
-
+/* ==========================================================================
+   Notices
+   ========================================================================== */
 .notice {
-  border: 1px solid #fde68a;
-  background: #fffbeb;
+  border: 1px solid var(--surface-attention-border);
+  background: var(--surface-attention);
   color: #92400e;
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  padding: 9px 14px;
+  margin-bottom: var(--space-4);
   font-size: 13px;
 }
 .notice.error {
@@ -457,88 +758,107 @@ pre {
   color: #991b1b;
 }
 
-/* ---------------------------------------------------------- WP-WEB-2: shell */
-
+/* ==========================================================================
+   Sidebar entry point
+   ========================================================================== */
 .new-request {
   display: block;
   text-align: center;
-  margin: 4px 8px 14px;
+  margin: 2px 6px 12px;
+  font-weight: 600;
 }
 
-.sidebar-recent {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-.sidebar-recent-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #7c8aa0;
-  padding: 0 10px 4px;
-}
-.sidebar a.nav.recent {
-  font-weight: 400;
-  font-size: 12.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ------------------------------------------------------- WP-WEB-2: composer */
-
+/* ==========================================================================
+   Composer
+   ========================================================================== */
 .composer {
-  background: var(--panel);
+  background: var(--surface-primary);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 14px;
+  padding: var(--space-4);
 }
 .composer-input {
   resize: vertical;
-  min-height: 64px;
+  min-height: 72px;
+  font-size: 14.5px;
+  border-color: var(--border-strong);
 }
 .composer-footer {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 .composer-project {
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--text-dim);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .composer-project select {
   width: auto;
 }
 
-/* ------------------------------------------------------- WP-WEB-2: work list */
-
+/* ==========================================================================
+   Work list / rows
+   ========================================================================== */
 .work-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 .work-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 10px 8px;
-  border-radius: 6px;
+  gap: var(--space-3);
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
   color: inherit;
+  border-bottom: 1px solid var(--surface-subtle);
+}
+.work-list .work-row:last-child {
+  border-bottom: none;
 }
 .work-row:hover {
-  background: #fafbfc;
+  background: var(--surface-hover);
   text-decoration: none;
+}
+.work-row-main {
+  min-width: 0;
 }
 .work-row-title {
   font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .work-row-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
   flex-shrink: 0;
+}
+.filter-bar {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-subtle);
+  border-radius: var(--radius-sm);
+}
+.filter-bar .btn.small {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 5px;
+}
+.filter-bar .btn.small:hover:not(:disabled) {
+  background: var(--surface-primary);
+  color: var(--text);
+}
+.filter-bar .btn.small.primary {
+  background: var(--surface-primary);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  border: 1px solid var(--border);
 }
 
 .stage-badge {
@@ -548,56 +868,86 @@ pre {
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
-  background: #eef2f7;
-  color: var(--text-dim);
+  background: var(--stage-neutral-bg);
+  color: var(--stage-neutral-fg);
 }
-.stage-badge.stage-submitted { background: #eef2f7; color: #475569; }
+.stage-badge.stage-submitted { background: var(--stage-neutral-bg); color: var(--stage-neutral-fg); }
 .stage-badge.stage-investigating,
-.stage-badge.stage-architecture { background: #dbeafe; color: #1d4ed8; }
-.stage-badge.stage-implementing { background: #ede9fe; color: #6d28d9; }
-.stage-badge.stage-reviewing { background: #ede9fe; color: #6d28d9; }
-.stage-badge.stage-completed { background: #dcfce7; color: #15803d; }
-.stage-badge.stage-needs_input { background: #fef3c7; color: #92400e; }
-.stage-badge.stage-blocked { background: #fef3c7; color: #92400e; }
-.stage-badge.stage-failed { background: #fee2e2; color: #b91c1c; }
-.stage-badge.stage-cancelled { background: #f1f5f9; color: #64748b; }
+.stage-badge.stage-architecture { background: var(--stage-info-bg); color: var(--stage-info-fg); }
+.stage-badge.stage-implementing { background: var(--stage-progress-bg); color: var(--stage-progress-fg); }
+.stage-badge.stage-reviewing { background: var(--stage-progress-bg); color: var(--stage-progress-fg); }
+.stage-badge.stage-completed { background: var(--stage-success-bg); color: var(--stage-success-fg); }
+.stage-badge.stage-needs_input { background: var(--stage-warning-bg); color: var(--stage-warning-fg); }
+.stage-badge.stage-blocked { background: var(--stage-warning-bg); color: var(--stage-warning-fg); }
+.stage-badge.stage-failed { background: var(--stage-danger-bg); color: var(--stage-danger-fg); }
+.stage-badge.stage-cancelled { background: var(--stage-muted-bg); color: var(--stage-muted-fg); }
 
-/* -------------------------------------------------------- WP-WEB-2: thread */
+/* ==========================================================================
+   Work Thread
+   ========================================================================== */
+.thread-title {
+  font-size: var(--text-thread-title);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  margin: 0 0 4px;
+}
 
 .thread-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 16px;
+  gap: var(--space-4);
   align-items: start;
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .thread-side {
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .thread-side .panel {
   margin-top: 0;
 }
 .thread-conversation .panel + .panel {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .turn + .turn {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--surface-subtle);
 }
 .turn-author {
-  font-weight: 700;
-  font-size: 12.5px;
-  margin-bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin-bottom: 5px;
 }
 .turn-content {
   white-space: pre-wrap;
   word-break: break-word;
+  font-size: 13.5px;
 }
 .turn.notes .note-line {
   padding: 2px 0;
+  font-size: var(--text-secondary);
+}
+
+.turn-active {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 0;
+}
+.turn-active .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
 }
 
 .link-btn {
@@ -612,86 +962,126 @@ pre {
   text-decoration: underline;
 }
 
+/* ==========================================================================
+   Decision card
+   ========================================================================== */
 .decision-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .decision-note {
-  background: #fafbfc;
+  background: var(--surface-subtle);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+.decision-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
 }
 
+/* ==========================================================================
+   Progress steps
+   ========================================================================== */
 .progress-steps {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   font-size: 13px;
 }
 .progress-steps li {
-  color: var(--text-dim);
+  color: var(--text-faint);
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .progress-steps li .mark {
   width: 14px;
   text-align: center;
+  flex-shrink: 0;
 }
 .progress-steps li.done {
-  color: #166534;
+  color: var(--text-dim);
+}
+.progress-steps li.done .mark {
+  color: var(--stage-success-fg);
 }
 .progress-steps li.active {
   color: var(--accent-dark);
   font-weight: 600;
 }
+.progress-steps li.active .mark {
+  color: var(--accent);
+}
+.progress-steps li.blocked {
+  color: var(--stage-warning-fg);
+  font-weight: 600;
+}
+.progress-steps li.blocked .mark {
+  color: var(--stage-warning-fg);
+}
+.progress-steps li.blocked.failed {
+  color: var(--stage-danger-fg);
+}
+.progress-steps li.blocked.failed .mark {
+  color: var(--stage-danger-fg);
+}
 
+/* ==========================================================================
+   Role status (Team panel, Work Thread only)
+   ========================================================================== */
 .role-status {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .role-status-row {
   display: flex;
-  gap: 10px;
+  gap: var(--space-2);
   align-items: flex-start;
 }
 .role-status-row .dot {
   width: 14px;
   text-align: center;
-  color: var(--text-dim);
+  color: var(--text-faint);
+  flex-shrink: 0;
 }
 .role-status-row.active .dot {
   color: var(--accent);
 }
 .role-status-row.done .dot {
-  color: #166534;
+  color: var(--stage-success-fg);
 }
 .role-name {
   font-weight: 600;
   font-size: 13px;
 }
 
+/* ==========================================================================
+   Tabs
+   ========================================================================== */
 .thread-tabs {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .tab-bar {
   border-bottom: 1px solid var(--border);
-  margin-bottom: 14px;
-  gap: 4px;
+  margin-bottom: var(--space-4);
+  gap: 2px;
 }
 .tab {
   border: none;
   background: none;
-  padding: 8px 12px;
+  padding: 7px 12px;
   border-bottom: 2px solid transparent;
   color: var(--text-dim);
   font-weight: 500;
+  font-size: 13px;
   border-radius: 0;
 }
 .tab:hover:not(:disabled) {
@@ -701,15 +1091,75 @@ pre {
 .tab.active {
   color: var(--accent-dark);
   border-bottom-color: var(--accent);
-  font-weight: 700;
+  font-weight: 650;
 }
-.result-summary ul {
-  margin: 6px 0;
-  padding-left: 20px;
+.tab:focus-visible {
+  box-shadow: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
+/* ==========================================================================
+   Results
+   ========================================================================== */
+.result-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.result-outcome {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.result-outcome .stage-badge {
+  font-size: 13px;
+  padding: 3px 12px;
+}
+.result-summary ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.result-section-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.result-meta {
+  font-size: var(--text-secondary);
+  color: var(--text-dim);
+}
+
+/* ==========================================================================
+   Advanced tab
+   ========================================================================== */
+.advanced-group {
+  margin-bottom: var(--space-5);
+}
+.advanced-group:last-child {
+  margin-bottom: 0;
+}
+.advanced-group-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-bottom: var(--space-2);
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
 @media (max-width: 900px) {
   .thread-body {
+    grid-template-columns: 1fr;
+  }
+  .split-2 {
     grid-template-columns: 1fr;
   }
 }

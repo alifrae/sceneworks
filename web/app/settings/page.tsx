@@ -77,7 +77,7 @@ export default function SettingsPage() {
                   <strong>{backend.label}</strong> <span className="mono small muted">({backend.key})</span>
                 </td>
                 <td>
-                  <span className={`badge`} style={{ background: backend.available ? "#22c55e" : "#ef4444" }}>
+                  <span className={`badge ${backend.available ? "success" : "error"}`}>
                     {backend.available ? "Available" : "Unavailable"}
                   </span>
                 </td>

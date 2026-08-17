@@ -57,7 +57,10 @@ export default function RoleStatusPanel({ task }: { task: Task }) {
             {row.state === "active" ? "●" : row.state === "done" ? "✓" : "○"}
           </span>
           <div>
-            <div className="role-name">{row.label}</div>
+            <div className="row" style={{ gap: 6 }}>
+              <span className="role-name">{row.label}</span>
+              {row.state === "active" && <span className="meta">working</span>}
+            </div>
             <div className="muted small">{terminal && row.state !== "done" ? "—" : row.note}</div>
           </div>
         </div>

@@ -5,16 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Execution } from "@/lib/types";
 import { formatTime, shortId } from "@/lib/format";
-
-const STATUS_COLOR: Record<string, string> = {
-  QUEUED: "#94a3b8",
-  STARTING: "#3b82f6",
-  RUNNING: "#3b82f6",
-  COMPLETED: "#22c55e",
-  FAILED: "#ef4444",
-  CANCELLED: "#94a3b8",
-  INTERRUPTED: "#ef4444",
-};
+import StatusBadge from "@/components/StatusBadge";
 
 export default function ExecutionsPage() {
   const [rows, setRows] = useState<Execution[]>([]);
@@ -106,9 +97,7 @@ export default function ExecutionsPage() {
                   </td>
                   <td className="mono small">{execution.backend}</td>
                   <td>
-                    <span className="badge" style={{ background: STATUS_COLOR[execution.status] ?? "#64748b" }}>
-                      {execution.status}
-                    </span>
+                    <StatusBadge status={execution.status} />
                   </td>
                   <td className="muted small">{formatTime(execution.started_at)}</td>
                   <td>

@@ -29,8 +29,15 @@ npm install
 **Backend** (terminal 1):
 ```bash
 cd backend
-uv run uvicorn app.main:app --reload
+uv run python -m app.main
 ```
+
+This binds the port configured in `SCENEWORKS_PORT` (default **8010**), the
+port the web client targets. Do not use the bare
+`uv run uvicorn app.main:app` form — uvicorn's CLI default port is 8000, and
+the mismatch makes every browser request fail with
+"TypeError: Failed to fetch". If you need the CLI directly, pass the port
+explicitly: `uv run uvicorn app.main:app --reload --port 8010`.
 
 **Frontend** (terminal 2):
 ```bash
@@ -58,7 +65,7 @@ No live services or model access required.
 ```bash
 # Terminal 1: Start the backend with the scripted fake backend
 cd backend
-SCENEWORKS_DEFAULT_BACKEND=fake uv run uvicorn app.main:app --port 8010
+SCENEWORKS_DEFAULT_BACKEND=fake uv run python -m app.main
 
 # Terminal 2: Run the E2E suite (it starts the web server itself)
 cd web

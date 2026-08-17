@@ -16,28 +16,51 @@ function renderInline(text: string): React.ReactNode[] {
   });
 }
 
+const HEADING_SIZE: Record<number, number> = { 1: 16, 2: 15, 3: 13.5, 4: 13 };
+
+type Block =
+  | { type: "h"; level: number; content: string[] }
+  | { type: "ul" | "ol" | "p"; content: string[] }
+  | { type: "code"; lang: string; content: string[] };
+
 function Markdown({ text }: { text: string }) {
   const lines = text.split("\n");
-  const blocks: { type: string; content: string[] }[] = [];
-  let current: { type: string; content: string[] } | null = null;
+  const blocks: Block[] = [];
+  let current: Block | null = null;
 
   const push = () => {
     if (current) blocks.push(current);
     current = null;
   };
 
-  for (const line of lines) {
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
     const trimmed = line.trim();
+
+    const fence = trimmed.match(/^```\s*(\S*)$/);
+    if (fence) {
+      push();
+      const lang = fence[1] || "";
+      const codeLines: string[] = [];
+      idx++;
+      while (idx < lines.length && !/^```\s*$/.test(lines[idx].trim())) {
+        codeLines.push(lines[idx]);
+        idx++;
+      }
+      blocks.push({ type: "code", lang, content: codeLines });
+      continue;
+    }
+
     if (!trimmed) {
       push();
       continue;
     }
-    const header = trimmed.match(/^#{1,4}\s+(.*)$/);
+    const header = trimmed.match(/^(#{1,4})\s+(.*)$/);
     const bullet = trimmed.match(/^[-*]\s+(.*)$/);
     const numbered = trimmed.match(/^\d+\.\s+(.*)$/);
     if (header) {
       push();
-      blocks.push({ type: "h", content: [header[1]] });
+      blocks.push({ type: "h", level: header[1].length, content: [header[2]] });
     } else if (bullet) {
       if (!current || current.type !== "ul") {
         push();
@@ -65,9 +88,23 @@ function Markdown({ text }: { text: string }) {
       {blocks.map((block, i) => {
         if (block.type === "h")
           return (
-            <div key={i} style={{ fontWeight: 700, marginTop: 10, fontSize: 13.5 }}>
+            <div
+              key={i}
+              style={{
+                fontWeight: 650,
+                marginTop: i === 0 ? 0 : 14,
+                marginBottom: 4,
+                fontSize: HEADING_SIZE[block.level] ?? 13,
+              }}
+            >
               {renderInline(block.content[0])}
             </div>
+          );
+        if (block.type === "code")
+          return (
+            <pre key={i}>
+              <code>{block.content.join("\n") || " "}</code>
+            </pre>
           );
         if (block.type === "ul")
           return (

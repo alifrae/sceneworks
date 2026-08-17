@@ -1,11 +1,10 @@
 "use client";
 
-import { STATUS_COLORS } from "@/lib/format";
-
+// Raw backend status value (all 14 TaskStatus/Execution states), used only
+// on the legacy/advanced pages. Deliberately a neutral mono chip rather
+// than a colorful pill — the colorful, authoritative vocabulary for status
+// is `.stage-badge` (see lib/workStages.ts). Two colorful systems for
+// "status" would compete; this one reads as a technical value instead.
 export default function StatusBadge({ status }: { status: string }) {
-  return (
-    <span className="badge" style={{ background: STATUS_COLORS[status] ?? "#64748b" }}>
-      {status.replace(/_/g, " ")}
-    </span>
-  );
+  return <span className="status-chip">{status.replace(/_/g, " ")}</span>;
 }

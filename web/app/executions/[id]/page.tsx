@@ -58,7 +58,7 @@ export default function ExecutionDetailPage() {
 
       {execution.error && <div className="notice error">{execution.error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+      <div className="split-2">
         <div className="panel">
           <EventLog executionId={execution.id} onEvent={handleEvent} />
         </div>

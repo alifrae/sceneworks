@@ -185,14 +185,16 @@ test.describe("Journey C — needs user action", () => {
       architecture_result: "## Plan\nRewrite the startup sequence to lazy-load the scene cache.",
       allowed_actions: ["approve_architecture", "reject_architecture", "request_architecture_revision", "cancel"],
     });
-    await page.route("**/api/tasks?limit=50", (route: any) =>
+    await page.route("**/api/tasks?limit=200", (route: any) =>
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([pending]) }),
     );
     await mockTaskEndpoints(page, 503, pending);
 
     await page.goto("/");
     await expect(page.getByText("Architecture plan is waiting for your approval.")).toBeVisible();
-    await page.getByText(pending.title).click();
+    // The sidebar shares the page's tasks snapshot, so the title is also
+    // present under "Recent" — click the work-row link specifically.
+    await page.locator(".work-list a").click();
 
     await expect(page).toHaveURL(/\/work\/503$/);
     await expect(page.getByText(/Rewrite the startup sequence/).first()).toBeVisible();
@@ -238,9 +240,14 @@ test.describe("Journey D — completion", () => {
     );
 
     await page.goto("/work/504");
-    await page.getByRole("button", { name: "Results", exact: true }).click();
+    // The Work Thread tab bar exposes real ARIA tab semantics (WP-WEB-3
+    // section 15), so "Results" is queried by its tab role, not "button".
+    await page.getByRole("tab", { name: "Results", exact: true }).click();
     const results = page.locator(".result-summary");
-    await expect(results.getByText("Approved")).toBeVisible();
+    // The outcome badge is the authoritative "Approved" verdict; the full
+    // reviewer text ("VERDICT: APPROVED…") is shown further down the same
+    // panel as supporting evidence, so this must be scoped to the badge.
+    await expect(page.locator(".result-outcome").getByText("Approved", { exact: true })).toBeVisible();
     await expect(results.getByText("Lazy-load scene cache on startup")).toBeVisible();
     await expect(results.getByText("abc123def456")).toBeVisible();
     await expect(results.getByText(/Files changed:\s*2/)).toBeVisible();

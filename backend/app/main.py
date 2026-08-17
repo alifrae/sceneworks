@@ -84,6 +84,12 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
+        # The API binds to localhost only, so any local page is a trusted
+        # caller regardless of which port the dev server picked. Without this,
+        # `next dev` falling back to 3001 (port busy) or the user opening
+        # http://127.0.0.1:3000 made every browser request fail CORS and
+        # surface as "TypeError: Failed to fetch".
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -132,3 +138,21 @@ def create_app(settings=None, context=None) -> FastAPI:
 
 
 app = create_app()
+
+
+def main() -> None:
+    """Run the API with the port from settings.
+
+    `uv run uvicorn app.main:app` ignores the configured port and binds
+    uvicorn's default 8000, while the frontend targets 8010 — the classic
+    "TypeError: Failed to fetch" footgun. Running the module (`uv run python
+    -m app.main`) makes the server and the web client agree by construction.
+    """
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=True)
+
+
+if __name__ == "__main__":
+    main()

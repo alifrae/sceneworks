@@ -167,7 +167,7 @@ export default function TaskDetailPage() {
 
       {/* --- Results & Events --- */}
       <div className="panel">
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 24 }}>
+        <div className="split-2">
           <div>
             <EventLog taskId={taskId} onEvent={handleEvent} />
           </div>

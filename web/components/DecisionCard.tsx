@@ -71,13 +71,13 @@ export default function DecisionCard({ allowedActions, busy, pendingAction, onAc
           </div>
         </div>
       )}
-      <div className="row">
+      <div className="decision-actions">
         {actions.map((action) => {
           const intent = ACTION_INTENT[action] || { label: action.replace(/_/g, " "), kind: "neutral" as const };
           return (
             <button
               key={action}
-              className={`btn ${intent.kind === "primary" ? "primary" : intent.kind === "danger" ? "danger" : ""}`}
+              className={`btn ${intent.kind === "primary" ? "primary" : intent.kind === "danger" ? "danger small" : ""}`}
               disabled={busy}
               onClick={() => trigger(action)}
             >
