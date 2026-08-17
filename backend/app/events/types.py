@@ -47,9 +47,13 @@ WORKFLOW_ROLE_SKIPPED = "workflow.role.skipped"
 WORKFLOW_REPAIR_STARTED = "workflow.repair.started"
 WORKFLOW_REPAIR_LIMIT_REACHED = "workflow.repair.limit_reached"
 
-# V2.4 memory events
+# Project memory events. ACCEPTED/REJECTED carry the human review decision:
+# accepting is what turns a proposal into authoritative project truth, so the
+# event log is where "who accepted what, and when" is preserved.
 MEMORY_CREATED = "memory.created"
 MEMORY_UPDATED = "memory.updated"
+MEMORY_ACCEPTED = "memory.accepted"
+MEMORY_REJECTED = "memory.rejected"
 MEMORY_ARCHIVED = "memory.archived"
 MEMORY_SUPERSEDED = "memory.superseded"
 MEMORY_INJECTED = "memory.injected"
@@ -88,6 +92,8 @@ EVENT_LABELS: dict[str, str] = {
     WORKFLOW_REPAIR_LIMIT_REACHED: "Repair limit reached",
     MEMORY_CREATED: "Memory created",
     MEMORY_UPDATED: "Memory updated",
+    MEMORY_ACCEPTED: "Memory accepted (now authoritative)",
+    MEMORY_REJECTED: "Memory rejected",
     MEMORY_ARCHIVED: "Memory archived",
     MEMORY_SUPERSEDED: "Memory superseded",
     MEMORY_INJECTED: "Memory injected into workflow",

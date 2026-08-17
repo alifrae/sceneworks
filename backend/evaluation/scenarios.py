@@ -198,6 +198,10 @@ class Scenario:
     role_scripts: dict[str, list[ScriptStep]] = field(default_factory=dict)
     role_sequences: dict[str, list[list[ScriptStep]]] = field(default_factory=dict)
 
+    #: Project memories to create before the task runs. Each dict is passed to
+    #: MemoryService.create, so `status` decides whether it is authoritative.
+    seed_memories: tuple[dict, ...] = ()
+
     # --- routing expectations -----------------------------------------
     expect_request_type: str | None = None
     expect_requires_implementation: bool | None = None
@@ -231,6 +235,13 @@ class Scenario:
     expect_recovery_reported: bool | None = None
     #: Architect analysis must be present and non-empty.
     expect_architecture_present: bool | None = None
+
+    # --- project memory expectations ----------------------------------
+    #: Memory titles (exact) that must have been injected as authoritative.
+    expect_memories_injected: frozenset[str] = frozenset()
+    #: Memory titles that must NOT have been injected — proposals, or accepted
+    #: memories that are simply irrelevant to this task.
+    forbid_memories_injected: frozenset[str] = frozenset()
 
     #: Scenarios a release must pass. Negative controls are required too: if the
     #: harness stops detecting a seeded regression, qualification is worthless.
@@ -732,6 +743,69 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect_files_changed=frozenset(),
         expect_final_status=frozenset({"READY_FOR_HUMAN"}),
     ),
+    # 19 ------------------------------------------------------------------
+    Scenario(
+        key="memory-injection",
+        title="Accepted decisions are retrieved and injected; proposals are not",
+        description=(
+            "Extend the aggregation helpers so callers can total values loaded "
+            "from a file, keeping the existing average behaviour intact."
+        ),
+        repo=CALC_HEALTHY.name,
+        drive=DRIVE_ADVISORY,
+        seed_memories=(
+            # Relevant and accepted: must be injected.
+            {
+                "type": "architecture_decision",
+                "title": "Aggregation goes through calc.core",
+                "content": (
+                    "All aggregation of values must go through calc/core.py. "
+                    "Callers must not re-implement totals or averages locally."
+                ),
+                "status": "accepted",
+                "tags": ["aggregation", "core"],
+                "source": "architect",
+            },
+            # Relevant but only proposed: must be withheld from the agent.
+            {
+                "type": "architecture_decision",
+                "title": "Aggregation should move to a separate totals package",
+                "content": (
+                    "We might move aggregation out of calc/core.py into a "
+                    "dedicated totals package."
+                ),
+                "status": "proposed",
+                "tags": ["aggregation"],
+                "source": "architect",
+            },
+            # Accepted but irrelevant: must not be injected just for existing.
+            {
+                "type": "product_decision",
+                "title": "Pricing stays per-seat for the pilot",
+                "content": "No usage-based billing before the pilot ends.",
+                "status": "accepted",
+                "tags": ["pricing"],
+                "source": "product",
+            },
+        ),
+        role_scripts={
+            "triage": [ScriptStep(kind="summary", summary=triage_summary(
+                request_type="architecture",
+                requires_implementation=False,
+                reasoning_summary="design question about aggregation layering",
+            ))],
+            "architect": _arch("Keep aggregation in calc/core.py per the accepted decision."),
+        },
+        expect_request_type="architecture",
+        expect_requires_implementation=False,
+        expect_memories_injected=frozenset({"Aggregation goes through calc.core"}),
+        forbid_memories_injected=frozenset({
+            "Aggregation should move to a separate totals package",
+            "Pricing stays per-seat for the pilot",
+        }),
+        expect_architecture_present=True,
+        expect_final_status=frozenset({"READY_FOR_HUMAN"}),
+    ),
 )
 
 
@@ -740,14 +814,16 @@ SCENARIOS_BY_KEY: dict[str, Scenario] = {s.key: s for s in SCENARIOS}
 #: Keys a release must pass before qualification reports PASS.
 REQUIRED_KEYS: list[str] = [s.key for s in SCENARIOS if s.required]
 
-#: A fast subset for push-triggered CI. Chosen to cover one positive
-#: implementation path, one review path, and one negative control, so a broken
-#: harness is caught quickly.
+#: A fast subset for push-triggered CI. Covers one positive implementation path,
+#: one non-implementation path, one review path, one negative control and memory
+#: injection — so a broken harness, a broken review loop or a memory-retrieval
+#: regression is caught without waiting for the full suite.
 SMOKE_KEYS: list[str] = [
     "bug-fix",
     "no-implementation-needed",
     "reviewer-detects-defect",
     "intentional-regression",
+    "memory-injection",
 ]
 
 

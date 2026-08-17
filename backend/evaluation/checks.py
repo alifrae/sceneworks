@@ -37,6 +37,7 @@ def build(scenario: Scenario, obs: Observations) -> list[Check]:
         _cancellation,
         _recovery,
         _architecture_present,
+        _memory_injection,
     ):
         checks.extend(builder(scenario, obs))
     return checks
@@ -494,6 +495,53 @@ def _architecture_present(scenario: Scenario, obs: Observations) -> list[Check]:
             ),
         )
     ]
+
+
+def _memory_injection(scenario: Scenario, obs: Observations) -> list[Check]:
+    """Accepted decisions must be injected; proposals must not be.
+
+    Two separate checks on purpose. "The right thing was injected" and "the wrong
+    thing was withheld" fail for different reasons: the first is the retrieval bug
+    WP2 fixed, the second is the invariant that speculation never becomes
+    authoritative project truth.
+    """
+    checks: list[Check] = []
+
+    if scenario.expect_memories_injected:
+        missing = scenario.expect_memories_injected - obs.memories_injected
+        checks.append(
+            Check(
+                name="memory.relevant_accepted_injected",
+                passed=not missing,
+                expected=scenario.expect_memories_injected,
+                actual=obs.memories_injected,
+                detail=(
+                    "not injected: " + "; ".join(sorted(missing))
+                    + f" (retrieval searched for: {list(obs.memory_query_terms)})"
+                    if missing
+                    else f"retrieval searched for {list(obs.memory_query_terms)}"
+                ),
+            )
+        )
+
+    if scenario.forbid_memories_injected:
+        leaked = scenario.forbid_memories_injected & obs.memories_injected
+        checks.append(
+            Check(
+                name="memory.speculation_not_injected",
+                passed=not leaked,
+                expected=f"none of {sorted(scenario.forbid_memories_injected)}",
+                actual=sorted(leaked),
+                detail=(
+                    "a proposal or irrelevant memory reached the authoritative "
+                    "context block"
+                    if leaked
+                    else "only accepted, relevant memories were injected"
+                ),
+            )
+        )
+
+    return checks
 
 
 def _short(commit: str | None) -> str:

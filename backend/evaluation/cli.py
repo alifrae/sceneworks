@@ -35,6 +35,7 @@ from pathlib import Path
 
 from app import __version__
 
+from evaluation.harness import DEFAULT_TIMEOUT
 from evaluation.outcomes import QualificationReport, Verdict
 from evaluation.report import summary
 from evaluation.scenarios import REQUIRED_KEYS, SCENARIOS, select
@@ -81,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep the temporary repositories and databases for inspection",
     )
     parser.add_argument(
-        "--timeout", type=float, default=120.0, metavar="SECONDS",
-        help="per-scenario timeout (default: 120)",
+        "--timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SECONDS",
+        help=f"per-scenario timeout (default: {DEFAULT_TIMEOUT:.0f})",
     )
     parser.add_argument(
         "--list", action="store_true", help="list scenarios and exit",

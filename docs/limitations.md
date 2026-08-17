@@ -31,9 +31,17 @@
 
 ### Workflow
 
-- **Project memory is SQLite-backed text search**: V2.4 adds persistent
-  project memory with metadata/tag-based retrieval. No embeddings, no
-  vector database, no semantic search.
+- **Project memory retrieval is term-based, not semantic**: scoring matches
+  *terms* against title, content and tags, with an exact-phrase bonus. No
+  embeddings, no vector database, no semantic search — so a memory phrased
+  entirely in synonyms of the task description will not be retrieved
+  ("point cloud" will not find a decision that only says "LiDAR scan"). The
+  tradeoff is deliberate: retrieval is reproducible and every result explains
+  why it was selected. SQLite FTS5 is the documented upgrade path if the term
+  bound becomes the limit; see [memory.md](memory.md).
+- **A memory cannot record the commit its decision was made against**: that
+  needs a schema column, and schema changes are unsafe until migrations exist.
+  Deferred to WP3 (migrations) and WP6 (Git provenance).
 - **No knowledge graph**: No persistent semantic understanding between
   sessions beyond explicit memory items.
 - **No CrewAI integration**: SceneWorks uses its own LangGraph-based

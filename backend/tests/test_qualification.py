@@ -311,6 +311,9 @@ def test_every_required_scenario_class_from_wp1_is_present():
         "restart-recovery",
         "unnecessary-change",
         "incorrect-triage",
+        # Added by WP2: proves accepted decisions reach the agent and proposals
+        # do not, on the real workflow path.
+        "memory-injection",
     }
     assert required_classes <= set(SCENARIOS_BY_KEY)
 
@@ -335,6 +338,8 @@ def test_no_scenario_is_defined_without_expectations():
         "expect_cancellation_honoured",
         "expect_recovery_reported",
         "expect_architecture_present",
+        "expect_memories_injected",
+        "forbid_memories_injected",
     ]
     for scenario in SCENARIOS:
         stated = [
@@ -469,6 +474,39 @@ async def test_reviewer_approving_a_regression_is_reported_as_false_approval(tmp
     assert obs.tests_pass_at_base is True
     assert obs.tests_pass_at_result is False
     assert obs.reviewer_false_approval is True
+
+
+@pytest.mark.slow
+async def test_memory_injection_scenario_fails_when_the_decision_is_unaccepted(tmp_path):
+    """Ties WP1 and WP2 together end to end.
+
+    The `memory-injection` scenario passes because an accepted decision reaches
+    the agent. Downgrade that same decision to `proposed` and the scenario must
+    fail — proving the check observes real injection rather than just the presence
+    of a memory row, and that a proposal cannot become authoritative context.
+    """
+    require_git()
+    scenario = SCENARIOS_BY_KEY["memory-injection"]
+    downgraded = dataclasses.replace(
+        scenario,
+        key="memory-injection-mutated",
+        seed_memories=tuple(
+            {**spec, "status": "proposed"}
+            if spec["title"] == "Aggregation goes through calc.core"
+            else spec
+            for spec in scenario.seed_memories
+        ),
+    )
+    result = await run_scenario(downgraded, tmp_path, timeout=120)
+
+    assert result.verdict is Verdict.FAIL, (
+        "an unaccepted decision must not satisfy the injection check; got "
+        f"{result.verdict} with blockers={result.blockers}"
+    )
+    assert "memory.relevant_accepted_injected" in {
+        c.name for c in result.failed_checks
+    }
+    assert "Aggregation goes through calc.core" not in result.observations.memories_injected
 
 
 @pytest.mark.slow

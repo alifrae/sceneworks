@@ -177,17 +177,30 @@ Backends are selected by role configuration in `backend/app/roles/definitions.py
 or via the `SCENEWORKS_DEFAULT_BACKEND` setting. Each role may use a different
 backend without workflow changes.
 
-## Project Memory (V2.4)
+## Project Memory
 
-SceneWorks V2.4 adds lightweight persistent project memory for capturing
-architecture decisions, technology choices, product decisions, initiative
-summaries, and constraints. Memory items support create, view, edit, archive,
-supersede, and search/filter. Approved memories are injected into relevant
-workflow nodes (Triage, Product, CTO, Technical Expert, Architect) as
-bounded context. Engineer/Reviewer receive only relevant approved
-decisions/constraints. Memory never converts speculative LLM output into
-accepted project truth — extracted decisions remain proposals until
-accepted.
+Persistent project memory for architecture decisions, technology choices,
+product decisions, initiative summaries and constraints. Memory items support
+create, view, edit, accept, reject, archive, supersede and search.
+
+Retrieval is **deterministic and explainable**: term-based scoring over title,
+content and tags, with every result carrying the reason it was selected
+(`matched_terms`, `matched_tags`, `score`, `coverage`, per-signal contributions).
+No embeddings, no vector database, no knowledge graph.
+
+Only **accepted** memories are injected as authoritative context. Proposals are
+returned separately for display and never reach the agent as settled project
+truth; `propose_from_execution()` has no `status` parameter, so no caller can
+promote speculation by passing an argument. Accepting is an explicit human
+action, recorded in the event log with the actor and the previous state.
+
+> **V2.4 → V3 correction.** V2.4 passed the *entire task description* into a
+> single SQL `ILIKE` pattern. No stored memory contains a task description
+> verbatim, so realistic descriptions retrieved **nothing** — measured at 0
+> results where the same store returned 2 for an empty query. Project Memory was
+> inert on the only path that mattered. See
+> [docs/wp0-baseline-audit.md](docs/wp0-baseline-audit.md) F4 for the evidence and
+> [docs/memory.md](docs/memory.md) for the current behaviour.
 
 ## Git worktree safety
 

@@ -12,12 +12,17 @@ Live qualification mode is **implemented but not live-model validated** — see
 
 ```bash
 cd backend
-uv run python -m evaluation              # full suite (18 scenarios, ~5.5 min)
-uv run python -m evaluation --smoke      # CI subset (4 scenarios, ~50 s)
+uv run python -m evaluation              # full suite (19 scenarios, ~2.5-6 min)
+uv run python -m evaluation --smoke      # CI subset (5 scenarios, ~60 s)
 uv run python -m evaluation --list
 uv run python -m evaluation --scenario bug-fix -v
 uv run python -m evaluation --json qualification.json
 ```
+
+Wall-clock varies widely: the suite creates 19 Git repositories, ~70 worktrees
+and ~70 subprocesses back to back, and `git worktree add` on Windows degrades
+sharply under that load. The per-scenario budget is 300 s for that reason
+(a scenario takes ~13 s in isolation).
 
 ## What replaced what
 
@@ -71,7 +76,7 @@ verdicts from the executions, routing from the events triage emitted.
 
 ## Scenarios
 
-18 scenario classes, all required for a PASS verdict.
+19 scenario classes, all required for a PASS verdict.
 
 | Key | What it establishes |
 | --- | --- |
@@ -93,6 +98,7 @@ verdicts from the executions, routing from the events triage emitted.
 | `restart-recovery` | restart reports what survived and what was interrupted |
 | `unnecessary-change` | **negative control** — unrequested edits are detected |
 | `incorrect-triage` | **negative control** — wrong routing is detected |
+| `memory-injection` | accepted decisions reach the agent; proposals and irrelevant memories do not |
 
 ### Negative controls
 
@@ -117,6 +123,7 @@ They are required for exactly that reason.
 | execution duration | wall clock |
 | cancellation honoured | final task status after cancel |
 | recovery: status before/after, interrupted executions, surviving worktree, retry behaviour | restart driver |
+| memories injected, proposals withheld, retrieval query terms | `memory.injected` events |
 | provenance: project, task, executions | database |
 
 ### Not measured — and why
@@ -222,3 +229,10 @@ Nothing raises — the workflow runs, the reviewer approves, the task reaches
 `READY_FOR_HUMAN`. The old framework would have reported PASS. Qualification
 reports **FAIL**, on `verification.tests_at_result` and
 `provenance.result_commit`.
+
+Three more mutation tests follow the same pattern: wrong triage routing must be
+detected, a seeded regression must still be caught by the negative control, and
+`test_memory_injection_scenario_fails_when_the_decision_is_unaccepted` downgrades
+the seeded decision from `accepted` to `proposed` and asserts the scenario fails —
+proving the memory check observes real injection rather than the mere presence of
+a memory row.

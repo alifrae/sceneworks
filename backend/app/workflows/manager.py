@@ -319,14 +319,8 @@ class WorkflowManager:
             project.id, task.description or task.title,
         )
         if memory_ctx.get("memories"):
-            user = (
-                user + "\n\n## Project Memory (relevant decisions)\n"
-                + json.dumps(memory_ctx["memories"], indent=2)
-            )
-            await self._emit_workflow_event(
-                task_id, "memory.injected",
-                {"node": "triage", "injected_ids": memory_ctx.get("injected_ids", [])},
-            )
+            user = user + "\n\n" + _format_memory_block(memory_ctx["memories"])
+            await self._emit_memory_injection(task_id, "triage", memory_ctx)
 
         # Pin the whole workflow to one commit here, at the first node that
         # touches the repository. Triage reads a detached worktree at that
@@ -1075,13 +1069,10 @@ class WorkflowManager:
                 types=["architecture_decision", "technology_decision", "constraint"],
             )
             if memory_ctx.get("memories"):
-                upstream["Project Memory (relevant decisions/constraints)"] = json.dumps(
-                    memory_ctx["memories"], indent=2
+                upstream["Accepted project decisions and constraints"] = (
+                    _format_memory_block(memory_ctx["memories"])
                 )
-                await self._emit_workflow_event(
-                    task_id, "memory.injected",
-                    {"node": "architect", "injected_ids": memory_ctx.get("injected_ids", [])},
-                )
+                await self._emit_memory_injection(task_id, "architect", memory_ctx)
 
             prompt = await self._prompts.build(
                 role=role, project=project, task=task, workspace=workspace,
@@ -1848,11 +1839,39 @@ class WorkflowManager:
         self, project_id: int, task_description: str, types: list[str] | None = None,
     ) -> dict:
         if self._memory is None:
-            return {"memories": [], "injected_ids": []}
-        ctx = await self._memory.injection_context(
+            return {"memories": [], "proposed": [], "injected_ids": []}
+        return await self._memory.injection_context(
             project_id, task_description, types=types,
         )
-        return ctx
+
+    async def _emit_memory_injection(
+        self, task_id: int, node: str, ctx: dict,
+    ) -> None:
+        """Record which memories were injected and why.
+
+        The retrieval rationale goes in the event, not in the prompt: an operator
+        needs to know why an item was selected, but feeding scores and matched
+        terms to the agent is noise that competes with the decision text itself.
+        Proposals are counted, never injected — see MemoryService.injection_context.
+        """
+        await self._emit_workflow_event(
+            task_id,
+            event_types.MEMORY_INJECTED,
+            {
+                "node": node,
+                "injected_ids": ctx.get("injected_ids", []),
+                "query_terms": ctx.get("query_terms", []),
+                "truncated": ctx.get("truncated", False),
+                "retrieval": [
+                    item.get("retrieval", {}) for item in ctx.get("memories", [])
+                ],
+                # Surfaced so a human can see there are unreviewed proposals that
+                # deliberately did NOT influence this run.
+                "proposed_not_injected": [
+                    item["id"] for item in ctx.get("proposed", [])
+                ],
+            },
+        )
 
     # ------------------------------------------------------------ company artifacts
 
@@ -1901,6 +1920,38 @@ class WorkflowManager:
             await self._git.remove_worktree(Path(repo), Path(path), None)
         except Exception:  # noqa: BLE001
             logger.warning("ask worktree cleanup failed for execution %s", execution.id)
+
+
+def _format_memory_block(memories: list[dict]) -> str:
+    """Render accepted memories as prose an agent can actually use.
+
+    Only accepted items ever reach here (MemoryService filters), so the heading
+    can state that plainly. Provenance is included because a decision without a
+    source is not verifiable; retrieval scores are not, because they are about
+    why SceneWorks chose the item, not about the project.
+    """
+    lines = [
+        "## Accepted project decisions and constraints",
+        "",
+        "These were accepted by the human founder and are authoritative. "
+        "Follow them. If one appears wrong for this task, say so rather than "
+        "silently departing from it.",
+        "",
+    ]
+    for item in memories:
+        lines.append(f"### [{item['type']}] {item['title']}")
+        provenance = [f"source: {item.get('source') or 'unknown'}"]
+        if item.get("source_task_id"):
+            provenance.append(f"from task {item['source_task_id']}")
+        if item.get("created_at"):
+            provenance.append(f"recorded {item['created_at']}")
+        lines.append(f"_({'; '.join(provenance)})_")
+        if item.get("tags"):
+            lines.append(f"_tags: {', '.join(item['tags'])}_")
+        lines.append("")
+        lines.append(item.get("content") or "")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _cap(text: str, max_bytes: int) -> str:

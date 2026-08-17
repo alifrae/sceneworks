@@ -115,18 +115,34 @@ graph TD
   templates
 - `registry.py`: Role lookup with backend resolution
 
-### Project Memory (`backend/app/services/memory.py`) — V2.4
+### Project Memory (`backend/app/services/memory.py`, `memory_retrieval.py`)
 
-- Lightweight persistent project memory backed by SQLite text/metadata
-  retrieval
+- Persistent project memory backed by SQLite. No embeddings, no vector
+  database, no knowledge graph.
 - Types: initiative_summary, architecture_decision, product_decision,
   technology_decision, constraint
-- Statuses: proposed, accepted, archived, superseded
-- Provenance tracking: source, source_task_id, source_execution_id
-- Deterministric retrieval via `memory.get_relevant()` for workflow injection
-- Bounded context injected into Triage, Product, CTO, Technical Expert,
-  and Architect nodes
-- Memory never converts speculative LLM output into accepted project truth
+- Statuses: proposed, accepted, rejected, superseded, archived
+- Provenance: source (authoring role), source_task_id, source_execution_id,
+  supersedes_id, timestamps. Review decisions (`memory.accepted`,
+  `memory.rejected`) are recorded as events with actor and previous status.
+- **Retrieval is two-stage and deterministic**: a SQL prefilter narrows to
+  memories matching at least one *term* (an OR over per-term LIKE), then
+  `memory_retrieval.py` — pure functions, no database — scores and ranks them.
+  Weighted signals over title, content and tags plus an exact-phrase bonus;
+  stable tie-breaking on coverage, recency and id.
+- **Every result explains itself**: `matched_terms`, `matched_tags`, `score`,
+  `coverage` and per-signal contributions travel with each match, and land in
+  the `memory.injected` event.
+- Bounded context (5 items, 20 KB) injected into Triage and Architect nodes.
+- **Only accepted memories are authoritative.** Proposals are returned under a
+  separate key that the prompt builder cannot reach, and
+  `propose_from_execution()` has no `status` parameter — there is no argument
+  by which agent output becomes accepted project truth.
+- V2.4 passed whole task descriptions into one SQL `ILIKE`, so realistic
+  descriptions retrieved nothing. See [memory.md](memory.md) and
+  [wp0-baseline-audit.md](wp0-baseline-audit.md) F4.
+- Not captured yet: the commit a decision was made against (needs a schema
+  column; deferred to WP3 for migrations, WP6 for Git provenance).
 
 ### Frontend (`web/`)
 

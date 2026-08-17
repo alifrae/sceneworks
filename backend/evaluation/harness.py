@@ -56,7 +56,12 @@ TERMINAL = {
     TaskStatus.CHANGES_REQUESTED.value,
 }
 
-DEFAULT_TIMEOUT = 120.0
+#: Per-scenario budget. A scenario takes ~13 s in isolation, but the full suite
+#: creates 19 repositories, ~70 worktrees and ~70 subprocesses back to back, and
+#: `git worktree add` on Windows degrades sharply under that load — a scenario
+#: that runs in 13 s alone was observed exceeding 120 s late in a full run.
+#: Generous enough to absorb that, tight enough to still catch a genuine hang.
+DEFAULT_TIMEOUT = 300.0
 
 
 class HarnessError(RuntimeError):
@@ -118,6 +123,7 @@ async def run_scenario(
 
         project, task = await _seed(context, scenario, repo_path)
         obs.project_id, obs.task_id = project.id, task.id
+        await _seed_memories(context, scenario, project.id)
 
         if scenario.drive == DRIVE_RESTART:
             context = await _drive_restart(context, settings, task.id, obs, timeout)
@@ -197,6 +203,19 @@ async def _seed(
         await session.commit()
         await session.refresh(task)
         return project, task
+
+
+async def _seed_memories(
+    context: AppContext, scenario: Scenario, project_id: int,
+) -> None:
+    """Create the scenario's project memories before the workflow starts.
+
+    Goes through MemoryService rather than inserting rows, so a scenario cannot
+    seed something the service itself would reject — and so a seeded "accepted"
+    memory is accepted by the same code path a human review uses.
+    """
+    for spec in scenario.seed_memories:
+        await context.memory.create(project_id=project_id, **spec)
 
 
 # --------------------------------------------------------------------- drivers
@@ -378,6 +397,7 @@ async def _observe(
     )
 
     await _observe_routing(context, task_id, obs)
+    await _observe_memory(context, task_id, obs)
     await _observe_review(rows, obs)
     await _observe_git(context, scenario, task_id, repo_path, worktree_path, obs)
 
@@ -414,6 +434,49 @@ async def _observe_routing(context: AppContext, task_id: int, obs: Observations)
                 if decision.get(key)
             )
             break
+
+
+async def _observe_memory(
+    context: AppContext, task_id: int, obs: Observations,
+) -> None:
+    """Recover what project memory the workflow injected, from its own events.
+
+    Read from the event log rather than by re-running retrieval: the question is
+    what the workflow *actually gave the agent*, not what retrieval would return
+    if asked again.
+    """
+    from app.events import types as event_types
+
+    injected_ids: set[int] = set()
+    proposed_ids: set[int] = set()
+    terms: tuple[str, ...] = ()
+
+    events = await context.event_store.list_for_task(task_id, limit=1000)
+    for event in events:
+        if event.type != event_types.MEMORY_INJECTED:
+            continue
+        payload = event.payload or {}
+        injected_ids.update(payload.get("injected_ids") or [])
+        proposed_ids.update(payload.get("proposed_not_injected") or [])
+        if payload.get("query_terms"):
+            terms = tuple(payload["query_terms"])
+
+    obs.memory_query_terms = terms
+    obs.memories_injected = frozenset(
+        await _memory_titles(context, injected_ids)
+    )
+    obs.memories_proposed_not_injected = frozenset(
+        await _memory_titles(context, proposed_ids)
+    )
+
+
+async def _memory_titles(context: AppContext, ids: set[int]) -> list[str]:
+    titles: list[str] = []
+    for memory_id in sorted(ids):
+        mem = await context.memory.get(memory_id)
+        if mem is not None:
+            titles.append(mem.title)
+    return titles
 
 
 async def _observe_review(rows, obs: Observations) -> None:

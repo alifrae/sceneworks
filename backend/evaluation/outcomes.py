@@ -97,6 +97,16 @@ class Observations:
     advisory_roles_selected: frozenset[str] | None = None
     advisory_roles_executed: frozenset[str] = frozenset()
 
+    # --- project memory ------------------------------------------------
+    #: Titles of memories the workflow injected as authoritative context. Titles
+    #: rather than ids so a failing check names the decision, not a number.
+    memories_injected: frozenset[str] = frozenset()
+    #: Terms retrieval actually searched for — the diagnostic that was missing
+    #: when whole task descriptions were used as one SQL pattern.
+    memory_query_terms: tuple[str, ...] = ()
+    #: Proposals that matched but were deliberately withheld from the agent.
+    memories_proposed_not_injected: frozenset[str] = frozenset()
+
     # --- architecture --------------------------------------------------
     architecture_result_present: bool | None = None
     architecture_result_bytes: int | None = None
