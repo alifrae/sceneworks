@@ -559,7 +559,8 @@ adding browser E2E tests.
   refactors and architecture decisions were added, but the V2.5 runner never
   executed a workflow — it reported PASS whenever setup did not raise. The
   WP0 audit ([docs/wp0-baseline-audit.md](docs/wp0-baseline-audit.md), F1/F2)
-  documents this; it is replaced in V3 by the qualification suite.
+  documents this; it is replaced in V3 by the qualification suite
+  ([docs/qualification.md](docs/qualification.md)).
 
 ## Security and trust assumptions
 

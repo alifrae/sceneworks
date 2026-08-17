@@ -52,6 +52,7 @@ Open http://localhost:3000
 ```bash
 cd backend
 uv run python -m pytest                    # all tests
+uv run python -m pytest -m "not slow"      # skip full-workflow tests
 uv run python -m pytest tests/test_api.py  # specific test file
 uv run python -m pytest -k "openhands"     # tests matching pattern
 uv run python -m pytest --collect-only     # list all tests
@@ -61,9 +62,28 @@ The test suite uses a temporary file-backed SQLite database (one per test, under
 pytest's `tmp_path`) and the FakeAgentBackend. It never requires a live Gemini
 CLI or an OpenHands server.
 
-Baseline as of V3.0.0: **136 tests, ~430 s**. The Gemini ACP and workflow-graph
-tests dominate that runtime.
-No live services or model access required.
+Baseline as of V3.0.0: **170 tests, ~505 s**. The Gemini ACP, workflow-graph and
+qualification tests dominate that runtime. Tests marked `slow` drive a whole
+workflow through the qualification harness (worktrees, subprocesses, LangGraph)
+and take tens of seconds each; deselect them with `-m "not slow"`.
+
+### Qualification (go/no-go)
+
+Separate from the unit suite: the qualification suite drives real workflows and
+judges **engineering outcomes**, then reports a machine-readable GO/NO-GO result.
+
+```bash
+cd backend
+uv run python -m evaluation                # full suite, 18 scenarios (~5.5 min)
+uv run python -m evaluation --smoke        # CI subset, 4 scenarios (~50 s)
+uv run python -m evaluation --list
+uv run python -m evaluation --scenario bug-fix -v
+uv run python -m evaluation --json qualification.json
+```
+
+Exit codes: `0` PASS, `1` FAIL, `2` BLOCKED (including any partial run — a subset
+cannot qualify a release), `3` NOT_RUN, `4` usage error. Full contract in
+[qualification.md](qualification.md).
 
 ### End-to-end tests
 

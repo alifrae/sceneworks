@@ -307,6 +307,25 @@ class GitWorktreeService:
         full = await self._run(worktree, "diff", f"{base_commit}..HEAD")
         return {"stat": stat, "full": full}
 
+    async def changed_files(
+        self, worktree: Path, base_commit: str, head: str = "HEAD",
+    ) -> list[str]:
+        """Repo-relative paths changed between base_commit and head.
+
+        Git is the authoritative record of what a task touched, so this is what
+        provenance and qualification compare against — never an agent's own
+        description of what it changed. Paths are normalised to forward slashes
+        so comparisons behave the same on Windows.
+        """
+        out = await self._run(
+            worktree, "diff", "--name-only", f"{base_commit}..{head}"
+        )
+        return sorted(
+            line.strip().replace("\\", "/")
+            for line in out.splitlines()
+            if line.strip()
+        )
+
     async def list_commits(self, worktree: Path, base_commit: str) -> list[dict]:
         out = await self._run(
             worktree, "log", f"{base_commit}..HEAD", "--pretty=format:%h|%s|%an"

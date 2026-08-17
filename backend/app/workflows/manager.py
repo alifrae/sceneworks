@@ -80,6 +80,28 @@ class WorkflowManager:
         self._graph = self._build_graph()
 
     async def shutdown(self) -> None:
+        """Stop running graphs, then release the checkpointer connection.
+
+        Order matters. Closing the connection first left in-flight graph tasks
+        writing to a closed aiosqlite handle, which surfaced as
+        ``ValueError: no active connection`` from inside LangGraph — an opaque
+        error that told an operator nothing about what had actually happened to
+        their task. Cancelling the graphs first means the last thing written to
+        the checkpoint is a clean cancellation, and the executions the engine
+        marks INTERRUPTED are the only unfinished state to recover.
+        """
+        for task_id, graph_task in list(self._active_graphs.items()):
+            if graph_task.done():
+                continue
+            graph_task.cancel()
+            try:
+                await graph_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                logger.debug("graph for task %s errored during shutdown", task_id)
+        self._active_graphs.clear()
+
         if self._checkpointer_conn is not None:
             await self._checkpointer_conn.close()
             self._checkpointer_conn = None
@@ -291,132 +313,129 @@ class WorkflowManager:
 
         role_backend = self._roles.effective("architect").backend
 
-        # When using the scripted fake backend, skip the triage model call
-        # and use sensible defaults so tests don't require triage steps.
-        if role_backend == "fake":
-            triage_data = {
-                "request_type": "feature",
-                "use_product": False,
-                "use_cto": False,
-                "use_architect": True,
-                "use_technical_expert": False,
-                "requires_implementation": True,
-                "reasoning_summary": "fake backend bypass; default architect path",
-            }
-        else:
-            system, user = PromptBuilder.build_triage_prompt(task, project)
+        system, user = PromptBuilder.build_triage_prompt(task, project)
 
-            memory_ctx = await self._inject_memory(
-                project.id, task.description or task.title,
+        memory_ctx = await self._inject_memory(
+            project.id, task.description or task.title,
+        )
+        if memory_ctx.get("memories"):
+            user = (
+                user + "\n\n## Project Memory (relevant decisions)\n"
+                + json.dumps(memory_ctx["memories"], indent=2)
             )
-            if memory_ctx.get("memories"):
-                user = (
-                    user + "\n\n## Project Memory (relevant decisions)\n"
-                    + json.dumps(memory_ctx["memories"], indent=2)
+            await self._emit_workflow_event(
+                task_id, "memory.injected",
+                {"node": "triage", "injected_ids": memory_ctx.get("injected_ids", [])},
+            )
+
+        # Pin the whole workflow to one commit here, at the first node that
+        # touches the repository. Triage reads a detached worktree at that
+        # commit — never the human working tree — and every later role
+        # reuses task.base_commit, so architecture, implementation and
+        # review all describe the same snapshot.
+        repo = Path(project.repository_path).resolve()
+        info = await self._git.repo_info(repo)
+        if not info.is_git:
+            raise WorkflowError(f"repository at {repo} is not a valid Git repository", 400)
+        base = task.base_commit or await self._git.resolve_base_commit(
+            repo, project.default_branch
+        )
+        worktree = await self._git.create_detached_worktree(
+            repo, base, task.id, suffix="-triage"
+        )
+
+        workspace = {
+            "cwd": str(worktree.worktree_path),
+            "repo_path": str(repo),
+            "branch": None,
+            "base_commit": base,
+            "permissions": ["repository_read", "network_access"],
+        }
+
+        role = RoleDefinition(
+            key="triage",
+            display_name="Triage",
+            description="classifies request type and selects participants",
+            backend=role_backend,
+            model_profile=TRIAGE_MODEL_PROFILE,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                task2 = await self._get_task(session, task_id)
+                task2.base_commit = base
+                execution = await self._create_execution(
+                    task=task2, role=role, workspace=workspace,
+                    system_prompt=system, user_prompt=user,
                 )
+                task2.current_execution_id = execution.id
+                task2.current_role = "triage"
+                await session.commit()
+
+            await self._emit_workflow_event(
+                task_id, "workflow.node.started",
+                {"node": "triage", "execution_id": execution.id, "base_commit": base},
+            )
+            await self._engine.start(execution.id)
+            final = await self._wait_for_execution(execution.id)
+            triage_data = PromptBuilder.parse_triage_result(final.result or "")
+            if triage_data.pop("triage_parse_failed", False):
+                logger.warning(
+                    "triage output for task %s could not be parsed; default routing",
+                    task_id,
+                )
+                triage_data["triage_degraded"] = True
                 await self._emit_workflow_event(
-                    task_id, "memory.injected",
-                    {"node": "triage", "injected_ids": memory_ctx.get("injected_ids", [])},
+                    task_id, "workflow.triage.degraded",
+                    {"execution_id": final.id, "status": final.status,
+                     "reason": "output could not be parsed as JSON"},
                 )
-
-            # Pin the whole workflow to one commit here, at the first node that
-            # touches the repository. Triage reads a detached worktree at that
-            # commit — never the human working tree — and every later role
-            # reuses task.base_commit, so architecture, implementation and
-            # review all describe the same snapshot.
-            repo = Path(project.repository_path).resolve()
-            info = await self._git.repo_info(repo)
-            if not info.is_git:
-                raise WorkflowError(f"repository at {repo} is not a valid Git repository", 400)
-            base = task.base_commit or await self._git.resolve_base_commit(
-                repo, project.default_branch
-            )
-            worktree = await self._git.create_detached_worktree(
-                repo, base, task.id, suffix="-triage"
-            )
-
-            workspace = {
-                "cwd": str(worktree.worktree_path),
-                "repo_path": str(repo),
-                "branch": None,
-                "base_commit": base,
-                "permissions": ["repository_read", "network_access"],
-            }
-
-            role = RoleDefinition(
-                key="triage",
-                display_name="Triage",
-                description="classifies request type and selects participants",
-                backend=role_backend,
-                model_profile=TRIAGE_MODEL_PROFILE,
-            )
-
+                await self._append_task_note(
+                    task_id, "triage output could not be parsed",
+                    triage_data["reasoning_summary"],
+                )
+            if final.status != "COMPLETED":
+                # Falling back to defaults is fine — the architecture
+                # approval gate still stands between this and any code
+                # change — but it must not look like a real decision.
+                # requires_implementation=True in particular is a guess,
+                # and silently claiming it for a read-only investigation
+                # is misleading.
+                logger.warning(
+                    "triage execution for task %s ended %s; using default routing",
+                    task_id, final.status,
+                )
+                triage_data["reasoning_summary"] = (
+                    f"triage execution {final.status.lower()} "
+                    f"({final.error or 'no error recorded'}); "
+                    "default routing applied — participant selection and "
+                    "requires_implementation were NOT determined by triage"
+                )
+                triage_data["triage_degraded"] = True
+                await self._emit_workflow_event(
+                    task_id, "workflow.triage.degraded",
+                    {"execution_id": final.id, "status": final.status,
+                     "error": final.error},
+                )
+                await self._append_task_note(
+                    task_id, "triage did not complete",
+                    triage_data["reasoning_summary"],
+                )
+            if final.status == "CANCELLED":
+                # A cancelled triage must not fall through to the architect and
+                # quietly resume a workflow the human just stopped.
+                await self._set_task_status(task_id, TaskStatus.CANCELLED, "founder")
+                return {
+                    **state,
+                    "task_status": TaskStatus.CANCELLED.value,
+                    "triage_executed": True,
+                    "error": "cancelled",
+                }
+        finally:
             try:
-                async with self._session_factory() as session:
-                    task2 = await self._get_task(session, task_id)
-                    task2.base_commit = base
-                    execution = await self._create_execution(
-                        task=task2, role=role, workspace=workspace,
-                        system_prompt=system, user_prompt=user,
-                    )
-                    task2.current_execution_id = execution.id
-                    task2.current_role = "triage"
-                    await session.commit()
-
-                await self._emit_workflow_event(
-                    task_id, "workflow.node.started",
-                    {"node": "triage", "execution_id": execution.id, "base_commit": base},
-                )
-                await self._engine.start(execution.id)
-                final = await self._wait_for_execution(execution.id)
-                triage_data = PromptBuilder.parse_triage_result(final.result or "")
-                if triage_data.pop("triage_parse_failed", False):
-                    logger.warning(
-                        "triage output for task %s could not be parsed; default routing",
-                        task_id,
-                    )
-                    triage_data["triage_degraded"] = True
-                    await self._emit_workflow_event(
-                        task_id, "workflow.triage.degraded",
-                        {"execution_id": final.id, "status": final.status,
-                         "reason": "output could not be parsed as JSON"},
-                    )
-                    await self._append_task_note(
-                        task_id, "triage output could not be parsed",
-                        triage_data["reasoning_summary"],
-                    )
-                if final.status != "COMPLETED":
-                    # Falling back to defaults is fine — the architecture
-                    # approval gate still stands between this and any code
-                    # change — but it must not look like a real decision.
-                    # requires_implementation=True in particular is a guess,
-                    # and silently claiming it for a read-only investigation
-                    # is misleading.
-                    logger.warning(
-                        "triage execution for task %s ended %s; using default routing",
-                        task_id, final.status,
-                    )
-                    triage_data["reasoning_summary"] = (
-                        f"triage execution {final.status.lower()} "
-                        f"({final.error or 'no error recorded'}); "
-                        "default routing applied — participant selection and "
-                        "requires_implementation were NOT determined by triage"
-                    )
-                    triage_data["triage_degraded"] = True
-                    await self._emit_workflow_event(
-                        task_id, "workflow.triage.degraded",
-                        {"execution_id": final.id, "status": final.status,
-                         "error": final.error},
-                    )
-                    await self._append_task_note(
-                        task_id, "triage did not complete",
-                        triage_data["reasoning_summary"],
-                    )
-            finally:
-                try:
-                    await self._git.remove_worktree(repo, worktree.worktree_path, None)
-                except Exception:  # noqa: BLE001
-                    logger.warning("triage worktree cleanup failed for task %s", task_id)
+                await self._git.remove_worktree(repo, worktree.worktree_path, None)
+            except Exception:  # noqa: BLE001
+                logger.warning("triage worktree cleanup failed for task %s", task_id)
 
         triage_json = json.dumps(triage_data)
 
@@ -459,8 +478,12 @@ class WorkflowManager:
         self, state: InitiativeState,
     ) -> Literal["product", "cto", "technical_expert", "architect", "__end__"]:
         # A task that already failed (e.g. triage could not create its
-        # snapshot) must not fall through to the architect on default routing.
-        if state.get("task_status") == TaskStatus.FAILED.value:
+        # snapshot) or was cancelled during triage must not fall through to the
+        # architect on default routing.
+        if state.get("task_status") in (
+            TaskStatus.FAILED.value,
+            TaskStatus.CANCELLED.value,
+        ):
             return "__end__"
 
         triage_json = state.get("triage_result", "{}")
@@ -1672,6 +1695,20 @@ class WorkflowManager:
             self._active_graphs.pop(task_id, None)
 
     # ------------------------------------------------------------ helpers
+
+    def has_active_graph(self, task_id: int) -> bool:
+        """Whether a graph run for this task is still in flight."""
+        graph_task = self._active_graphs.get(task_id)
+        return graph_task is not None and not graph_task.done()
+
+    async def wait_until_idle(self, task_id: int) -> None:
+        """Wait until no graph run for this task is in flight.
+
+        Task status alone is not a completion signal: CHANGES_REQUESTED is
+        transient while the Engineer/Reviewer repair loop is still cycling, so an
+        observer that stops at a status can read a half-finished workflow.
+        """
+        await self._await_previous_graph(task_id)
 
     async def _await_previous_graph(self, task_id: int) -> None:
         """Wait for any previous graph run for this task to finish."""

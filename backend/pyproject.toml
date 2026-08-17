@@ -33,3 +33,9 @@ testpaths = ["tests"]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+markers = [
+    # End-to-end tests that drive a whole workflow through the qualification
+    # harness (worktrees, subprocesses, LangGraph). Tens of seconds each.
+    # Deselect with: -m "not slow"
+    "slow: drives a full workflow; slow by nature",
+]

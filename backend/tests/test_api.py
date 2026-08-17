@@ -215,9 +215,13 @@ async def test_end_to_end_workflow(client, context, git_repo):
     detail = await _wait_task(client, task["id"], "ACCEPTED")
     assert not (git_repo / "fix.py").exists()
 
-    # Executions persisted with events.
+    # Executions persisted with events. Asserting the roles rather than a bare
+    # count: triage is a real execution now that the workflow no longer skips
+    # the Triage node for the fake backend (WP0 finding F3), and a count alone
+    # would not have said which role appeared or disappeared.
     resp = await client.get("/api/executions", params={"task_id": task["id"]})
-    assert len(resp.json()) == 3
+    roles = sorted(e["role"] for e in resp.json())
+    assert roles == ["architect", "engineer", "reviewer", "triage"]
     resp = await client.get(f"/api/tasks/{task['id']}/events")
     types = [e["type"] for e in resp.json()]
     assert "execution.started" in types

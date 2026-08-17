@@ -35,6 +35,17 @@ class BackendRegistry:
         self._health_lock = asyncio.Lock()
         self._refresh_task: asyncio.Task | None = None
 
+    def register(self, key: str, backend: AgentBackend) -> None:
+        """Replace a registered backend.
+
+        Used by tests and by the qualification harness to install a scripted
+        FakeAgentBackend, so neither has to reach into the private dict.
+        """
+        self._backends[key] = backend
+        # A swapped backend invalidates any cached health for it.
+        self._health_cache = None
+        self._health_checked_at = 0.0
+
     def get(self, key: str) -> AgentBackend:
         try:
             return self._backends[key]

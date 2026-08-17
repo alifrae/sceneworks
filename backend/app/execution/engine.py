@@ -34,6 +34,12 @@ logger = logging.getLogger("sceneworks.execution")
 ACTIVE_STATUSES = {"QUEUED", "STARTING", "RUNNING"}
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"}
 
+#: Task states that assert an agent is currently working. After a restart no
+#: agent and no graph survived, so a task in one of these is making a false
+#: claim and must be reconciled. Kept as strings: the engine is deliberately
+#: ignorant of the task domain and must not import the state machine.
+RUNNING_TASK_STATES = {"ARCHITECTURE_ANALYSIS", "IMPLEMENTING", "REVIEWING"}
+
 ResultStatus = Callable[[str], Awaitable[None]]
 
 
@@ -64,6 +70,12 @@ class ExecutionEngine:
         self._settings = settings
         self._active: dict[str, ActiveRun] = {}
         self.on_execution_finished: ResultStatus | None = None
+        # Set while shutdown() is tearing runs down, so an execution cancelled
+        # by the shutdown is recorded as INTERRUPTED rather than CANCELLED.
+        # Conflating the two told an operator "somebody cancelled this" when the
+        # truth was "the process stopped underneath it", and left restart
+        # reconciliation unable to find the work it was supposed to recover.
+        self._shutting_down = False
 
     # ------------------------------------------------------------ lifecycle
 
@@ -140,6 +152,7 @@ class ExecutionEngine:
 
     async def shutdown(self) -> None:
         """Cancel everything and mark active executions INTERRUPTED."""
+        self._shutting_down = True
         for execution_id, run in list(self._active.items()):
             run.sink.cancel()
             try:
@@ -212,16 +225,30 @@ class ExecutionEngine:
                 logger.exception("backend run crashed for %s", execution_id)
                 result = AgentResult(status="failed", error=f"{type(exc).__name__}: {exc}")
 
+            # A cancellation observed while shutting down is an interruption, not
+            # a decision somebody made. Recording it correctly is what lets
+            # recover_interrupted() find the work again after restart.
+            cancelled_status = "INTERRUPTED" if self._shutting_down else "CANCELLED"
+            cancelled_event = (
+                event_types.EXECUTION_INTERRUPTED
+                if self._shutting_down
+                else event_types.EXECUTION_CANCELLED
+            )
             status_map = {
                 "completed": "COMPLETED",
-                "cancelled": "CANCELLED",
+                "cancelled": cancelled_status,
                 "failed": "FAILED",
             }
             final_event = {
                 "completed": event_types.EXECUTION_COMPLETED,
-                "cancelled": event_types.EXECUTION_CANCELLED,
+                "cancelled": cancelled_event,
                 "failed": event_types.EXECUTION_FAILED,
             }[result.status]
+            if result.status == "cancelled" and self._shutting_down:
+                result = AgentResult(
+                    status="cancelled",
+                    error="interrupted by SceneWorks shutdown; check logs before retrying",
+                )
             # Terminal status and terminal event commit together. Written
             # separately, a client could poll the execution to COMPLETED and
             # then fetch events that do not yet contain execution.completed.
@@ -367,13 +394,25 @@ class ExecutionEngine:
     # -------------------------------------------------------------- recovery
 
     async def recover_interrupted(self) -> list[str]:
-        """Reconcile executions that were active when SceneWorks stopped.
+        """Reconcile executions and tasks that were mid-flight when SceneWorks stopped.
 
-        Marks all active (QUEUED/STARTING/RUNNING) executions as INTERRUPTED.
-        Only fails tasks that had an interrupted execution AND are in a
-        running state (ARCHITECTURE_ANALYSIS, IMPLEMENTING, REVIEWING).
+        Two passes, because either can happen on its own:
+
+        1. Executions still marked active (QUEUED/STARTING/RUNNING) — the process
+           died without unwinding. They become INTERRUPTED.
+        2. Tasks left in a running state (ARCHITECTURE_ANALYSIS, IMPLEMENTING,
+           REVIEWING) with no execution still active. Nothing is running and no
+           graph survived the restart, so the state is a false claim of progress.
+           They become FAILED, which is the state `retry` accepts.
+
+        Pass 2 exists because a *clean* shutdown finalizes its executions itself,
+        so pass 1 finds nothing and the task used to stay in ARCHITECTURE_ANALYSIS
+        forever — visible in the UI as permanently working, with no agent, no
+        graph and no way to retry. Found by the WP1 restart-recovery scenario.
+
         Human-waiting states (AWAITING_ARCHITECTURE_APPROVAL, CHANGES_REQUESTED,
-        READY_FOR_HUMAN, ACCEPTED, REJECTED) are left as-is.
+        READY_FOR_HUMAN, ACCEPTED, REJECTED) are left alone: nothing about them
+        depends on a live process.
         """
         interrupted: list[str] = []
         failed_task_ids: list[int] = []
@@ -390,12 +429,43 @@ class ExecutionEngine:
                 interrupted.append(row.id)
                 if row.task_id is not None:
                     task = await session.get(Task, row.task_id)
-                    if task is not None and task.status in (
-                        "ARCHITECTURE_ANALYSIS", "IMPLEMENTING", "REVIEWING",
-                    ):
+                    if task is not None and task.status in RUNNING_TASK_STATES:
                         task.status = "FAILED"
                         task.updated_at = datetime.now(timezone.utc)
                         failed_task_ids.append(task.id)
+            await session.commit()
+
+            # Pass 2: tasks claiming to be running with nothing running.
+            stranded = (
+                (await session.execute(
+                    select(Task).where(Task.status.in_(sorted(RUNNING_TASK_STATES)))
+                ))
+                .scalars()
+                .all()
+            )
+            for task in stranded:
+                if task.id in failed_task_ids:
+                    continue
+                still_active = (
+                    await session.execute(
+                        select(Execution.id)
+                        .where(Execution.task_id == task.id)
+                        .where(Execution.status.in_(ACTIVE_STATUSES))
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if still_active is not None:
+                    continue
+                task.status = "FAILED"
+                task.current_role = None
+                task.current_execution_id = None
+                task.updated_at = datetime.now(timezone.utc)
+                failed_task_ids.append(task.id)
+                logger.warning(
+                    "task %s was left in a running state with no active execution; "
+                    "marked FAILED so it can be retried",
+                    task.id,
+                )
             await session.commit()
         for execution_id in interrupted:
             await self._emit(
