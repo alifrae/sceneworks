@@ -71,19 +71,55 @@ class HarnessError(RuntimeError):
 # --------------------------------------------------------------------- runner
 
 
+#: Metrics that stop being measurable once a real agent backend is used: nothing
+#: in the run is scripted, so an expectation about exact behaviour describes the
+#: model rather than SceneWorks.
+LIVE_UNSUPPORTED_METRICS = {
+    "reviewer_false_approval": (
+        "Requires a scripted reviewer verdict. A real reviewer's verdict is a "
+        "measurement of the model, not of SceneWorks."
+    ),
+    "repair_iterations": (
+        "A real agent may converge in any number of iterations; a bound would "
+        "assert model behaviour."
+    ),
+}
+
+
 async def run_scenario(
     scenario: Scenario,
     workdir: Path,
     timeout: float = DEFAULT_TIMEOUT,
+    backend: str = "fake",
 ) -> ScenarioResult:
-    """Drive one scenario and return its evaluated result."""
+    """Drive one scenario and return its evaluated result.
+
+    `backend` selects the agent backend. The default `fake` gives deterministic
+    outcomes and is what release qualification uses. Any other value runs the
+    real provider: the scenario's `role_scripts` are then irrelevant, and a
+    provider that is not actually usable yields BLOCKED — never PASS.
+    """
     result = ScenarioResult(key=scenario.key, title=scenario.title)
     result.unsupported = sorted(UNSUPPORTED_METRICS)
+    if backend != "fake":
+        result.unsupported = sorted(
+            set(result.unsupported) | set(LIVE_UNSUPPORTED_METRICS)
+        )
     obs = result.observations
     started = time.monotonic()
 
     root = workdir / scenario.key
     root.mkdir(parents=True, exist_ok=True)
+
+    if backend != "fake" and not scenario.live_capable:
+        result.blockers.append(
+            f"scenario {scenario.key!r} is scripted-only and cannot be evaluated "
+            f"against the real {backend!r} backend: it works by scripting a "
+            "specific agent behaviour, which a real model cannot be made to "
+            "reproduce on cue"
+        )
+        obs.duration_seconds = round(time.monotonic() - started, 3)
+        return result.finalize()
 
     context: AppContext | None = None
     try:
@@ -113,13 +149,28 @@ async def run_scenario(
                 f"{base_output[:300]}"
             )
 
-        settings = _settings_for(root)
+        settings = _settings_for(root, backend=backend)
         context = await build_context(settings)
-        backend = FakeAgentBackend(
-            role_scripts=scenario.role_scripts,
-            role_sequences=scenario.role_sequences,
-        )
-        context.backends.register("fake", backend)
+
+        if backend == "fake":
+            context.backends.register(
+                "fake",
+                FakeAgentBackend(
+                    role_scripts=scenario.role_scripts,
+                    role_sequences=scenario.role_sequences,
+                ),
+            )
+        else:
+            # A real provider must prove it can execute before the scenario runs.
+            # Reporting PASS or FAIL on a provider that was never usable would be
+            # exactly the fabrication WP1 exists to prevent.
+            health = await context.backends.get(backend).health()
+            if not health.available:
+                raise HarnessError(
+                    f"backend {backend!r} is not available: {health.detail}"
+                )
+            obs.backend_detail = health.detail
+            obs.backend_version = health.version
 
         project, task = await _seed(context, scenario, repo_path)
         obs.project_id, obs.task_id = project.id, task.id
@@ -163,17 +214,19 @@ async def run_scenario(
 # ------------------------------------------------------------------ scaffolding
 
 
-def _settings_for(root: Path) -> Settings:
+def _settings_for(root: Path, backend: str = "fake") -> Settings:
+    # A real provider driving a real model needs a real budget; a scripted run
+    # measured in seconds does not, and a generous timeout there would turn a
+    # hung scenario into a 90-minute stall.
+    execution_timeout = 90 if backend == "fake" else 1800
     return Settings(
         database_url=f"sqlite+aiosqlite:///{(root / 'qualification.db').as_posix()}",
         worktree_root=root / "worktrees",
         checkpoint_db_path=str(root / "checkpoints.db"),
-        default_backend="fake",
+        default_backend=backend,
         log_level="ERROR",
-        # Scenarios are seconds long. A generous production timeout would turn a
-        # hung scenario into a 90-minute stall.
-        execution_timeout_seconds=90,
-        cancel_grace_seconds=2,
+        execution_timeout_seconds=execution_timeout,
+        cancel_grace_seconds=2 if backend == "fake" else 30,
         max_review_iterations=3,
     )
 
@@ -587,6 +640,7 @@ async def run_suite(
     keep_workdir: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
     progress=None,
+    backend: str = "fake",
 ) -> tuple[list[ScenarioResult], dict]:
     """Run scenarios sequentially. Returns (results, environment notes)."""
     workdir = Path(tempfile.mkdtemp(prefix="sceneworks-qualification-"))
@@ -595,12 +649,15 @@ async def run_suite(
         "sceneworks_version": __version__,
         "workdir": str(workdir),
         "git_available": shutil.which("git") is not None,
+        "backend": backend,
     }
     try:
         for scenario in scenarios:
             if progress:
                 progress(scenario)
-            results.append(await run_scenario(scenario, workdir, timeout=timeout))
+            results.append(
+                await run_scenario(scenario, workdir, timeout=timeout, backend=backend)
+            )
     finally:
         if not keep_workdir:
             shutil.rmtree(workdir, ignore_errors=True)

@@ -32,7 +32,7 @@ component of the backend.
 | Backend | Status | Model selection |
 |---|---|---|
 | Gemini CLI ACP | Supported / default | `SCENEWORKS_GEMINI_MODEL` (unset = CLI auto) |
-| OpenHands | Experimental (unvalidated) | `SCENEWORKS_OPENHANDS_MODEL` |
+| OpenHands | **Experimental** — `local` mode live-validated for read-only roles; see [below](#openhands-status-wp25) | `SCENEWORKS_OPENHANDS_MODEL` (required) |
 | Fake | Testing only | Scripted (no model) |
 
 **DeepSeek direct**: Not currently a SceneWorks AgentBackend. DeepSeek is a
@@ -160,59 +160,128 @@ When adding a new backend, evaluate against these criteria:
 | Worktree isolation | Does it stay within the provided workspace? |
 | Reliability | How often does it succeed vs fail? |
 
-### Gemini ACP vs OpenHands comparison
+## OpenHands status (WP2.5)
+
+Validated by WP2.5 against **openhands-sdk 1.17.0 + openhands-tools 1.17.0** on
+**Windows 11**, using `local` mode with an OpenAI-compatible LLM endpoint
+(LM Studio). Full evidence in
+[wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
+
+**Status: EXPERIMENTAL.** Real execution works, and one mode is live-validated,
+but a material capability gap remains on this platform.
+
+| Aspect | Finding |
+|---|---|
+| `local` mode (no Agent Server) | **Live-validated** for read-only roles |
+| Shell / terminal tool | **Unavailable on Windows** — upstream `NotImplementedError` in `openhands/tools/terminal/terminal/factory.py` |
+| Engineer role on Windows | **Not possible** in `local` mode (needs shell); refused up front with a clear message |
+| `remote` / `http` / `cli` modes | Implemented, **not validated** — no Agent Server was available |
+| Install | Requires the `openhands` extra; **openhands-sdk and openhands-tools versions must match** |
+
+### Modes
+
+Resolved explicitly by `OpenHandsBackend.resolve_mode()` and reported as a
+`backend.mode` event on every run. There is no silent fallback: a backend that
+quietly degrades makes a failed run impossible to diagnose.
+
+| Mode | Requires | Validated |
+|---|---|---|
+| `local` | `openhands-sdk` + `openhands-tools`, a model | **yes** (read-only roles) |
+| `remote` | the above + `SCENEWORKS_OPENHANDS_URL` | no |
+| `http` | `SCENEWORKS_OPENHANDS_URL` (no SDK) | no |
+| `cli` | `openhands` executable | no |
+
+Override with `SCENEWORKS_OPENHANDS_MODE=local|remote|http|cli`.
+
+### Configuration
+
+```bash
+# Install the matched pair (versions must be equal)
+cd backend && uv sync --extra openhands
+
+# Required: litellm-form model id
+SCENEWORKS_OPENHANDS_MODEL=lm_studio/google/gemma-4-e2b
+# LLM endpoint for any OpenAI-compatible server (LM Studio, vLLM, Ollama)
+SCENEWORKS_OPENHANDS_BASE_URL=http://127.0.0.1:1234/v1
+# Optional: provider credential
+SCENEWORKS_OPENHANDS_API_KEY=...
+# Optional: Agent Server (switches to remote mode)
+SCENEWORKS_OPENHANDS_URL=http://localhost:8000
+```
+
+`SCENEWORKS_OPENHANDS_URL` is the **Agent Server**;
+`SCENEWORKS_OPENHANDS_BASE_URL` is the **LLM endpoint**. They are different
+services — conflating them is why no local validation was previously possible.
+
+`SCENEWORKS_OPENHANDS_MODEL` is **required**: the SDK rejects an unspecified
+model, and `health()` reports the backend unavailable without one.
+
+### Health
+
+`health()` deliberately checks more than configuration. It reports the resolved
+mode, the SDK version, the model, whether the mode is validated, and whether
+shell is available; it probes the LLM endpoint when one is configured and the
+Agent Server in remote mode. **An HTTP 200 from `/health` is not treated as
+evidence that execution works.**
+
+### Event mapping
+
+OpenHands event payloads never leave the adapter. Mapping to the generic
+SceneWorks vocabulary:
+
+| OpenHands event | SceneWorks event(s) |
+|---|---|
+| `MessageEvent` | `agent.message` |
+| `ActionEvent` | `agent.thought_summary`, `tool.started`, plus `command.started` (terminal) or `file.changed` (editor) |
+| `ObservationEvent` | `tool.completed`, plus `command.output` (terminal) |
+| `AgentErrorEvent` | `agent.event` (severity `error`) |
+| `PauseEvent` | `agent.event` (cancellation observed) |
+| anything else | `agent.event` with the class name — surfaced, never dropped |
+
+**Not produced, by design:** `test.result` (OpenHands reports no structured test
+outcome) and `git.commit` (the agent commits through the shell; SceneWorks
+captures the commit itself in `_finish_engineer`). These are absent rather than
+fabricated.
+
+### Gemini ACP vs OpenHands
 
 | Criterion | Gemini ACP | OpenHands |
 |---|---|---|
-| Protocol | ACP v1 over stdio | SDK/WebSocket, REST API (HTTP), or CLI |
-| Setup | Install Gemini CLI + authenticate | Deploy Agent Server or install CLI |
-| Permission model | SceneWorks mediates all I/O via ACP proxy | Workspace confinement |
+| Status | **Supported**, default | **Experimental**, opt-in |
+| Protocol | ACP v1 over stdio | openhands-sdk in-process, or REST to an Agent Server |
+| Setup | Install Gemini CLI + authenticate | `uv sync --extra openhands` + a model endpoint |
+| Permission model | SceneWorks mediates every file/shell request via the ACP proxy | Working-directory scoping only |
 | File access control | Per-request approval/rejection | Directory scoping |
-| Shell control | ACP terminal proxy | Agent-side configuration |
-| Event granularity | Structured ACP update notifications | WebSocket streaming, polling, or stdout |
-| Resource footprint | Single process per execution | Server + agent processes |
-| Reliability | Tied to Gemini CLI stability | Tied to Agent Server availability |
-| Authentication | Gemini CLI's own auth | API key or session key |
-| Status | Validated (default) | Experimental / unvalidated |
-| Recommended for | Direct integration, permission enforcement | Teams, cloud deployment, shared infrastructure |
+| Shell control | ACP terminal proxy | Tool-level; **unavailable on Windows** |
+| Event granularity | Structured ACP update notifications | SDK callbacks, mapped by the adapter |
+| Streaming | Yes | Yes (via SDK callbacks) |
+| Cancellation | ACP cancel + process teardown | `pause()` then `close()` |
+| Roles usable on Windows | all | read-only only |
+| Validated on | Gemini CLI 0.55.1 | openhands-sdk 1.17.0, `local` mode, Windows 11 |
 
-OpenHands execution modes (tried in order):
-1. **SDK/WebSocket** (preferred): official `openhands-sdk` with WebSocket streaming
-2. **HTTP polling** (compatibility fallback): REST API, polls for status
-3. **CLI/headless** (development fallback only): one-off subprocess
+**Recommended usage.** Gemini ACP for all roles; it is the validated default and
+the only backend that can run the Engineer on Windows. OpenHands is worth
+enabling for read-only roles if you want a second opinion from a different model
+family, or on Linux where its shell tool works. Roles can be mixed — backend is
+per-role configuration.
 
-**Strengths of Gemini ACP:**
-- Fine-grained permission enforcement at the protocol level
-- No separate server to manage
-- Structured event streaming via ACP updates
-- Battle-tested with Gemini CLI 0.53.x
+### Known gaps
 
-**Strengths of OpenHands:**
-- Multi-agent, multi-backend architecture
-- Can run on dedicated infrastructure (team sharing)
-- Browser-based UI for conversation history
-- Supports multiple LLM providers
-
-**Limitations — OpenHands:**
-- Requires a running Agent Server (additional deployment)
-- Workspace isolation depends on server configuration — OpenHands workspace
-  confinement is configured at the Agent Server level, not enforced per-request
-  by SceneWorks as Gemini ACP does. SceneWorks passes the exact worktree path,
-  but cannot guarantee the Agent Server respects directory boundaries.
-- Event polling adds latency vs streaming (HTTP mode)
-- API is evolving (version differences may require adaptation)
-
-**Limitations — Gemini ACP:**
-- Single-machine execution only
-- ACP protocol is tightly coupled to Gemini CLI
-- No built-in conversation persistence beyond SceneWorks
-- Windows requires console window for shell tool
-
-**Recommended usage:**
-- Use **Gemini ACP** for development on a single machine with fine-grained
-  permission control.
-- Use **OpenHands** for team-shared infrastructure, multi-LLM support, or
-  when you need the Agent Canvas UI for conversation review.
-- Both can coexist — assign different roles to different backends as needed.
-  For example: Architect on Gemini ACP (strict read-only), Engineer on
-  OpenHands (more flexible shell access).
+- **No OS-level sandbox.** In `local` mode the agent runs in the SceneWorks
+  process with the worktree as its working directory. Confinement is the tool's
+  own path handling, not an OS or container boundary. See
+  [limitations.md](limitations.md) for the exact trust boundary.
+- **Remote mode has a path-domain problem.** `working_dir` is a path in the
+  *server's* filesystem. A remote Agent Server does not see the local SceneWorks
+  worktree, so commit-pinned isolation cannot be established the way it is
+  locally. This is why remote mode is unvalidated rather than merely untested.
+- **Upstream dependency conflict.** Newer openhands-sdk releases (1.42.1 at time
+  of writing) currently cannot be installed: the SDK pulls `lmnr`, which pins
+  `opentelemetry-semantic-conventions==0.60b1`, while
+  `opentelemetry-instrumentation` pins its own matching version and no
+  combination satisfies both (pip: `ResolutionImpossible`). The extra is
+  therefore pinned to the validated 1.17.0 pair.
+- **Installing the extra changes shared dependencies.** It adds ~150 packages and
+  moves 6 pre-existing pins, including a **pydantic downgrade** (2.13.4 →
+  2.12.5). The full backend suite passes afterwards, but this is why OpenHands is
+  an optional extra rather than a default dependency.

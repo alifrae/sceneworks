@@ -161,6 +161,45 @@ the unsupported-metric declarations, and for every scenario its checks
 (`name`, `passed`, `expected`, `actual`, `detail`), full observations and
 blockers.
 
+## Qualifying a real agent backend
+
+Separate from `--live` (which drives one task against a real repository), this
+runs **qualification scenarios** against a real provider:
+
+```bash
+python -m evaluation --backend openhands --scenario bug-fix
+python -m evaluation --backend openhands --live-subset   # provider subset
+python -m evaluation --backend gemini_acp --scenario cancellation
+```
+
+Rules that keep a provider run honest:
+
+- **An unusable provider is BLOCKED, never PASS.** The harness calls `health()`
+  before the scenario and blocks with the health detail if unavailable.
+- **Scripted-only scenarios are BLOCKED against a real backend.** Negative
+  controls work by scripting a specific wrong behaviour, which a real model cannot
+  be made to reproduce on cue. Four scenarios are marked `live_capable`:
+  `architecture-investigation`, `no-implementation-needed`, `bug-fix`,
+  `cancellation` — that is what `--live-subset` runs.
+- **A live run declares no required scenarios**, so a live PASS cannot be mistaken
+  for a release gate. Only the deterministic `fake` suite gates a release, and a
+  partial `fake` run still reports BLOCKED.
+- **Metrics that stop being measurable are declared unsupported**
+  (`reviewer_false_approval`, `repair_iterations`) rather than asserted against a
+  real model.
+- The backend version and health detail are recorded per scenario, so a result is
+  attributable to a concrete version and mode.
+
+Results from WP2.5 (identical scenario, both real backends):
+
+| | OpenHands 1.17.0 (`local`) | Gemini ACP 0.55.1 |
+| --- | --- | --- |
+| `cancellation` | PASS, 4/4 checks, 34.0 s | PASS, 4/4 checks, 12.7 s |
+| final status | `CANCELLED` | `CANCELLED` |
+| result commit | none | none |
+
+See [wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
+
 ## Live mode
 
 ```bash

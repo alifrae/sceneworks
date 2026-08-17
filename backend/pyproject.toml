@@ -16,8 +16,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Both packages are required and their versions MUST match: openhands-tools
+# imports internals from openhands-sdk, so a mismatched pair installs cleanly
+# and then fails at import (WP2.5 hit openhands-tools 1.42.1 against
+# openhands-sdk 1.17.0 -> "No module named 'openhands.sdk.utils.path'").
+#
+# Pinned to the pair WP2.5 validated. Newer releases exist (1.42.1 at the time
+# of writing) but currently cannot be installed: openhands-sdk pulls
+# lmnr, which pins opentelemetry-semantic-conventions==0.60b1 while
+# opentelemetry-instrumentation pins its own matching version, and no
+# combination satisfies both (pip: ResolutionImpossible). That is an upstream
+# packaging conflict, not a SceneWorks constraint.
 openhands = [
-    "openhands-sdk",
+    "openhands-sdk==1.17.0",
+    "openhands-tools==1.17.0",
 ]
 
 [dependency-groups]
@@ -38,4 +50,10 @@ markers = [
     # harness (worktrees, subprocesses, LangGraph). Tens of seconds each.
     # Deselect with: -m "not slow"
     "slow: drives a full workflow; slow by nature",
+    # Tests that need a real agent provider and a real model. They skip cleanly
+    # when the provider is not configured — never falling back to a fake — so an
+    # unavailable provider can never be reported as a pass.
+    # Deselect with: -m "not live"
+    "live: requires a real agent provider and model",
+    "openhands: requires a working OpenHands install",
 ]

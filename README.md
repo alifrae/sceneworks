@@ -151,25 +151,37 @@ The full Gemini ACP capability matrix is documented at
 Configuration: `SCENEWORKS_GEMINI_EXECUTABLE`, `SCENEWORKS_GEMINI_MODEL`,
 `SCENEWORKS_GEMINI_EXTRA_ARGS`.
 
-### OpenHands backend (V2.3) — experimental in V2.5
+### OpenHands backend — experimental, opt-in
 
-[OpenHands](https://github.com/OpenHands/openhands) is an open-source AI
-coding agent platform. The OpenHands backend supports three modes:
+[OpenHands](https://github.com/OpenHands/OpenHands) is an open-source AI coding
+agent platform. SceneWorks can drive it through `openhands-sdk`.
 
-1. **SDK/WebSocket mode** (preferred): Connect via the official
-   `openhands-sdk` package with WebSocket streaming.
-   Set `SCENEWORKS_OPENHANDS_URL=http://localhost:8000`.
-2. **HTTP polling mode** (compatibility fallback): Same REST API without SDK.
-3. **CLI/headless mode** (development fallback only): Launch as subprocess.
-   Set `SCENEWORKS_OPENHANDS_EXECUTABLE` or put `openhands` on PATH.
+```bash
+cd backend && uv sync --extra openhands
+SCENEWORKS_OPENHANDS_MODEL=lm_studio/google/gemma-4-e2b
+SCENEWORKS_OPENHANDS_BASE_URL=http://127.0.0.1:1234/v1
+```
 
-Configuration: `SCENEWORKS_OPENHANDS_URL`, `SCENEWORKS_OPENHANDS_EXECUTABLE`,
-`SCENEWORKS_OPENHANDS_MODEL`, `SCENEWORKS_OPENHANDS_API_KEY`.
+Four modes, resolved explicitly and reported on every run: `local` (in-process,
+no server), `remote` (Agent Server), `http` (REST polling), `cli` (subprocess).
 
-**Status: EXPERIMENTAL / UNVALIDATED.** No live integration test has been
-performed against a running OpenHands Agent Server. The adapter reflects the
-documented SDK API but has not been verified end-to-end. Gemini ACP is the
-validated and default backend. See [docs/backends.md](docs/backends.md).
+**Status: EXPERIMENTAL.** WP2.5 performed a real live validation — see
+[docs/wp2.5-openhands-validation.md](docs/wp2.5-openhands-validation.md).
+What that established:
+
+- `local` mode **executes real work** and is validated for **read-only roles**
+  on openhands-sdk 1.17.0 + openhands-tools 1.17.0, Windows 11, with an
+  OpenAI-compatible LLM endpoint. A qualification scenario passes against the
+  real backend.
+- **The Engineer cannot run on Windows**: the OpenHands V1 terminal tool raises
+  `NotImplementedError` there, so shell-using roles are refused up front.
+- `remote`, `http` and `cli` modes are implemented but **not validated**.
+- 14 adapter defects were found and fixed, including that SDK mode could never
+  emit any event or summary, cancellation was decorative, and the synchronous SDK
+  was blocking the API event loop.
+
+**Gemini ACP remains the default for every role** and is the only backend able to
+run the Engineer on this platform. See [docs/backends.md](docs/backends.md).
 
 ### Backend selection
 

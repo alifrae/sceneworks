@@ -78,13 +78,28 @@ graph TD
 
 ### OpenHands backend (`backend/app/agents/openhands.py`)
 
-- Supports HTTP mode (connect to running OpenHands Agent Server via REST or
-  WebSocket/SDK) and CLI mode (launch OpenHands as subprocess — development
-  fallback only)
-- Maps OpenHands conversation lifecycle to SceneWorks event vocabulary
-- Enforces workspace confinement (passes exact worktree path to server)
-- Configuration: `SCENEWORKS_OPENHANDS_URL`,
-  `SCENEWORKS_OPENHANDS_EXECUTABLE`, `SCENEWORKS_OPENHANDS_MODEL`
+- Status **EXPERIMENTAL**, opt-in. `local` mode live-validated for read-only
+  roles on openhands-sdk 1.17.0; see [backends.md](backends.md) and
+  [wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
+- Four modes resolved explicitly by `resolve_mode()` and emitted as a
+  `backend.mode` event: `local` (in-process `LocalWorkspace`, no server),
+  `remote` (Agent Server), `http` (REST polling), `cli` (subprocess). **No silent
+  fallback** — a mode that cannot be used fails with the reason.
+- The synchronous SDK runs in a worker thread; events reach SceneWorks through the
+  SDK's `callbacks=` hook via a thread-safe queue, so output streams during a run
+  and the API event loop is never blocked.
+- Maps OpenHands events to the generic SceneWorks vocabulary; OpenHands payloads
+  never leave this module. `test.result` and `git.commit` are deliberately not
+  produced (no structured test signal; SceneWorks captures commits itself).
+- Cancellation is `pause()` then `close()`, off-loop.
+- **Passes the worktree as the working directory but does not enforce
+  confinement**: there is no OS or container boundary. See
+  [limitations.md](limitations.md) for the exact trust boundary.
+- Configuration: `SCENEWORKS_OPENHANDS_MODEL` (required, litellm form),
+  `SCENEWORKS_OPENHANDS_BASE_URL` (LLM endpoint),
+  `SCENEWORKS_OPENHANDS_URL` (Agent Server — a *different* service),
+  `SCENEWORKS_OPENHANDS_MODE`, `SCENEWORKS_OPENHANDS_MAX_ITERATIONS`,
+  `SCENEWORKS_OPENHANDS_EXECUTABLE`
 
 ### Git worktree service (`backend/app/git/workspace.py`)
 

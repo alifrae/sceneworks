@@ -86,6 +86,22 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"per-scenario timeout (default: {DEFAULT_TIMEOUT:.0f})",
     )
     parser.add_argument(
+        "--backend", default="fake", metavar="NAME",
+        help=(
+            "agent backend to qualify (default: fake). Any other value runs the "
+            "REAL provider: scenario scripts are ignored, scripted-only scenarios "
+            "are BLOCKED, and a provider that is not usable is BLOCKED — never "
+            "reported as PASS."
+        ),
+    )
+    parser.add_argument(
+        "--live-subset", action="store_true",
+        help=(
+            "run the provider-qualification subset (read-only investigation, "
+            "no-implementation decision, bug fix, cancellation). Use with --backend."
+        ),
+    )
+    parser.add_argument(
         "--list", action="store_true", help="list scenarios and exit",
     )
     parser.add_argument(
@@ -124,15 +140,34 @@ async def _run(args) -> int:
         from evaluation.harness import run_suite
 
         try:
-            scenarios = select(args.scenarios, smoke=args.smoke)
+            scenarios = select(
+                args.scenarios, smoke=args.smoke, live=args.live_subset,
+            )
         except KeyError as exc:
             print(f"error: {exc}", file=sys.stderr)
             print(file=sys.stderr)
             print(_list_scenarios(), file=sys.stderr)
             return EXIT_USAGE
 
-        mode = "smoke" if args.smoke else ("partial" if args.scenarios else "full")
-        print(f"Running {len(scenarios)} scenario(s) [{mode}] ...", flush=True)
+        if args.live_subset:
+            mode = "live-subset"
+        elif args.smoke:
+            mode = "smoke"
+        elif args.scenarios:
+            mode = "partial"
+        else:
+            mode = "full"
+
+        real_backend = args.backend != "fake"
+        label = (
+            "fake (scripted)" if not real_backend
+            else f"{args.backend} (real provider)"
+        )
+        print(
+            f"Running {len(scenarios)} scenario(s) [{mode}] on backend "
+            f"{label} ...",
+            flush=True,
+        )
 
         started = time.monotonic()
         results, environment = await run_suite(
@@ -140,13 +175,21 @@ async def _run(args) -> int:
             keep_workdir=args.keep_workdir,
             timeout=args.timeout,
             progress=lambda s: print(f"  -> {s.key}", flush=True),
+            backend=args.backend,
         )
         report = QualificationReport(
             sceneworks_version=__version__,
-            backend="fake (scripted)",
+            backend=label,
             mode=mode,
             results=results,
-            required_scenarios=REQUIRED_KEYS,
+            # Only the deterministic suite gates a release, so it keeps the
+            # required-scenario contract for every mode — that is what makes a
+            # --smoke or --scenario run report BLOCKED instead of PASS.
+            #
+            # A real-provider run qualifies the *provider*, not the release;
+            # declaring required scenarios there would let a live PASS be
+            # mistaken for a release gate.
+            required_scenarios=[] if real_backend else REQUIRED_KEYS,
             environment=environment,
         )
         report.duration_seconds = time.monotonic() - started

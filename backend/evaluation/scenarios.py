@@ -247,6 +247,15 @@ class Scenario:
     #: harness stops detecting a seeded regression, qualification is worthless.
     required: bool = True
 
+    #: Whether this scenario is meaningful against a **real** agent backend.
+    #:
+    #: Negative controls are not: they work by scripting a specific wrong
+    #: behaviour (a regression, an unrequested edit, a bad triage decision), and
+    #: a real model cannot be made to misbehave on cue. Running them live would
+    #: measure the model's mood, not SceneWorks. Scenarios that assert exact file
+    #: sets are likewise scripted-only.
+    live_capable: bool = False
+
 
 # ------------------------------------------------------------------ registry
 
@@ -283,6 +292,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect_result_commit=False,
         expect_architecture_present=True,
         expect_final_status=frozenset({"READY_FOR_HUMAN"}),
+        live_capable=True,
     ),
     # 2 -------------------------------------------------------------------
     Scenario(
@@ -307,6 +317,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect_reviewer_false_approval=False,
         expect_final_status=frozenset({"READY_FOR_HUMAN"}),
         expect_architecture_present=True,
+        live_capable=True,
     ),
     # 3 -------------------------------------------------------------------
     Scenario(
@@ -567,6 +578,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect_result_commit=False,
         expect_files_changed=frozenset(),
         expect_final_status=frozenset({"READY_FOR_HUMAN"}),
+        live_capable=True,
     ),
     # 12 ------------------------------------------------------------------
     Scenario(
@@ -661,6 +673,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect_final_status=frozenset({"CANCELLED"}),
         expect_cancellation_honoured=True,
         expect_result_commit=False,
+        live_capable=True,
     ),
     # 16 ------------------------------------------------------------------
     Scenario(
@@ -827,9 +840,25 @@ SMOKE_KEYS: list[str] = [
 ]
 
 
-def select(keys: list[str] | None = None, smoke: bool = False) -> list[Scenario]:
+#: Scenarios meaningful against a real agent backend, in the order WP2.5
+#: prescribes for provider qualification: read-only investigation, a decision
+#: that must not produce code, a bug fix, and cancellation.
+LIVE_KEYS: list[str] = [
+    key for key in
+    ("architecture-investigation", "no-implementation-needed", "bug-fix", "cancellation")
+    if key in SCENARIOS_BY_KEY
+]
+
+
+def select(
+    keys: list[str] | None = None,
+    smoke: bool = False,
+    live: bool = False,
+) -> list[Scenario]:
     if smoke:
         return [SCENARIOS_BY_KEY[k] for k in SMOKE_KEYS]
+    if live:
+        return [SCENARIOS_BY_KEY[k] for k in LIVE_KEYS]
     if not keys:
         return list(SCENARIOS)
     unknown = [k for k in keys if k not in SCENARIOS_BY_KEY]

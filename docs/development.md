@@ -51,8 +51,9 @@ Open http://localhost:3000
 
 ```bash
 cd backend
-uv run python -m pytest                    # all tests
+uv run python -m pytest                    # all tests (live tests skip if unconfigured)
 uv run python -m pytest -m "not slow"      # skip full-workflow tests
+uv run python -m pytest -m "not live"      # skip real-provider tests
 uv run python -m pytest tests/test_api.py  # specific test file
 uv run python -m pytest -k "openhands"     # tests matching pattern
 uv run python -m pytest --collect-only     # list all tests
@@ -84,6 +85,29 @@ uv run python -m evaluation --json qualification.json
 Exit codes: `0` PASS, `1` FAIL, `2` BLOCKED (including any partial run — a subset
 cannot qualify a release), `3` NOT_RUN, `4` usage error. Full contract in
 [qualification.md](qualification.md).
+
+### Live provider testing
+
+Tests marked `live` need a real agent provider and a real model. They skip
+cleanly when it is not configured and never fall back to a fake, so an
+unavailable provider can never be reported as a pass.
+
+```bash
+# OpenHands (experimental; read-only roles only on Windows)
+cd backend && uv sync --extra openhands
+export SCENEWORKS_OPENHANDS_MODEL=lm_studio/google/gemma-4-e2b
+export SCENEWORKS_OPENHANDS_BASE_URL=http://127.0.0.1:1234/v1
+uv run python -m pytest -m "live and openhands"
+
+# Qualification scenarios against a real backend
+uv run python -m evaluation --backend openhands --live-subset
+uv run python -m evaluation --backend gemini_acp --scenario cancellation
+```
+
+A live run against a small local model is slow: a single read-only file
+inspection measured **431 s** with `gemma-4-e2b` via LM Studio. Budget
+accordingly, and prefer the `cancellation` scenario for a fast smoke of the live
+path — it does not wait for the model to finish.
 
 ### End-to-end tests
 

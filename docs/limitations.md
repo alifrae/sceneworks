@@ -16,9 +16,11 @@
 - **No OS-level sandboxing**: Agent commands run with the SceneWorks
   process's user permissions. Isolation is through Git worktrees and
   backend-enforced path boundaries, not OS containers.
-- **OpenHands HTTP mode**: When connecting to a remote OpenHands Agent
-  Server, workspace isolation depends on the server's configuration.
-  SceneWorks cannot enforce file boundaries over HTTP.
+- **OpenHands**: workspace confinement is directory scoping by the agent's own
+  tools, not an OS or container boundary, and SceneWorks cannot enforce file
+  boundaries per-request as it does over ACP. For a remote Agent Server the
+  `working_dir` is a path in the *server's* filesystem, so it does not even refer
+  to the SceneWorks worktree. See the OpenHands section below.
 
 ### Execution
 
@@ -127,22 +129,48 @@ are deliberately carried forward.
 
 ### OpenHands backend specifics
 
-- **Experimental/unvalidated**: The OpenHands backend has not been tested
-  against a live OpenHands Agent Server. SDK imports reflect documented API
-  but have not been verified end-to-end.
-- **SDK/WebSocket mode (preferred)**, HTTP polling (compatibility fallback),
-  CLI/headless (development fallback only).
-- **Server dependency**: SDK and HTTP modes require a separately running
-  OpenHands Agent Server. SceneWorks does not manage the OpenHands lifecycle.
-- **Event polling**: HTTP mode polls for conversation status rather than
-  receiving streaming updates. This adds latency compared to Gemini's ACP
-  streaming.
-- **API version compatibility**: The OpenHands API is under active
-  development. The adapter targets the current documented API surface.
-  Custom API endpoints may require adapter modifications.
-- **No ACP-level permission mediation**: Unlike Gemini ACP where every
-  file read/write is approved per-request, OpenHands relies on workspace
-  directory scoping via configuration.
+Status **EXPERIMENTAL**. `local` mode is live-validated for read-only roles;
+full evidence in [wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
+
+- **No shell on Windows — the Engineer cannot run.** The OpenHands V1 terminal
+  tool raises `NotImplementedError` on Windows
+  (`openhands/tools/terminal/terminal/factory.py`). Roles needing shell are
+  refused up front with the reason. Only read-only roles are usable on this
+  platform. Gemini ACP is unaffected and remains the default.
+- **No OS-level sandbox.** In `local` mode the agent runs inside the SceneWorks
+  process with the worktree as its working directory. Confinement is the tools'
+  own path handling, not a container, chroot or user boundary. The runtime and
+  the model are trusted not to write outside the working directory — verified
+  empirically for the validated runs, not enforced structurally.
+- **No per-request permission mediation.** Unlike Gemini ACP, where every file
+  read/write and every shell command passes through the ACP proxy and can be
+  refused individually, OpenHands offers directory scoping only. This is strictly
+  weaker enforcement.
+- **`remote` mode is unvalidated and has a path-domain problem.** `working_dir` is
+  a path in the *Agent Server's* filesystem. A server in Docker or WSL cannot see
+  a Windows SceneWorks worktree, so commit-pinned isolation cannot be established
+  that way. Making remote mode work needs design (shipping or mounting the
+  worktree), not configuration.
+- **`http` and `cli` modes are implemented but unvalidated.**
+- **A model is mandatory.** `SCENEWORKS_OPENHANDS_MODEL` must be set (litellm
+  form); the SDK rejects an unspecified model and health reports unavailable.
+- **Version pinning is not optional.** `openhands-sdk` and `openhands-tools` must
+  be the same version: a mismatched pair installs cleanly and then fails at
+  import. The extra pins the validated 1.17.0 pair.
+- **Newer SDK releases currently cannot be installed.** `openhands-sdk` pulls
+  `lmnr`, which pins `opentelemetry-semantic-conventions==0.60b1` while
+  `opentelemetry-instrumentation` pins its own matching version; no combination
+  satisfies both (pip: `ResolutionImpossible`). Upstream issue.
+- **Installing the extra moves shared pins.** It adds ~150 packages and downgrades
+  pydantic (2.13.4 → 2.12.5) among others. The suite passes afterwards, but this
+  is why OpenHands is an optional extra rather than a default dependency.
+- **A hung run can outlive its timeout.** The SDK is synchronous and runs in a
+  worker thread, which cannot be forcibly killed; `pause()` is cooperative and is
+  observed between turns. A single LLM call with litellm's retry policy can take
+  minutes. `SCENEWORKS_OPENHANDS_MAX_ITERATIONS` (default 40) bounds the turn
+  count so a non-converging model finishes with partial output.
+- **No structured test results.** OpenHands reports no test outcome, so
+  `test.result` events are not produced rather than fabricated.
 
 ### Gemini ACP backend specifics
 

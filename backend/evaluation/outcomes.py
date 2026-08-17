@@ -150,6 +150,11 @@ class Observations:
     execution_ids: tuple[str, ...] = ()
     task_branch: str | None = None
     repository_path: str | None = None
+    #: For a live provider run: what health() reported about the backend that
+    #: actually did the work, so a result is attributable to a concrete
+    #: version and mode rather than to "openhands".
+    backend_version: str | None = None
+    backend_detail: str | None = None
 
     def as_dict(self) -> dict:
         out = {}

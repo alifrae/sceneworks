@@ -81,9 +81,26 @@ class Settings(BaseSettings):
     roles_dir: Path = BACKEND_DIR / "app" / "roles" / "prompts"
 
     # OpenHands backend.
+    # `openhands_url` is the *Agent Server*; `openhands_base_url` is the *LLM*
+    # endpoint (any OpenAI-compatible server: LM Studio, vLLM, Ollama). They are
+    # different services and conflating them made a local deterministic
+    # validation impossible — see docs/backends.md.
     openhands_url: str | None = None
+    openhands_base_url: str | None = None
     openhands_executable: str | None = None
+    #: litellm-form model id, e.g. "lm_studio/google/gemma-4-e2b" or
+    #: "anthropic/claude-sonnet-4-20250514". Required: the SDK rejects an
+    #: unspecified model.
     openhands_model: str | None = None
+    openhands_api_key: str | None = None
+    #: Force a mode instead of resolving one: local | remote | http | cli.
+    #: Leave unset for automatic resolution (see OpenHandsBackend.resolve_mode).
+    openhands_mode: str | None = None
+    #: Upper bound on agent turns per execution. The SDK default is 500, which a
+    #: model that never concludes will happily consume — an execution then runs
+    #: until the hard timeout with nothing to show. 40 is generous for the
+    #: single-task scope SceneWorks gives a role.
+    openhands_max_iterations: int = 40
     openhands_environment: dict[str, str] = Field(default_factory=dict)
 
     # When set to "fake", the default backend is the scripted FakeAgentBackend.
