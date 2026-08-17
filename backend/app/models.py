@@ -164,6 +164,10 @@ class ProjectMemory(Base):
     source: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     source_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: Repository state the decision was made against. NULL means "not
+    #: recorded" — never "the base commit". Memories created before this column
+    #: existed (migration 0002) legitimately have no commit to attribute.
+    source_commit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("project_memory.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(

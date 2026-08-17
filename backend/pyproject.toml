@@ -13,6 +13,11 @@ dependencies = [
     "langgraph>=1.0",
     "langgraph-checkpoint-sqlite>=3.0",
     "httpx>=0.27",
+    # Schema migrations. Not optional: SceneWorks stores durable project state
+    # (projects, tasks, executions, events, accepted decisions) and a schema
+    # change must upgrade an existing database rather than silently doing
+    # nothing, which is what Base.metadata.create_all did.
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

@@ -104,6 +104,7 @@ class MemoryService:
         source: str | None = None,
         source_task_id: int | None = None,
         source_execution_id: str | None = None,
+        source_commit: str | None = None,
     ) -> ProjectMemory:
         if type not in MEMORY_TYPES:
             raise ValueError(f"invalid memory type: {type!r}")
@@ -121,6 +122,7 @@ class MemoryService:
                 source=source or "manual",
                 source_task_id=source_task_id,
                 source_execution_id=source_execution_id,
+                source_commit=source_commit,
             )
             session.add(mem)
             await session.commit()
@@ -137,6 +139,7 @@ class MemoryService:
         source_role: str,
         source_task_id: int | None = None,
         source_execution_id: str | None = None,
+        source_commit: str | None = None,
         tags: list[str] | None = None,
     ) -> ProjectMemory:
         """Record agent output as a *proposal*, never as project truth.
@@ -156,6 +159,7 @@ class MemoryService:
             source=source_role,
             source_task_id=source_task_id,
             source_execution_id=source_execution_id,
+            source_commit=source_commit,
         )
 
     async def get(self, memory_id: int) -> ProjectMemory | None:
@@ -554,6 +558,7 @@ def _entry(mem: ProjectMemory, match: MemoryMatch) -> dict:
         "source": mem.source,
         "source_task_id": mem.source_task_id,
         "source_execution_id": mem.source_execution_id,
+        "source_commit": mem.source_commit,
         "created_at": mem.created_at.isoformat() if mem.created_at else None,
         # Why this item is here. Without it an operator cannot tell a relevant
         # injection from an accidental one.

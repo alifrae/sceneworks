@@ -221,6 +221,7 @@ class MemoryCreate(BaseModel):
     source: str | None = None
     source_task_id: int | None = None
     source_execution_id: str | None = None
+    source_commit: str | None = None
 
 
 class MemoryUpdate(BaseModel):
@@ -245,6 +246,7 @@ class MemoryOut(BaseModel):
     source: str | None
     source_task_id: int | None
     source_execution_id: str | None
+    source_commit: str | None
     supersedes_id: int | None
     created_at: datetime
     updated_at: datetime

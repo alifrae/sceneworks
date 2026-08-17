@@ -71,7 +71,10 @@ async def _warm_backend_health(backends: BackendRegistry) -> None:
 async def build_context(settings: Settings | None = None) -> AppContext:
     settings = settings or get_settings()
     db_engine, session_factory = create_engine_and_sessionmaker(settings)
-    await init_db(db_engine)
+    # Migrations run before any service touches the database. A failure here
+    # aborts startup with the real error rather than letting services run
+    # against a half-migrated schema.
+    await init_db(db_engine, settings)
 
     settings_store = SettingsStore(session_factory)
     overrides = await settings_store.load()

@@ -45,9 +45,20 @@ def create_engine_and_sessionmaker(
     return engine, session_factory
 
 
-async def init_db(engine: AsyncEngine) -> None:
-    """Create tables if they do not exist (V1 uses create_all; no Alembic yet)."""
+async def init_db(engine: AsyncEngine, settings: Settings | None = None) -> None:
+    """Bring the schema to head via Alembic.
+
+    Replaces `Base.metadata.create_all`, which created missing tables and
+    silently ignored every other schema change — so adding a column did nothing
+    to an existing database and the application failed later at query time
+    (docs/wp0-baseline-audit.md, F7).
+
+    `settings` is optional only so that callers holding just an engine keep
+    working; the URL is taken from the engine when it is not supplied, which
+    keeps migrations and the application pointed at the same database.
+    """
     from app.models import all_models  # noqa: F401  (ensure tables are registered)
+    from app.db.migrations import ensure_schema
 
     # SQLite does not create the directory; ensure it exists.
     if str(engine.url).startswith("sqlite") and engine.url.database not in (None, ":memory:"):
@@ -55,8 +66,10 @@ async def init_db(engine: AsyncEngine) -> None:
             parents=True, exist_ok=True
         )
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    if settings is None:
+        settings = Settings(database_url=engine.url.render_as_string(hide_password=False))
+
+    await ensure_schema(settings)
 
 
 async def close_db(engine: AsyncEngine) -> None:
