@@ -1,4 +1,4 @@
-# SceneWorks V2.5.2
+# SceneWorks V3.0
 
 SceneWorks is an **AI-native software company control plane**: a standalone web
 application for operating software projects through virtual company roles
@@ -555,8 +555,11 @@ adding browser E2E tests.
   execution table with error details; human-waiting state highlighted.
 - **Browser E2E tests**: Playwright-based tests for the full UI→API→
   workflow path using FakeAgentBackend.
-- **Evaluation framework**: Repeatable scenario-based evaluation for bug
-  fixes, features, refactors, architecture decisions, and more.
+- **Evaluation framework**: scenario *definitions* for bug fixes, features,
+  refactors and architecture decisions were added, but the V2.5 runner never
+  executed a workflow — it reported PASS whenever setup did not raise. The
+  WP0 audit ([docs/wp0-baseline-audit.md](docs/wp0-baseline-audit.md), F1/F2)
+  documents this; it is replaced in V3 by the qualification suite.
 
 ## Security and trust assumptions
 

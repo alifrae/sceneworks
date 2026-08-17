@@ -57,7 +57,12 @@ uv run python -m pytest -k "openhands"     # tests matching pattern
 uv run python -m pytest --collect-only     # list all tests
 ```
 
-The test suite uses an in-memory SQLite database and the FakeAgentBackend.
+The test suite uses a temporary file-backed SQLite database (one per test, under
+pytest's `tmp_path`) and the FakeAgentBackend. It never requires a live Gemini
+CLI or an OpenHands server.
+
+Baseline as of V3.0.0: **136 tests, ~430 s**. The Gemini ACP and workflow-graph
+tests dominate that runtime.
 No live services or model access required.
 
 ### End-to-end tests

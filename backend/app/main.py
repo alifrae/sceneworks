@@ -1,6 +1,6 @@
 """SceneWorks API entry point.
 
-Trust assumptions (V1):
+Trust assumptions:
 - The API binds to localhost by default; it is a trusted control plane, not
   a public service.
 - Agents run on the same machine as the API, inside isolated Git worktrees.
@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
+from app import __version__
 from app.api import (
     backends_router,
     company_router,
@@ -77,7 +78,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(
         title="SceneWorks",
-        version="2.5.2",
+        version=__version__,
         lifespan=lifespan,
         description="AI-native software company control plane.",
     )
