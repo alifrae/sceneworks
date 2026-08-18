@@ -63,10 +63,12 @@ The test suite uses a temporary file-backed SQLite database (one per test, under
 pytest's `tmp_path`) and the FakeAgentBackend. It never requires a live Gemini
 CLI or an OpenHands server.
 
-Baseline as of V3.0.0: **170 tests, ~505 s**. The Gemini ACP, workflow-graph and
-qualification tests dominate that runtime. Tests marked `slow` drive a whole
-workflow through the qualification harness (worktrees, subprocesses, LangGraph)
-and take tens of seconds each; deselect them with `-m "not slow"`.
+Baseline as of V3.0.0 (WP3): **286 tests, ~795 s** (`-m "not live"`; 2 further
+tests skip cleanly without a real provider configured). The Gemini ACP,
+workflow-graph, qualification and migration tests dominate that runtime. Tests
+marked `slow` drive a whole workflow through the qualification harness
+(worktrees, subprocesses, LangGraph) and take tens of seconds each; deselect
+them with `-m "not slow"`.
 
 ### Qualification (go/no-go)
 
@@ -75,8 +77,8 @@ judges **engineering outcomes**, then reports a machine-readable GO/NO-GO result
 
 ```bash
 cd backend
-uv run python -m evaluation                # full suite, 18 scenarios (~5.5 min)
-uv run python -m evaluation --smoke        # CI subset, 4 scenarios (~50 s)
+uv run python -m evaluation                # full suite, 19 scenarios (~2.5-6 min)
+uv run python -m evaluation --smoke        # CI subset, 5 scenarios (~60 s)
 uv run python -m evaluation --list
 uv run python -m evaluation --scenario bug-fix -v
 uv run python -m evaluation --json qualification.json
@@ -134,6 +136,21 @@ Only some of these are browser tests. The workflow scenarios drive the API
 over HTTP through Playwright's request client; the dashboard, projects,
 company, settings and error-handling tests navigate real pages. See the
 validation-label table in the README.
+
+### Continuous integration
+
+Two GitHub Actions workflows, split by cost:
+
+- `.github/workflows/ci.yml` -- fast gate, every push to `master`: import
+  check, `pytest -m "not slow and not live"`, qualification `--smoke`,
+  frontend `next build`.
+- `.github/workflows/release.yml` -- full validation, manual dispatch or a
+  `v*` tag: the complete backend suite, migration validation, full
+  qualification (19 scenarios), and Playwright E2E against a live backend.
+
+Neither runs `live`-marked tests: a GitHub-hosted runner has no Gemini CLI
+authentication and no local LLM endpoint. Full contract, including why the
+gate is split this way, in [operations.md](operations.md).
 
 ### Code conventions
 

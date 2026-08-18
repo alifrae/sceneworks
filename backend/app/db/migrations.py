@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect
 
 from app.config.settings import Settings
 
@@ -103,7 +103,16 @@ def _ensure_parent_directory(database_url: str) -> None:
 
 
 def ensure_schema_sync(settings: Settings) -> SchemaState:
-    """Bring the database to head. Synchronous; safe to call in a thread."""
+    """Bring the database to head. Synchronous; safe to call in a thread.
+
+    Not supported: `sqlite:///:memory:`. This function opens its own sync engine
+    separate from the application's async engine, and each new connection to an
+    in-memory SQLite database is an independent, empty database unless a shared
+    pool is deliberately configured. The two engines would silently diverge --
+    migrations would appear to succeed while the application's actual connection
+    stayed unmigrated. Nothing in SceneWorks uses `:memory:` today (every test
+    uses a real temp file, by design), so this is documented rather than handled.
+    """
     from alembic import command
     from alembic.runtime.migration import MigrationContext
 

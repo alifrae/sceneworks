@@ -1,0 +1,82 @@
+# Fast gate: runs on every push to master.
+#
+# SceneWorks develops directly on master (no PR-based workflow), so this is a
+# push-triggered gate rather than a PR check — see docs/development.md.
+#
+# Scope is deliberately narrow: import/startup sanity, the non-slow backend
+# test suite, the qualification smoke subset, and a frontend production build
+# (which type-checks and lints via `next build`). Nothing here needs a live
+# model or a real agent provider.
+#
+# The full backend suite, full qualification, and Playwright E2E run in
+# release.yml instead — they take ~10-15 minutes combined, too slow to gate
+# every push. See docs/development.md and docs/qualification.md.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (fast)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      # Base install only — the `openhands` extra adds ~150 packages and moves
+      # pre-existing pins (see docs/wp2.5-openhands-validation.md); it has no
+      # place gating every push, and CI has no real model to validate against
+      # anyway (live tests skip cleanly without one).
+      - name: Install dependencies
+        run: uv sync
+
+      # Cheap, explicit failure signal for "the app doesn't even import",
+      # before spending time on the full test collection.
+      - name: Import / startup validation
+        run: uv run python -c "from app.main import create_app; create_app()"
+
+      - name: Unit and integration tests (fast subset)
+        run: uv run pytest -m "not slow and not live" -q
+
+      # FakeAgentBackend only; no live model required. ~1 minute.
+      - name: Qualification smoke subset
+        run: uv run python -m evaluation --smoke
+
+  frontend:
+    name: Frontend (fast)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `next build` type-checks (tsconfig has strict + noEmit) and lints
+      # (next.config.mjs does not set ignoreBuildErrors / ignoreDuringBuilds)
+      # before producing the production build — one command covers all three.
+      - name: TypeScript check, lint, and production build
+        run: npm run build

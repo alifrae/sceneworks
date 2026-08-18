@@ -191,8 +191,13 @@ full evidence in [wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
 ### Database
 
 - **SQLite only**: No PostgreSQL, MySQL, or other database backends.
-- **No migration tooling**: Database schema is created from SQLAlchemy
-  models with no versioned migrations.
+- **Versioned migrations (WP3)**: schema changes go through Alembic
+  (`backend/migrations/`), applied automatically at startup
+  (`app.db.migrations.ensure_schema`). A pre-migrations database is adopted
+  by stamping it at the baseline revision, never rebuilt -- verified against
+  a copy of a real production database with 145 projects, 112 tasks, 270
+  executions and 4340 events, all preserved. See
+  [operations.md](operations.md).
 
 ### Frontend
 

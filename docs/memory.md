@@ -164,11 +164,17 @@ from which previous status, and why — is recorded in the event log as
 `memory.accepted` / `memory.rejected`, attributed to the source task and
 execution so a decision links back to the run that produced it.
 
-**Not yet captured: the relevant commit.** A memory cannot currently record the
-commit its decision was made against. That needs a schema column, and schema
-changes are unsafe until migrations exist (WP3) — so it is deferred to WP3 for the
-column and WP6 for wiring it into Git provenance. This is a known gap, not an
-oversight.
+**The commit a decision was made against: schema done (WP3), population still
+open (WP6).** `project_memory.source_commit` (nullable) was added by migration
+`0002` once versioned migrations existed, and `MemoryService.create()` /
+`propose_from_execution()` both accept and store it, exposed via `_entry()` and
+the API schemas. What is still missing: **no call site in the running workflow
+passes a value yet** -- `propose_from_execution()`, the intended entry point for
+memories extracted from agent output, is not invoked from any workflow node.
+Wiring a real commit into automatic memory creation is WP6 scope (Git
+provenance), not a WP3 gap. Existing rows, and any memory created before WP6
+wires this in, legitimately have `source_commit = NULL` -- that is "not
+recorded," never a fabricated base commit.
 
 ## API
 

@@ -388,10 +388,20 @@ Test categories:
 - [Web UI Tutorial](docs/tutorials/web-ui.md) — Step-by-step guide from
   installation to accepting a task result.
 - [Adding a Backend](docs/backends.md) — Guide for implementing new
-  AgentBackend providers.
-- [Development](docs/development.md) — Developer setup and conventions.
+  AgentBackend providers, and the OpenHands validation status.
+- [Development](docs/development.md) — Developer setup, testing, and CI.
 - [Known Limitations](docs/limitations.md) — Current boundaries and
   non-goals.
+- [Qualification](docs/qualification.md) — The engineering-outcome
+  evaluation suite and its go/no-go contract.
+- [Project Memory](docs/memory.md) — Deterministic retrieval, the
+  authoritative/speculative lifecycle, and provenance.
+- [Operations](docs/operations.md) — Versioning, database migrations,
+  backup/restore, recovery semantics, and CI.
+- [Baseline audit](docs/wp0-baseline-audit.md) — The evidence-based audit
+  this roadmap started from.
+- [OpenHands validation](docs/wp2.5-openhands-validation.md) — What was
+  actually installed, configured, and run against a real backend.
 
 ## V3.0 baseline
 

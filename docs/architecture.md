@@ -156,8 +156,10 @@ graph TD
 - V2.4 passed whole task descriptions into one SQL `ILIKE`, so realistic
   descriptions retrieved nothing. See [memory.md](memory.md) and
   [wp0-baseline-audit.md](wp0-baseline-audit.md) F4.
-- Not captured yet: the commit a decision was made against (needs a schema
-  column; deferred to WP3 for migrations, WP6 for Git provenance).
+- The commit a decision was made against: `project_memory.source_commit`
+  (nullable) was added by migration `0002` and threaded through
+  `MemoryService`, but no workflow node populates it yet -- wiring that up is
+  WP6 scope (Git provenance), not a WP3 gap. See [memory.md](memory.md).
 
 ### Frontend (`web/`)
 
@@ -267,9 +269,16 @@ the role specifies `approval_authority`.
 
 | Store | Backend | Content |
 |---|---|---|
-| SQLite (sceneworks.db) | SQLAlchemy 2 + aiosqlite | Projects, tasks, executions, events, artifacts |
+| SQLite (sceneworks.db) | SQLAlchemy 2 + aiosqlite | Projects, tasks, executions, events, artifacts, project memory, app settings |
 | SQLite (workflow_checkpoints.db) | langgraph-checkpoint-sqlite | LangGraph state checkpoints |
 | Filesystem | worktree_root | Isolated Git worktrees |
+
+**Schema management (WP3):** versioned via Alembic (`backend/migrations/`),
+applied automatically at startup by `app/db/migrations.py` before any service
+touches the database. Handles a fresh database, a pre-migrations database
+(stamped at the baseline revision, never rebuilt), and an already-managed one.
+Full contract and verified adoption evidence in
+[operations.md](operations.md).
 
 ## Event flow
 

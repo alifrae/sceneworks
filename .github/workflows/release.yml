@@ -1,0 +1,152 @@
+# Full validation: the release gate.
+#
+# Runs the checks too slow for every push (ci.yml handles that): the complete
+# backend suite including `slow` workflow tests, the full deterministic
+# qualification suite (19 scenarios), migration validation against both a
+# fresh and an adopted-legacy database, and the Playwright E2E journeys.
+#
+# Triggered manually or by pushing a version tag — never on every push, per
+# the agreed CI policy (docs/development.md, docs/qualification.md).
+#
+# `live`-marked tests are still excluded: they need a real agent provider and
+# a real model (Gemini CLI auth, or an OpenHands SDK + LLM endpoint), neither
+# of which exists on a GitHub-hosted runner. See docs/wp2.5-openhands-
+# validation.md. Live qualification against a real backend
+# (`python -m evaluation --backend ...`) is a manual, local operation by
+# design — not part of any automated gate.
+name: Release validation
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["v*"]
+
+jobs:
+  backend-full:
+    name: Backend (full suite + qualification)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Full test suite (excludes live-provider tests only)
+        run: uv run pytest -m "not live" -q
+
+      # Migration validation, as its own visible step rather than folded into
+      # pytest: a release decision needs a clear go/no-go, not an inference
+      # from the aggregate test count. Runs as its own named step for that
+      # visibility, reusing tests/test_migrations.py rather than duplicating
+      # its logic inline -- it already covers a fresh database, adoption of a
+      # pre-migrations database (the schema `create_all` used to produce)
+      # without data loss, idempotence, and failure behaviour.
+      - name: Migration validation (fresh + legacy adoption)
+        run: uv run pytest tests/test_migrations.py -v
+
+      - name: Full qualification suite (deterministic, FakeAgentBackend)
+        run: uv run python -m evaluation --json qualification-report.json
+
+      - name: Upload qualification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qualification-report
+          path: backend/qualification-report.json
+          retention-days: 30
+
+  e2e:
+    name: Frontend E2E (Playwright, live backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      # E2E specs create their own temporary Git repositories; most set a
+      # per-repo identity themselves (see web/e2e/full-workflow.spec.ts), but
+      # a runner has no git identity configured at all by default. A global
+      # fallback costs nothing and removes a class of "unknown author" flakes
+      # for any commit path that does not scope its own identity.
+      - name: Configure a fallback git identity for E2E-created repos
+        run: |
+          git config --global user.email "e2e@sceneworks.local"
+          git config --global user.name "SceneWorks E2E"
+
+      # The frontend's default API_URL is http://127.0.0.1:8010 (web/lib/api.ts)
+      # and the backend's default CORS origin is http://localhost:3000
+      # (matching Playwright's baseURL) -- no extra wiring needed between them.
+      - name: Start backend (scripted FakeAgentBackend, no live model)
+        working-directory: backend
+        env:
+          SCENEWORKS_DEFAULT_BACKEND: fake
+        run: |
+          uv run python -m app.main &
+          echo $! > backend.pid
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8010/api/health >/dev/null 2>&1; then
+              echo "backend is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend did not become healthy within 60s"
+          exit 1
+
+      # `next build && next start` per playwright.config.ts, so this also
+      # exercises the same TypeScript/lint/build check ci.yml runs.
+      - name: Run Playwright E2E journeys
+        working-directory: web
+        env:
+          CI: "true"
+        run: npx playwright test
+
+      - name: Stop backend
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f backend.pid ]; then
+            kill "$(cat backend.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 30
