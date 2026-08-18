@@ -58,6 +58,12 @@ MEMORY_ARCHIVED = "memory.archived"
 MEMORY_SUPERSEDED = "memory.superseded"
 MEMORY_INJECTED = "memory.injected"
 
+# Project policy events (WP4). Emitted only when the deterministic
+# protected-path check actually finds something -- this is SceneWorks' own
+# finding from Git, not the Reviewer's, and is the evidence trail proving a
+# violation was detected rather than merely claimed in review prose.
+POLICY_VIOLATION_DETECTED = "policy.violation_detected"
+
 # Human-facing labels used by the frontend to render events readably.
 EVENT_LABELS: dict[str, str] = {
     EXECUTION_STARTED: "Execution started",
@@ -90,6 +96,7 @@ EVENT_LABELS: dict[str, str] = {
     WORKFLOW_ROLE_SKIPPED: "Role skipped",
     WORKFLOW_REPAIR_STARTED: "Repair iteration started",
     WORKFLOW_REPAIR_LIMIT_REACHED: "Repair limit reached",
+    POLICY_VIOLATION_DETECTED: "Policy violation detected",
     MEMORY_CREATED: "Memory created",
     MEMORY_UPDATED: "Memory updated",
     MEMORY_ACCEPTED: "Memory accepted (now authoritative)",

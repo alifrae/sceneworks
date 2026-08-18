@@ -41,11 +41,28 @@
   tradeoff is deliberate: retrieval is reproducible and every result explains
   why it was selected. SQLite FTS5 is the documented upgrade path if the term
   bound becomes the limit; see [memory.md](memory.md).
-- **A memory cannot record the commit its decision was made against**: that
-  needs a schema column, and schema changes are unsafe until migrations exist.
-  Deferred to WP3 (migrations) and WP6 (Git provenance).
+- **A memory's `source_commit` column exists (WP3) but nothing populates it
+  yet**: `propose_from_execution()`, the intended entry point for memories
+  extracted from agent output, is not called from any workflow node. Wiring
+  a real commit into automatic memory creation is WP6 scope (Git provenance).
 - **No knowledge graph**: No persistent semantic understanding between
   sessions beyond explicit memory items.
+- **Policy enforcement is deterministic for one category only**: SceneWorks
+  itself checks `protected_paths` against the Engineer's actual diff. Every
+  other policy category (architecture invariants, forbidden dependency
+  directions, documentation/performance/release requirements, required review
+  checks) is judged by the Reviewer's own reading of the labelled policy
+  block — SceneWorks cannot mechanically verify "the changelog was updated
+  appropriately" the way it can verify "was this exact path touched."
+  Inventing a mechanical check for those categories would be exactly the false
+  precision this roadmap exists to avoid. See [project-policy.md](project-policy.md).
+- **`go_no_go_commands` are declarative, not executed**: they are surfaced to
+  roles as the project's release-qualification suite; nothing in SceneWorks
+  runs them automatically.
+- **No policy management UI**: configuration is API-only
+  (`GET`/`PUT`/`DELETE /api/projects/{id}/policy`). Deliberate — a
+  resource-centric CRUD screen is exactly what the roadmap says not to build
+  before the conversation-first model is extended (WP5 scope).
 - **No CrewAI integration**: SceneWorks uses its own LangGraph-based
   orchestration.
 - **No automatic merging**: SceneWorks never merges agent branches into

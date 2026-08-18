@@ -1,8 +1,15 @@
 """Prompt building layer.
 
-Composes role instructions + project context + task context + workspace info
-+ permissions + requested output format into one system prompt and one user
-prompt. No API route handler ever builds prompts directly.
+Composes role instructions + project context + task context + project policy
++ workspace info + permissions + requested output format into one system
+prompt and one user prompt. No API route handler ever builds prompts directly.
+
+Project policy (WP4) is a labelled block distinct from the free-text
+"Project context files" block: policy is an enforceable contract, context
+files are background reading. This module renders both and reads repo-owned
+files for both, but never decides *what* a project's policy is -- callers pass
+in the rendered structured policy text (from `ProjectPolicyService`) and this
+module has no database dependency of its own.
 """
 
 from __future__ import annotations
@@ -20,6 +27,24 @@ from app.roles.registry import RoleRegistry
 logger = logging.getLogger("sceneworks.prompts")
 
 DEFAULT_CONTEXT_FILES = ("AGENTS.md", "ARCHITECTURE.md", "CONTRIBUTING.md", "ROADMAP.md")
+
+# Suggested, not forced: WP4 explicitly does not mandate a filename. These are
+# candidates in addition to whatever a project configures via
+# ProjectPolicy.policy_file_paths.
+DEFAULT_POLICY_FILES = ("SCENEWORKS.md", "docs/project-policy.md")
+
+POLICY_ENFORCEMENT_NOTE = (
+    "\n\nThis policy is an engineering contract, not background reading. It "
+    "applies to you the same way it applies to every other role working on "
+    "this project."
+)
+
+REVIEWER_POLICY_NOTE = (
+    "\n\nYou are the enforcement point for this policy. The Engineer is not "
+    "responsible for judging its own compliance with it. Check the "
+    "implementation against every item above; if anything was violated, the "
+    "verdict must be CHANGES_REQUESTED and must name the specific item."
+)
 
 REVIEW_VERDICT_LINE = (
     "\nEnd your response with exactly one line: `VERDICT: APPROVED` or "
@@ -79,7 +104,17 @@ class PromptBuilder:
         is_correction: bool = False,
         upstream_contexts: dict[str, str] | None = None,
         context_worktree_path: str | None = None,
+        policy_text: str | None = None,
+        policy_file_paths: list[str] | None = None,
     ) -> BuiltPrompt:
+        """Build one role's system/user prompt.
+
+        `policy_text` is the rendered structured ProjectPolicy (WP4) --
+        callers fetch it via ProjectPolicyService.render_policy(); PromptBuilder
+        has no DB dependency, so it takes the text rather than the project id.
+        `policy_file_paths` are repo-owned policy files, read the same way
+        architecture context files are.
+        """
         extra = extra or {}
         upstream_contexts = upstream_contexts or {}
         context_files = await self._read_project_context(project, context_worktree_path)
@@ -89,6 +124,28 @@ class PromptBuilder:
                 "\n\n# Project context files (authoritative reference)\n"
                 + context_files
             )
+
+        policy_files_content = await self._read_policy_files(
+            project, context_worktree_path, policy_file_paths,
+        )
+        # policy_files_content is already bounded by _read_files (respects
+        # context_max_bytes/context_file_max_bytes). policy_text is a raw
+        # string the caller renders from the database, with no size limit of
+        # its own -- cap it the same way architecture_result is capped
+        # elsewhere in this module, so a policy with many long statements
+        # cannot inflate every role's prompt unboundedly.
+        policy_parts = [
+            _cap(p, 20_000) for p in (policy_text, policy_files_content) if p
+        ]
+        policy_block = ""
+        if policy_parts:
+            policy_block = (
+                "\n\n# Project Policy (enforceable engineering contract)\n"
+                + "\n\n".join(policy_parts)
+                + POLICY_ENFORCEMENT_NOTE
+            )
+            if role.key == "reviewer":
+                policy_block += REVIEWER_POLICY_NOTE
 
         task_block = ""
         if task is not None:
@@ -173,7 +230,7 @@ class PromptBuilder:
             f"{correction_prefix}"
             f"Execute your responsibilities for this request. Be precise and "
             f"concise; do not invent facts."
-            f"{project_block}{task_block}{upstream_block}{context_block}"
+            f"{project_block}{task_block}{upstream_block}{policy_block}{context_block}"
             f"{workspace_block}{extra_block}"
         )
         if role.key == "reviewer":
@@ -182,15 +239,50 @@ class PromptBuilder:
         system = self._roles.system_instructions(role.key)
         return BuiltPrompt(system=system, user=user, context_files=[])
 
-    @staticmethod
-    def build_triage_prompt(task: Task, project: Project) -> tuple[str, str]:
-        """Build a system/user prompt pair for the triage node."""
+    async def build_triage_prompt(
+        self,
+        task: Task,
+        project: Project,
+        *,
+        context_worktree_path: str | None = None,
+        policy_text: str | None = None,
+        policy_file_paths: list[str] | None = None,
+    ) -> tuple[str, str]:
+        """Build a system/user prompt pair for the triage node.
+
+        Instance method rather than static (as it was through V3.0): WP4
+        requires policy to be available to every role including Triage, and
+        reading repository-owned policy files needs the settings-bound file
+        reader `_read_policy_files` provides. Triage does not go through
+        `build()` -- it has its own fixed system prompt -- so policy is
+        composed the same way here rather than by reusing `build()` wholesale.
+        """
         system = TRIAGE_SYSTEM_PROMPT
+        policy_files_content = await self._read_policy_files(
+            project, context_worktree_path, policy_file_paths,
+        )
+        # policy_files_content is already bounded by _read_files (respects
+        # context_max_bytes/context_file_max_bytes). policy_text is a raw
+        # string the caller renders from the database, with no size limit of
+        # its own -- cap it the same way architecture_result is capped
+        # elsewhere in this module, so a policy with many long statements
+        # cannot inflate every role's prompt unboundedly.
+        policy_parts = [
+            _cap(p, 20_000) for p in (policy_text, policy_files_content) if p
+        ]
+        policy_block = ""
+        if policy_parts:
+            policy_block = (
+                "\n\n# Project Policy (enforceable engineering contract)\n"
+                + "\n\n".join(policy_parts)
+                + POLICY_ENFORCEMENT_NOTE
+            )
         user = (
             "Classify the following task:\n\n"
             f"Project: {project.name}\n"
             f"Task: {task.title}\n"
             f"Description: {task.description or '(none)'}"
+            f"{policy_block}"
         )
         return system, user
 
@@ -283,15 +375,41 @@ class PromptBuilder:
         """
         if project is None:
             return ""
+        candidates: list[str] = [
+            p.strip() for p in (project.architecture_context_paths or [])
+            if isinstance(p, str) and p.strip()
+        ]
+        candidates.extend(DEFAULT_CONTEXT_FILES)
+        return self._read_files(project, worktree_path, candidates)
+
+    async def _read_policy_files(
+        self,
+        project: Project | None,
+        worktree_path: str | None,
+        policy_file_paths: list[str] | None,
+    ) -> str:
+        """Read repository-owned policy files (WP4).
+
+        Same mechanism as `_read_project_context` -- confined to the worktree,
+        byte-capped -- kept as a separate call so policy files land in their
+        own labelled prompt block rather than being mixed into general
+        background reading.
+        """
+        if project is None:
+            return ""
+        candidates: list[str] = [
+            p.strip() for p in (policy_file_paths or [])
+            if isinstance(p, str) and p.strip()
+        ]
+        candidates.extend(DEFAULT_POLICY_FILES)
+        return self._read_files(project, worktree_path, candidates)
+
+    def _read_files(
+        self, project: Project, worktree_path: str | None, candidates: list[str],
+    ) -> str:
         base = Path(worktree_path).resolve() if worktree_path else Path(project.repository_path).resolve()
         if not base.is_dir():
             return ""
-        candidates: list[str] = []
-        for p in project.architecture_context_paths or []:
-            if isinstance(p, str) and p.strip():
-                candidates.append(p.strip())
-        for p in DEFAULT_CONTEXT_FILES:
-            candidates.append(p)
         seen: set[str] = set()
         parts: list[str] = []
         total = 0

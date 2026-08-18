@@ -258,3 +258,46 @@ class MemorySearchParams(BaseModel):
     status: str | None = None
     tags: list[str] | None = None
     limit: int = Field(default=20, ge=1, le=100)
+
+
+class ProjectPolicyIn(BaseModel):
+    """PUT body: a full replace of the project's policy (WP4).
+
+    Not a partial update -- a policy is the project's current declared
+    contract, so the caller sends the whole thing every time, matching
+    ProjectPolicyService.upsert()'s semantics.
+    """
+
+    protected_paths: list[str] = []
+    go_no_go_commands: list[str] = []
+    forbidden_dependency_directions: list[str] = []
+    architecture_invariants: list[str] = []
+    documentation_requirements: list[str] = []
+    performance_constraints: list[str] = []
+    required_review_checks: list[str] = []
+    release_requirements: list[str] = []
+    policy_file_paths: list[str] = []
+
+
+class ProjectPolicyOut(BaseModel):
+    """`id`/`created_at`/`updated_at` are None for a project with no policy
+    configured yet -- ProjectPolicyService.get_or_default() returns an unsaved
+    row with empty lists rather than 404ing, matching how Project.test_commands
+    is always present and defaults to []. None means "never saved", not
+    "unknown"."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int | None
+    project_id: int
+    protected_paths: list[Any]
+    go_no_go_commands: list[Any]
+    forbidden_dependency_directions: list[Any]
+    architecture_invariants: list[Any]
+    documentation_requirements: list[Any]
+    performance_constraints: list[Any]
+    required_review_checks: list[Any]
+    release_requirements: list[Any]
+    policy_file_paths: list[Any]
+    created_at: datetime | None
+    updated_at: datetime | None

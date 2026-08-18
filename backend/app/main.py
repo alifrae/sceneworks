@@ -29,6 +29,7 @@ from app.api import (
     events_router,
     executions_router,
     memory_router,
+    policy_router,
     projects_router,
     roles_router,
     settings_router,
@@ -126,6 +127,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.include_router(events_router)
     app.include_router(dashboard_router)
     app.include_router(memory_router)
+    app.include_router(policy_router)
 
     @app.get("/api/health")
     async def health() -> dict:

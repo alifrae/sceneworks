@@ -77,8 +77,8 @@ judges **engineering outcomes**, then reports a machine-readable GO/NO-GO result
 
 ```bash
 cd backend
-uv run python -m evaluation                # full suite, 19 scenarios (~2.5-6 min)
-uv run python -m evaluation --smoke        # CI subset, 5 scenarios (~60 s)
+uv run python -m evaluation                # full suite, 20 scenarios (~2.5-6 min)
+uv run python -m evaluation --smoke        # CI subset, 6 scenarios (~70 s)
 uv run python -m evaluation --list
 uv run python -m evaluation --scenario bug-fix -v
 uv run python -m evaluation --json qualification.json
@@ -146,7 +146,7 @@ Two GitHub Actions workflows, split by cost:
   frontend `next build`.
 - `.github/workflows/release.yml` -- full validation, manual dispatch or a
   `v*` tag: the complete backend suite, migration validation, full
-  qualification (19 scenarios), and Playwright E2E against a live backend.
+  qualification (20 scenarios), and Playwright E2E against a live backend.
 
 Neither runs `live`-marked tests: a GitHub-hosted runner has no Gemini CLI
 authentication and no local LLM endpoint. Full contract, including why the

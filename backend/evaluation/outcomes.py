@@ -107,6 +107,13 @@ class Observations:
     #: Proposals that matched but were deliberately withheld from the agent.
     memories_proposed_not_injected: frozenset[str] = frozenset()
 
+    # --- project policy (WP4) -------------------------------------------
+    #: Repo-relative paths the deterministic protected-path check flagged,
+    #: read from the policy.violation_detected event -- what SceneWorks
+    #: itself found, not what a (possibly scripted, non-reasoning) Reviewer
+    #: claimed.
+    policy_violations_detected: frozenset[str] = frozenset()
+
     # --- architecture --------------------------------------------------
     architecture_result_present: bool | None = None
     architecture_result_bytes: int | None = None

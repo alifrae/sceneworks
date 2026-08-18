@@ -66,15 +66,27 @@ def make_legacy_database(db_path: Path) -> None:
 
     Uses the same metadata `create_all` used, so this really is the shape that
     exists in the field — not an approximation of it.
+
+    MAINTENANCE NOTE, found the hard way: `Base.metadata` reflects the
+    *current* set of models, not a frozen V1-V3.0 snapshot. WP4 added
+    `ProjectPolicy` and `create_all()` here started creating `project_policy`
+    too — a table the real legacy databases this fixture exists to simulate
+    never had. Migration 0003's `CREATE TABLE project_policy` then collided
+    with it ("table project_policy already exists"), 100% reproducible, not
+    load-related. Every future migration that adds a *table* (not just a
+    column) needs the same treatment here: drop it after `create_all()`, the
+    same way the `source_commit` column is dropped below.
     """
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     try:
         Base.metadata.create_all(engine)
-        # Drop the column migration 0002 adds, so the fixture predates it.
         with engine.begin() as conn:
+            # Drop the column migration 0002 adds, so the fixture predates it.
             conn.exec_driver_sql(
                 "ALTER TABLE project_memory DROP COLUMN source_commit"
             )
+            # Drop the table migration 0003 adds, so the fixture predates it.
+            conn.exec_driver_sql("DROP TABLE project_policy")
     finally:
         engine.dispose()
 

@@ -175,6 +175,7 @@ async def run_scenario(
         project, task = await _seed(context, scenario, repo_path)
         obs.project_id, obs.task_id = project.id, task.id
         await _seed_memories(context, scenario, project.id)
+        await _seed_policy(context, scenario, project.id)
 
         if scenario.drive == DRIVE_RESTART:
             context = await _drive_restart(context, settings, task.id, obs, timeout)
@@ -269,6 +270,15 @@ async def _seed_memories(
     """
     for spec in scenario.seed_memories:
         await context.memory.create(project_id=project_id, **spec)
+
+
+async def _seed_policy(
+    context: AppContext, scenario: Scenario, project_id: int,
+) -> None:
+    """Configure the scenario's project policy (WP4), through the real service."""
+    if scenario.seed_policy is None:
+        return
+    await context.policy.upsert(project_id, **scenario.seed_policy)
 
 
 # --------------------------------------------------------------------- drivers
@@ -451,6 +461,7 @@ async def _observe(
 
     await _observe_routing(context, task_id, obs)
     await _observe_memory(context, task_id, obs)
+    await _observe_policy(context, task_id, obs)
     await _observe_review(rows, obs)
     await _observe_git(context, scenario, task_id, repo_path, worktree_path, obs)
 
@@ -487,6 +498,29 @@ async def _observe_routing(context: AppContext, task_id: int, obs: Observations)
                 if decision.get(key)
             )
             break
+
+
+async def _observe_policy(
+    context: AppContext, task_id: int, obs: Observations,
+) -> None:
+    """Recover detected policy violations from the event they were recorded as.
+
+    This is the WP4 closure evidence: reading policy.violation_detected proves
+    SceneWorks' own deterministic check fired, independent of whatever the
+    (possibly scripted) Reviewer's verdict text says.
+    """
+    from app.events import types as event_types
+
+    paths: set[str] = set()
+    events = await context.event_store.list_for_task(task_id, limit=1000)
+    for event in events:
+        if event.type != event_types.POLICY_VIOLATION_DETECTED:
+            continue
+        for violation in (event.payload or {}).get("violations") or []:
+            path = violation.get("path")
+            if path:
+                paths.add(path)
+    obs.policy_violations_detected = frozenset(paths)
 
 
 async def _observe_memory(

@@ -161,6 +161,34 @@ graph TD
   `MemoryService`, but no workflow node populates it yet -- wiring that up is
   WP6 scope (Git provenance), not a WP3 gap. See [memory.md](memory.md).
 
+### Project Policy (`backend/app/services/policy.py`, `policy_check.py`) -- WP4
+
+- One `ProjectPolicy` row per project (migration `0003`): `protected_paths`,
+  `architecture_invariants`, `forbidden_dependency_directions`,
+  `documentation_requirements`, `performance_constraints`,
+  `required_review_checks`, `go_no_go_commands`, `release_requirements`, plus
+  repo-owned `policy_file_paths` read the same way architecture context files
+  are.
+- **Only `protected_paths` is checked deterministically** -- pure function
+  `check_protected_paths` in `policy_check.py`, `fnmatch.fnmatchcase` (not
+  `fnmatch.fnmatch`: case-folding differs by platform) against the Engineer's
+  actual `git diff --name-only`. Everything else is LLM-judged by the
+  Reviewer, but rendered as an explicit labelled contract rather than mixed
+  into background context.
+- Reaches every role consistently: every `PromptBuilder.build()` call site in
+  `WorkflowManager` fetches and passes the rendered policy, including
+  `build_triage_prompt` (converted from a `@staticmethod` to an instance
+  method specifically for this) and `CompanyService`'s manual-ask path.
+- The Reviewer alone gets an explicit enforcement instruction
+  (`REVIEWER_POLICY_NOTE`) -- the Engineer must not be responsible for
+  defining the criteria used to approve its own work.
+- A detected protected-path violation is recorded as a
+  `policy.violation_detected` event with the exact paths and patterns matched
+  -- evidence independent of whatever the Reviewer's verdict text says.
+- No PCS-specific code. See [project-policy.md](project-policy.md) for the
+  full contract and a worked PCS-shaped example (documentation only), and the
+  `policy-violation` qualification scenario for the closure proof.
+
 ### Frontend (`web/`)
 
 - Next.js 15 App Router, React 19, TypeScript

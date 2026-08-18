@@ -35,6 +35,8 @@ from app.roles.definitions import RoleDefinition
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
 from app.services.memory import MemoryService
+from app.services.policy import ProjectPolicyService, render_policy
+from app.services.policy_check import check_protected_paths, render_violations
 from app.services.workflow import ASK_ALLOWED_ROLES, WorkflowError, parse_review_verdict
 from app.workflows.state import InitiativeState
 
@@ -59,6 +61,7 @@ class WorkflowManager:
         checkpoint_db_path: str = "data/workflow_checkpoints.db",
         max_review_iterations: int = MAX_REVIEW_ITERATIONS_DEFAULT,
         memory_service: MemoryService | None = None,
+        policy_service: ProjectPolicyService | None = None,
     ):
         self._session_factory = session_factory
         self._engine = engine
@@ -70,6 +73,7 @@ class WorkflowManager:
         self._settings = settings
         self._max_review_iterations = max_review_iterations
         self._memory = memory_service
+        self._policy = policy_service
 
         self._pending_executions: dict[str, asyncio.Event] = {}
         self._active_graphs: dict[int, asyncio.Task] = {}
@@ -313,7 +317,14 @@ class WorkflowManager:
 
         role_backend = self._roles.effective("architect").backend
 
-        system, user = PromptBuilder.build_triage_prompt(task, project)
+        # Structured policy only here, not repo-owned policy files: no worktree
+        # exists yet at this point (base commit is pinned a few lines below,
+        # deliberately at the first node that touches the repository), and the
+        # DB-backed policy needs no filesystem access to reach Triage.
+        policy_kwargs = await self._policy_kwargs(project.id)
+        system, user = await self._prompts.build_triage_prompt(
+            task, project, policy_text=policy_kwargs.get("policy_text"),
+        )
 
         memory_ctx = await self._inject_memory(
             project.id, task.description or task.title,
@@ -541,9 +552,11 @@ class WorkflowManager:
                     "base_commit": base,
                     "permissions": self._permission_names(role),
                 }
+                policy_kwargs = await self._policy_kwargs(project.id)
                 prompt = await self._prompts.build(
                     role=role, project=project, task=task, workspace=workspace,
                     context_worktree_path=str(worktree.worktree_path),
+                    **policy_kwargs,
                 )
                 execution = await self._create_execution(
                     task=task, role=role, workspace=workspace,
@@ -1074,10 +1087,12 @@ class WorkflowManager:
                 )
                 await self._emit_memory_injection(task_id, "architect", memory_ctx)
 
+            policy_kwargs = await self._policy_kwargs(project.id)
             prompt = await self._prompts.build(
                 role=role, project=project, task=task, workspace=workspace,
                 upstream_contexts=upstream or None,
                 context_worktree_path=str(worktree.worktree_path),
+                **policy_kwargs,
             )
             execution = await self._create_execution(
                 task=task, role=role, workspace=workspace,
@@ -1134,10 +1149,12 @@ class WorkflowManager:
                 if t2.review_result and is_correction:
                     upstream["Reviewer corrections to address"] = t2.review_result
 
+            policy_kwargs = await self._policy_kwargs(project.id)
             prompt = await self._prompts.build(
                 role=role, project=project, task=task, workspace=workspace,
                 is_correction=is_correction, upstream_contexts=upstream or None,
                 context_worktree_path=str(worktree_path),
+                **policy_kwargs,
             )
             execution = await self._create_execution(
                 task=task, role=role, workspace=workspace,
@@ -1198,9 +1215,40 @@ class WorkflowManager:
                 "Diff to review (base_commit..result_commit)": _cap(diff["full"], 120_000),
                 "Commits": "\n".join(f"- {c['sha']} {c['subject']}" for c in commits),
             }
+
+            # Deterministic policy check (WP4): grounded from Git, not the
+            # Reviewer's own reading of the diff. The Engineer must not be the
+            # one whose judgement decides compliance with its own work, and an
+            # LLM asked to remember a list of protected globs while also
+            # reading a 120KB diff is exactly the kind of thing that gets
+            # missed under load.
+            policy_kwargs = await self._policy_kwargs(project.id)
+            if policy_kwargs.get("policy_text") and self._policy is not None:
+                policy_row = await self._policy.get(project.id)
+                if policy_row and policy_row.protected_paths:
+                    changed = await self._git.changed_files(
+                        Path(task.worktree_path),
+                        task.base_commit or task.result_commit,
+                    )
+                    violations = check_protected_paths(
+                        policy_row.protected_paths, changed,
+                    )
+                    if violations:
+                        extra["Policy violations detected by SceneWorks (verify and act on these)"] = (
+                            render_violations(violations)
+                        )
+                        await self._emit_workflow_event(
+                            task_id, event_types.POLICY_VIOLATION_DETECTED,
+                            {
+                                "node": "reviewer",
+                                "violations": [v.as_dict() for v in violations],
+                            },
+                        )
+
             prompt = await self._prompts.build(
                 role=role, project=project, task=task, workspace=workspace, extra=extra,
                 context_worktree_path=str(review_worktree.worktree_path),
+                **policy_kwargs,
             )
             execution = await self._create_execution(
                 task=task, role=role, workspace=workspace,
@@ -1834,6 +1882,24 @@ class WorkflowManager:
             "severity": "info",
             "timestamp": row.timestamp.isoformat(),
         })
+
+    async def _policy_kwargs(self, project_id: int) -> dict:
+        """Fetch and render a project's policy, ready to splat into build().
+
+        Returns {} rather than raising when no policy service is wired
+        (matching `_inject_memory`'s optional-service pattern) or when a
+        project has no policy configured -- an unconfigured project must not
+        make prompt building fail, it just contributes nothing.
+        """
+        if self._policy is None:
+            return {"policy_text": None, "policy_file_paths": None}
+        policy = await self._policy.get(project_id)
+        if policy is None:
+            return {"policy_text": None, "policy_file_paths": None}
+        return {
+            "policy_text": render_policy(policy),
+            "policy_file_paths": policy.policy_file_paths,
+        }
 
     async def _inject_memory(
         self, project_id: int, task_description: str, types: list[str] | None = None,

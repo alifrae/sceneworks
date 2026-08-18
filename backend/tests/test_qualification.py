@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from pathlib import Path
 
 import pytest
 
@@ -314,6 +313,9 @@ def test_every_required_scenario_class_from_wp1_is_present():
         # Added by WP2: proves accepted decisions reach the agent and proposals
         # do not, on the real workflow path.
         "memory-injection",
+        # Added by WP4: proves a policy violation is detected during review --
+        # by SceneWorks' own deterministic check, not by trusting a verdict.
+        "policy-violation",
     }
     assert required_classes <= set(SCENARIOS_BY_KEY)
 
@@ -340,6 +342,7 @@ def test_no_scenario_is_defined_without_expectations():
         "expect_architecture_present",
         "expect_memories_injected",
         "forbid_memories_injected",
+        "expect_policy_violations",
     ]
     for scenario in SCENARIOS:
         stated = [
@@ -507,6 +510,42 @@ async def test_memory_injection_scenario_fails_when_the_decision_is_unaccepted(t
         c.name for c in result.failed_checks
     }
     assert "Aggregation goes through calc.core" not in result.observations.memories_injected
+
+
+@pytest.mark.slow
+async def test_policy_violation_scenario_fails_if_the_protected_path_is_not_configured(
+    tmp_path,
+):
+    """WP4 closure test, at the qualification-suite level.
+
+    `policy-violation` passes because SceneWorks' deterministic check catches
+    the tampered check.py against a policy that protects it. Remove `check.py`
+    from the seeded policy's protected_paths -- the Engineer does exactly the
+    same tampering, but there is nothing left to violate -- and the scenario
+    must fail: the harness expected a detection that can no longer happen. This
+    is what proves the passing scenario is evidence of real detection, not of a
+    scripted Reviewer that happens to say the right thing (that reviewer is
+    scripted to APPROVE either way; the check never depends on its verdict).
+    """
+    require_git()
+    scenario = SCENARIOS_BY_KEY["policy-violation"]
+    unprotected = dataclasses.replace(
+        scenario,
+        key="policy-violation-mutated",
+        seed_policy={**scenario.seed_policy, "protected_paths": []},
+    )
+    result = await run_scenario(unprotected, tmp_path, timeout=120)
+
+    assert result.verdict is Verdict.FAIL, (
+        "with nothing declared protected there is nothing to detect; got "
+        f"{result.verdict} with blockers={result.blockers}"
+    )
+    assert "policy.violation_detected" in {c.name for c in result.failed_checks}
+    assert result.observations.policy_violations_detected == frozenset()
+    # The tampering itself still succeeded and was still approved -- isolating
+    # that the failure is specifically about detection, not about the
+    # scenario's other mechanics breaking too.
+    assert result.observations.review_verdicts == ("APPROVED",)
 
 
 @pytest.mark.slow

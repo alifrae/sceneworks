@@ -38,6 +38,7 @@ def build(scenario: Scenario, obs: Observations) -> list[Check]:
         _recovery,
         _architecture_present,
         _memory_injection,
+        _policy_violations,
     ):
         checks.extend(builder(scenario, obs))
     return checks
@@ -542,6 +543,36 @@ def _memory_injection(scenario: Scenario, obs: Observations) -> list[Check]:
         )
 
     return checks
+
+
+def _policy_violations(scenario: Scenario, obs: Observations) -> list[Check]:
+    """WP4 closure evidence: a violation must be found by SceneWorks itself.
+
+    Checked against the policy.violation_detected event, not against the
+    Reviewer's verdict text -- a scripted backend's approval or rejection
+    proves nothing about whether SceneWorks actually caught the violation. The
+    scenario's Reviewer script can (and does, in policy-violation) approve
+    anyway, exactly like the intentional-regression negative control: the
+    point is that the deterministic mechanism does not depend on the model
+    noticing.
+    """
+    if not scenario.expect_policy_violations:
+        return []
+    missing = scenario.expect_policy_violations - obs.policy_violations_detected
+    return [
+        Check(
+            name="policy.violation_detected",
+            passed=not missing,
+            expected=scenario.expect_policy_violations,
+            actual=obs.policy_violations_detected,
+            detail=(
+                "not detected: " + ", ".join(sorted(missing))
+                if missing
+                else "SceneWorks' deterministic protected-path check found "
+                "every expected violation, independent of the review verdict"
+            ),
+        )
+    ]
 
 
 def _short(commit: str | None) -> str:

@@ -141,6 +141,53 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ProjectPolicy(Base):
+    """Engineering contract for a project (WP4).
+
+    One row per project (`project_id` unique). Structured, individually
+    enforceable rules the Reviewer must check implementation against — not
+    background reading. `architecture_context_paths` on `Project` remains the
+    place for prose the agent should be aware of; this table is for statements
+    a violation of which should change a review verdict.
+
+    Each list is a set of free-text statements except `protected_paths`, which
+    is the one category SceneWorks checks itself rather than asking an LLM to
+    remember: see `app/services/policy_check.py`.
+    """
+
+    __tablename__ = "project_policy"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id"), unique=True, index=True
+    )
+    # Shell-glob patterns (fnmatch.fnmatchcase) matched against repo-relative
+    # changed-file paths. Checked deterministically from the Engineer's diff;
+    # see app/services/policy_check.py for the exact matching semantics.
+    protected_paths: Mapped[list] = mapped_column(JSON, default=list)
+    # Release/smoke qualification commands. Distinct from Project.test_commands
+    # (the routine test suite): these are the narrower go/no-go gate a release
+    # decision depends on.
+    go_no_go_commands: Mapped[list] = mapped_column(JSON, default=list)
+    forbidden_dependency_directions: Mapped[list] = mapped_column(JSON, default=list)
+    architecture_invariants: Mapped[list] = mapped_column(JSON, default=list)
+    documentation_requirements: Mapped[list] = mapped_column(JSON, default=list)
+    performance_constraints: Mapped[list] = mapped_column(JSON, default=list)
+    # Checklist items the Reviewer must explicitly confirm one way or the
+    # other, beyond the free-form review it already does.
+    required_review_checks: Mapped[list] = mapped_column(JSON, default=list)
+    release_requirements: Mapped[list] = mapped_column(JSON, default=list)
+    # Repo-owned policy files (e.g. SCENEWORKS.md, docs/project-policy.md),
+    # read fresh from the commit-pinned worktree on every prompt build rather
+    # than copied into the database -- same rationale as
+    # Project.architecture_context_paths.
+    policy_file_paths: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
@@ -175,4 +222,7 @@ class ProjectMemory(Base):
     )
 
 
-all_models = (Project, Task, Execution, Event, Artifact, AppSetting, ProjectMemory)
+all_models = (
+    Project, Task, Execution, Event, Artifact, AppSetting, ProjectMemory,
+    ProjectPolicy,
+)

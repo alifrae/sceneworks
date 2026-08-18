@@ -5,21 +5,21 @@ evaluation suite. It evaluates SceneWorks — routing, architecture gating,
 implementation provenance, review lifecycle, repair convergence, cancellation and
 restart behaviour — not its individual components, and not a model's talent.
 
-Status: **implemented, unit tested, and self-tested** (30 tests in
-`backend/tests/test_qualification.py`, 4 of them driving full workflows).
+Status: **implemented, unit tested, and self-tested** (32 tests in
+`backend/tests/test_qualification.py`, 6 of them driving full workflows).
 Live qualification mode is **implemented but not live-model validated** — see
 [Live mode](#live-mode).
 
 ```bash
 cd backend
-uv run python -m evaluation              # full suite (19 scenarios, ~2.5-6 min)
-uv run python -m evaluation --smoke      # CI subset (5 scenarios, ~60 s)
+uv run python -m evaluation              # full suite (20 scenarios, ~2.5-6 min)
+uv run python -m evaluation --smoke      # CI subset (6 scenarios, ~70 s)
 uv run python -m evaluation --list
 uv run python -m evaluation --scenario bug-fix -v
 uv run python -m evaluation --json qualification.json
 ```
 
-Wall-clock varies widely: the suite creates 19 Git repositories, ~70 worktrees
+Wall-clock varies widely: the suite creates 20 Git repositories, ~70 worktrees
 and ~70 subprocesses back to back, and `git worktree add` on Windows degrades
 sharply under that load. The per-scenario budget is 300 s for that reason
 (a scenario takes ~13 s in isolation).
@@ -76,7 +76,7 @@ verdicts from the executions, routing from the events triage emitted.
 
 ## Scenarios
 
-19 scenario classes, all required for a PASS verdict.
+20 scenario classes, all required for a PASS verdict.
 
 | Key | What it establishes |
 | --- | --- |
@@ -99,6 +99,7 @@ verdicts from the executions, routing from the events triage emitted.
 | `unnecessary-change` | **negative control** — unrequested edits are detected |
 | `incorrect-triage` | **negative control** — wrong routing is detected |
 | `memory-injection` | accepted decisions reach the agent; proposals and irrelevant memories do not |
+| `policy-violation` | a protected-path violation is detected by SceneWorks' own deterministic check, independent of the review verdict |
 
 ### Negative controls
 
@@ -124,6 +125,7 @@ They are required for exactly that reason.
 | cancellation honoured | final task status after cancel |
 | recovery: status before/after, interrupted executions, surviving worktree, retry behaviour | restart driver |
 | memories injected, proposals withheld, retrieval query terms | `memory.injected` events |
+| protected-path violations detected | `policy.violation_detected` events |
 | provenance: project, task, executions | database |
 
 ### Not measured — and why

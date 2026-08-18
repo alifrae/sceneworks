@@ -214,6 +214,38 @@ action, recorded in the event log with the actor and the previous state.
 > [docs/wp0-baseline-audit.md](docs/wp0-baseline-audit.md) F4 for the evidence and
 > [docs/memory.md](docs/memory.md) for the current behaviour.
 
+## Project Policy
+
+A project's engineering contract — protected paths, architecture invariants,
+forbidden dependency directions, documentation and performance requirements,
+required review checks, go/no-go commands, release requirements — as a
+structured contract distinct from free-text background reading.
+
+`protected_paths` is checked **deterministically**: SceneWorks matches the
+Engineer's actual diff against declared patterns itself
+(`fnmatch.fnmatchcase`, case-sensitive and platform-independent), rather than
+asking an LLM Reviewer to remember a list of globs while also reading a large
+diff. Every other category remains judged by the Reviewer, but is handed to it
+as an explicit, labelled contract rather than mixed into general context — and
+the Reviewer alone gets the instruction that it is the enforcement point,
+since **the Engineer must not be responsible for defining the criteria used to
+approve its own work**.
+
+Reaches every role consistently — Triage, Product, CTO, Technical Expert,
+Architect, Engineer, Reviewer, and manual company asks — verified directly
+against the actual rendered prompt text for each, not just designed to.
+
+```bash
+curl -X PUT http://127.0.0.1:8010/api/projects/1/policy \
+  -H "Content-Type: application/json" \
+  -d '{"protected_paths": ["generated/*", "api/public/*"]}'
+```
+
+See [docs/project-policy.md](docs/project-policy.md) for the full contract,
+including a worked PCS-shaped example (documentation only — no PCS-specific
+code exists in SceneWorks) and the qualification scenario proving a violation
+is detected during review even when the reviewer itself approves.
+
 ## Git worktree safety
 
 - Agents **never touch the human working tree**. All agent work happens in
@@ -396,6 +428,8 @@ Test categories:
   evaluation suite and its go/no-go contract.
 - [Project Memory](docs/memory.md) — Deterministic retrieval, the
   authoritative/speculative lifecycle, and provenance.
+- [Project Policy](docs/project-policy.md) — The engineering-contract
+  abstraction, deterministic protected-path checking, and a worked example.
 - [Operations](docs/operations.md) — Versioning, database migrations,
   backup/restore, recovery semantics, and CI.
 - [Baseline audit](docs/wp0-baseline-audit.md) — The evidence-based audit

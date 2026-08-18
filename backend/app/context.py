@@ -24,6 +24,7 @@ from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
 from app.services.company import CompanyService
 from app.services.memory import MemoryService
+from app.services.policy import ProjectPolicyService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
 from app.services.workflow import TaskWorkflowService
 from app.workflows.manager import WorkflowManager
@@ -47,6 +48,7 @@ class AppContext:
     workflow_manager: WorkflowManager
     company: CompanyService
     memory: MemoryService
+    policy: ProjectPolicyService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -96,6 +98,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         session_factory, execution_engine, git, prompt_builder, roles, bus, event_store, settings
     )
     memory = MemoryService(session_factory, event_store, bus)
+    policy = ProjectPolicyService(session_factory)
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -108,9 +111,13 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         checkpoint_db_path=str(settings.checkpoint_db_path),
         max_review_iterations=settings.max_review_iterations,
         memory_service=memory,
+        policy_service=policy,
     )
     execution_engine.on_execution_finished = workflow_manager.on_execution_finished
-    company = CompanyService(session_factory, workflow, roles, git, prompt_builder, execution_engine)
+    company = CompanyService(
+        session_factory, workflow, roles, git, prompt_builder, execution_engine,
+        policy_service=policy,
+    )
 
     ctx = AppContext(
         settings=settings,
@@ -127,6 +134,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         workflow_manager=workflow_manager,
         company=company,
         memory=memory,
+        policy=policy,
         settings_store=settings_store,
         settings_overrides=overrides,
     )

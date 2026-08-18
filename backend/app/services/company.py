@@ -19,6 +19,7 @@ from app.git.workspace import GitWorktreeService
 from app.models import Execution, Project
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleNotFoundError, RoleRegistry
+from app.services.policy import ProjectPolicyService, render_policy
 from app.services.workflow import ASK_ALLOWED_ROLES, WorkflowError, TaskWorkflowService
 
 logger = logging.getLogger("sceneworks.company")
@@ -33,6 +34,7 @@ class CompanyService:
         git: GitWorktreeService,
         prompt_builder: PromptBuilder,
         engine: ExecutionEngine,
+        policy_service: ProjectPolicyService | None = None,
     ):
         self._session_factory = session_factory
         self._workflow = workflow
@@ -40,6 +42,7 @@ class CompanyService:
         self._git = git
         self._prompts = prompt_builder
         self._engine = engine
+        self._policy = policy_service
 
     async def ask(self, role_key: str, project_id: int | None, question: str) -> Execution:
         if role_key not in ASK_ALLOWED_ROLES:
@@ -131,6 +134,15 @@ class CompanyService:
             else:
                 workspace = {**workspace, "preparing": False}
 
+            policy_kwargs: dict = {}
+            if self._policy is not None and project is not None:
+                policy_row = await self._policy.get(project.id)
+                if policy_row is not None:
+                    policy_kwargs = {
+                        "policy_text": render_policy(policy_row),
+                        "policy_file_paths": policy_row.policy_file_paths,
+                    }
+
             prompt = await self._prompts.build(
                 role=role,
                 project=project,
@@ -138,6 +150,7 @@ class CompanyService:
                 workspace=workspace,
                 extra={"Question": question},
                 context_worktree_path=str(worktree_path) if worktree_path else None,
+                **policy_kwargs,
             )
             async with self._session_factory() as session:
                 execution = await session.get(Execution, execution_id)
