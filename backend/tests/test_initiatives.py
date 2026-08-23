@@ -2,6 +2,20 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
+
+def _git(repo: Path, *args: str) -> None:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
 
 async def _project(client, git_repo, name="initiative-project") -> dict:
     response = await client.post(
@@ -126,18 +140,14 @@ async def test_task_cannot_attach_to_work_package_from_another_project(
 ):
     first = await _project(client, git_repo, "first")
 
-    # A second repository is required because project registration correctly
-    # rejects duplicate repository paths.
-    from tests.conftest import git
-
     second_repo = tmp_path / "second-repo"
     second_repo.mkdir()
-    git(second_repo, "init", "-b", "main")
-    git(second_repo, "config", "user.email", "test@sceneworks.local")
-    git(second_repo, "config", "user.name", "SceneWorks Test")
+    _git(second_repo, "init", "-b", "main")
+    _git(second_repo, "config", "user.email", "test@sceneworks.local")
+    _git(second_repo, "config", "user.name", "SceneWorks Test")
     (second_repo / "README.md").write_text("# second\n", encoding="utf-8")
-    git(second_repo, "add", "-A")
-    git(second_repo, "commit", "-m", "initial")
+    _git(second_repo, "add", "-A")
+    _git(second_repo, "commit", "-m", "initial")
     second = await _project(client, second_repo, "second")
 
     initiative = (
