@@ -142,7 +142,9 @@ class ExecutionEngine:
             except asyncio.CancelledError:
                 pass
             await self._finalize(
-                execution_id, status="INTERRUPTED", error="SceneWorks shutting down"
+                execution_id,
+                status="INTERRUPTED",
+                error="interrupted by SceneWorks shutdown",
             )
         self._active.clear()
 
