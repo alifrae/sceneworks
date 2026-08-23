@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "name": "PCS historical engineering tasks",
+  "backend": "gemini_acp",
+  "repeats": 3,
+  "tasks": [
+    {
+      "key": "pcs-historical-bug",
+      "title": "Replace with a closed PCS bug",
+      "description": "Use the exact historical task description, without revealing the known patch.",
+      "repository_path": "/absolute/path/to/PCS",
+      "base_ref": "<commit immediately before the historical fix>",
+      "verification_commands": [
+        "<command that fails before the fix and passes after it>"
+      ],
+      "baseline_expectation": "must_fail",
+      "architecture_context_paths": [],
+      "expected_changed_files": [],
+      "forbidden_changed_files": [],
+      "engineering_contract": {
+        "required_behavior": [],
+        "allowed_scope": [],
+        "forbidden_changes": [
+          "Do not weaken or delete the benchmark acceptance test"
+        ],
+        "architecture_constraints": [],
+        "required_tests": [],
+        "performance_requirements": [],
+        "compatibility_requirements": [],
+        "acceptance_criteria": []
+      },
+      "timeout_seconds": 3600
+    }
+  ]
+}
