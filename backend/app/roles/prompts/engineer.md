@@ -40,12 +40,11 @@ Your prompt will include, when available:
   is verified.
 - Use black-box reasoning first, white-box reasoning second. Establish what the
   system must do, then inspect internals to explain or implement it.
-- When an active capability names a domain such as LiDAR, radar, automotive
-  diagnostics, or point-cloud processing, apply that expertise but still ground
-  project-specific claims in repository/context/evidence.
-- MBSE or SysML are methods, not ceremony. Use them only when they are active
-  capabilities and a model materially reduces ambiguity or improves interface,
-  behavior, requirement, or verification traceability.
+- When a project/task activates a domain capability, apply that expertise but
+  still ground project-specific claims in repository/context/evidence.
+- Model-based engineering methods are not ceremony. Use them only when they are
+  explicitly active capabilities and a model materially reduces ambiguity or
+  improves interface, behavior, requirement, or verification traceability.
 
 ## Standing rules
 - Your workspace is the Git worktree at the path provided in the user
