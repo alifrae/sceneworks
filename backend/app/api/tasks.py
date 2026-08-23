@@ -14,6 +14,7 @@ from app.domain.task_states import TaskStateMachine, TaskStatus
 from app.models import Execution, Initiative, Project, Task, WorkPackage
 from app.schemas import (
     ActionRequest,
+    CapabilityProfile,
     DiffOut,
     EngineeringContract,
     TaskCreate,
@@ -114,6 +115,7 @@ async def create_task(body: TaskCreate, ctx: AppContext = Depends(get_context)) 
             description=body.description,
             priority=body.priority,
             engineering_contract=body.engineering_contract.model_dump(),
+            capability_requirements=body.capability_requirements.model_dump(),
             status=TaskStatus.NEW.value,
         )
         session.add(task)
@@ -149,6 +151,33 @@ async def replace_engineering_contract(
                 "create/revise the contract before starting architecture",
             )
         task.engineering_contract = body.model_dump()
+        await session.commit()
+        await session.refresh(task)
+    return await _task_out(ctx, task)
+
+
+@router.put("/{task_id}/capabilities")
+async def replace_capability_requirements(
+    task_id: int,
+    body: CapabilityProfile,
+    ctx: AppContext = Depends(get_context),
+) -> TaskOut:
+    """Replace task capability overlays before workflow execution starts.
+
+    Capability labels affect professional reasoning/method selection. They do
+    not add project facts and therefore do not replace task contracts or
+    repository evidence.
+    """
+    async with ctx.engine_factory() as session:
+        task = await session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(404, "task not found")
+        if task.status != TaskStatus.NEW.value:
+            raise HTTPException(
+                409,
+                "capability requirements can only be changed while task is NEW",
+            )
+        task.capability_requirements = body.model_dump()
         await session.commit()
         await session.refresh(task)
     return await _task_out(ctx, task)
