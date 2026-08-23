@@ -117,6 +117,20 @@ class PairComparison(BaseModel):
     agent_execution_delta: int | None = None
 
 
+class ModeAggregate(BaseModel):
+    mode: Literal["sceneworks", "direct"]
+    trial_count: int
+    measured_trial_count: int
+    pass_count: int
+    fail_count: int
+    blocked_count: int
+    success_rate: float | None = None
+    median_success_seconds: float | None = None
+    mean_human_interventions: float | None = None
+    mean_agent_executions: float | None = None
+    backend_failures: int = 0
+
+
 class BenchmarkReport(BaseModel):
     schema: Literal["sceneworks.productivity-benchmark/1"] = (
         "sceneworks.productivity-benchmark/1"
@@ -130,6 +144,7 @@ class BenchmarkReport(BaseModel):
     status: BenchmarkStatus = BenchmarkStatus.INCOMPLETE
     trials: list[TrialResult] = Field(default_factory=list)
     comparisons: list[PairComparison] = Field(default_factory=list)
+    aggregates: list[ModeAggregate] = Field(default_factory=list)
     environment: dict[str, Any] = Field(default_factory=dict)
 
     def finalize(self, expected_trials: int) -> "BenchmarkReport":
