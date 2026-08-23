@@ -1,19 +1,16 @@
-"""Backend registry: the only place backends are constructed and looked up."""
+"""Backend registry and execution-scoped model binding."""
 
 from __future__ import annotations
 
 import asyncio
 import time
 
-from app.agents.base import AgentBackend, BackendHealth
+from app.agents.base import AgentBackend, AgentEventSink, AgentRequest, AgentResult, BackendHealth, Workspace
 from app.agents.fake import FakeAgentBackend
 from app.agents.gemini_acp import GeminiACPBackend
 from app.agents.openhands import OpenHandsBackend
 from app.config.settings import Settings
 
-# A health probe shells out to the agent CLI (`gemini --version`), which costs
-# seconds. The dashboard and settings pages poll health on every load, so
-# results are cached; without this the UI blocks on subprocess startup.
 HEALTH_CACHE_SECONDS = 60.0
 
 
@@ -21,8 +18,76 @@ class BackendNotFoundError(KeyError):
     pass
 
 
+class _FixedModelOpenHandsBackend(OpenHandsBackend):
+    """OpenHands adapter whose model cannot drift with process environment."""
+
+    def __init__(self, settings: Settings, model: str):
+        super().__init__(settings)
+        self._fixed_model = model
+
+    def _model(self) -> str | None:
+        return self._fixed_model
+
+
+class _ExecutionModelProxy:
+    """Bind AgentRequest.model to a provider instance for one execution.
+
+    The normal backends remain unaware of SceneWorks profile routing. This proxy
+    constructs an execution-scoped provider instance when a concrete model was
+    persisted on the Execution row, and keeps that exact instance available to
+    cancellation while the run is active.
+    """
+
+    def __init__(self, base: AgentBackend, settings: Settings):
+        self._base = base
+        self._settings = settings
+        self._active: dict[str, AgentBackend] = {}
+        self.key = base.key
+        self.label = base.label
+
+    def _target(self, model: str | None) -> AgentBackend:
+        if not model:
+            return self._base
+        if isinstance(self._base, GeminiACPBackend):
+            env = dict(self._settings.gemini_environment)
+            env["GEMINI_MODEL"] = model
+            routed = self._settings.model_copy(
+                deep=True,
+                update={"gemini_model": model, "gemini_environment": env},
+            )
+            return GeminiACPBackend(routed)
+        if isinstance(self._base, OpenHandsBackend):
+            routed = self._settings.model_copy(
+                deep=True,
+                update={"openhands_model": model},
+            )
+            return _FixedModelOpenHandsBackend(routed, model)
+        return self._base
+
+    async def run(
+        self,
+        request: AgentRequest,
+        workspace: Workspace,
+        event_sink: AgentEventSink,
+    ) -> AgentResult:
+        target = self._target(request.model)
+        self._active[request.execution_id] = target
+        try:
+            return await target.run(request, workspace, event_sink)
+        finally:
+            self._active.pop(request.execution_id, None)
+
+    async def cancel(self, execution_id: str) -> None:
+        target = self._active.get(execution_id, self._base)
+        await target.cancel(execution_id)
+
+    async def health(self) -> BackendHealth:
+        return await self._base.health()
+
+
 class BackendRegistry:
     def __init__(self, settings: Settings, include_fake: bool = True, include_openhands: bool = True):
+        self._settings = settings
         self._backends: dict[str, AgentBackend] = {
             "gemini_acp": GeminiACPBackend(settings),
         }
@@ -30,45 +95,41 @@ class BackendRegistry:
             self._backends["openhands"] = OpenHandsBackend(settings)
         if include_fake:
             self._backends["fake"] = FakeAgentBackend()
+        self._proxies: dict[str, AgentBackend] = {}
         self._health_cache: list[BackendHealth] | None = None
         self._health_checked_at = 0.0
         self._health_lock = asyncio.Lock()
         self._refresh_task: asyncio.Task | None = None
 
     def register(self, key: str, backend: AgentBackend) -> None:
-        """Replace a registered backend.
-
-        Used by tests and by the qualification harness to install a scripted
-        FakeAgentBackend, so neither has to reach into the private dict.
-        """
+        """Replace a registered backend, primarily for tests/qualification."""
         self._backends[key] = backend
-        # A swapped backend invalidates any cached health for it.
+        self._proxies.pop(key, None)
         self._health_cache = None
         self._health_checked_at = 0.0
 
     def get(self, key: str) -> AgentBackend:
         try:
-            return self._backends[key]
+            backend = self._backends[key]
         except KeyError:
             raise BackendNotFoundError(
                 f"backend {key!r} is not registered "
                 f"(available: {', '.join(sorted(self._backends))})"
             ) from None
 
+        if not isinstance(backend, (GeminiACPBackend, OpenHandsBackend)):
+            return backend
+        proxy = self._proxies.get(key)
+        if proxy is None:
+            proxy = _ExecutionModelProxy(backend, self._settings)
+            self._proxies[key] = proxy
+        return proxy
+
     def keys(self) -> list[str]:
         return list(self._backends.keys())
 
     async def health_all(self, force: bool = False) -> list[BackendHealth]:
-        """Health of every backend, served stale-while-revalidate.
-
-        A probe shells out to the agent CLI and can take tens of seconds, so a
-        request must never wait on one. Cached results are returned
-        immediately and refreshed in the background when stale. When the cache
-        is cold (first request or after a restart) and a probe is already
-        running, a placeholder "probing" status is returned immediately;
-        the real result appears on the next request. Pass force=True to
-        await a fresh probe regardless.
-        """
+        """Health of every backend, served stale-while-revalidate."""
         if force:
             return await self._probe()
 
@@ -78,7 +139,6 @@ class BackendRegistry:
                 self._schedule_refresh()
             return cached
 
-        # Cold cache: if a probe is already running, return placeholders.
         if self._health_lock.locked():
             self._schedule_refresh()
             return [
@@ -91,9 +151,6 @@ class BackendRegistry:
                 for key, backend in self._backends.items()
             ]
 
-        # No probe running: schedule one in the background and return
-        # placeholders immediately. The warm-up task or the next request
-        # will populate the cache.
         self._schedule_refresh()
         return [
             BackendHealth(
@@ -115,7 +172,7 @@ class BackendRegistry:
             await self._probe()
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - a failed probe must not surface here
+        except Exception:  # noqa: BLE001
             pass
 
     async def _probe(self) -> list[BackendHealth]:
