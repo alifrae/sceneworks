@@ -11,6 +11,20 @@ InitiativeStatus = Literal["planned", "active", "blocked", "completed", "cancell
 WorkPackageStatus = Literal["planned", "ready", "active", "blocked", "completed", "cancelled"]
 
 
+class RoleCapabilityOverlay(BaseModel):
+    """Skills, domains, and optional methods active for one role scope."""
+
+    skills: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    methods: list[str] = Field(default_factory=list)
+
+
+class CapabilityProfile(RoleCapabilityOverlay):
+    """Project/task capability overlay with optional per-role specialization."""
+
+    roles: dict[str, RoleCapabilityOverlay] = Field(default_factory=dict)
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
@@ -19,6 +33,7 @@ class ProjectCreate(BaseModel):
     architecture_context_paths: list[str] = []
     test_commands: list[str] = []
     build_commands: list[str] = []
+    capability_profile: CapabilityProfile = Field(default_factory=CapabilityProfile)
     worktree_root_override: str | None = None
 
 
@@ -29,6 +44,7 @@ class ProjectUpdate(BaseModel):
     architecture_context_paths: list[str] | None = None
     test_commands: list[str] | None = None
     build_commands: list[str] | None = None
+    capability_profile: CapabilityProfile | None = None
     worktree_root_override: str | None = None
 
 
@@ -44,6 +60,7 @@ class ProjectOut(BaseModel):
     architecture_context_paths: list[Any]
     test_commands: list[Any]
     build_commands: list[Any]
+    capability_profile: dict[str, Any] = {}
     worktree_root_override: str | None
     created_at: datetime
     updated_at: datetime
@@ -146,6 +163,7 @@ class TaskCreate(BaseModel):
     description: str = ""
     priority: Literal["low", "medium", "high"] = "medium"
     engineering_contract: EngineeringContract = Field(default_factory=EngineeringContract)
+    capability_requirements: CapabilityProfile = Field(default_factory=CapabilityProfile)
 
 
 class TaskOut(BaseModel):
@@ -168,6 +186,8 @@ class TaskOut(BaseModel):
     implementation_summary: str | None
     review_result: str | None
     engineering_contract: dict[str, Any] = {}
+    capability_requirements: dict[str, Any] = {}
+    advisory_results: dict[str, Any] = {}
     changed_files: list[str] = []
     created_at: datetime
     updated_at: datetime
@@ -256,6 +276,8 @@ class RoleOut(BaseModel):
     can_modify_source: bool
     can_commit: bool
     responsibilities: list[str]
+    persona: str = ""
+    core_capabilities: list[str] = []
 
 
 class CompanyAskRequest(BaseModel):

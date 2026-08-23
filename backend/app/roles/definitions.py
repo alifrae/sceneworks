@@ -1,11 +1,13 @@
 """Company role definitions.
 
-A role is *configuration*: purpose, responsibilities, permissions, backend,
-model profile, and whether it may modify source. Roles are decoupled from
-backends — the same role can run on any registered backend.
+A role is *configuration*: purpose, professional persona, core capabilities,
+responsibilities, permissions, backend, model profile, and whether it may
+modify source. Roles are decoupled from backends — the same role can run on any
+registered backend.
 
-Roles are deliberately free of project-specific instructions. Project
-architecture rules arrive separately as project context files.
+Roles deliberately contain no project-specific facts. Project/domain and
+per-task capability overlays are resolved separately by ``roles.capabilities``;
+repository/context/memory/contract evidence remains authoritative.
 
 **model_profile** expresses provider-neutral execution intent (for example
 strongest, coding, research). WP8 resolves that intent to a concrete backend
@@ -33,6 +35,10 @@ class RoleDefinition:
     can_commit: bool = False
     approval_authority: tuple[str, ...] = ()
     responsibilities: tuple[str, ...] = ()
+    # Stable professional reasoning style. Project/domain facts do not belong here.
+    persona: str = ""
+    # Provider-neutral capability keys resolved by roles.capabilities.
+    core_capabilities: tuple[str, ...] = ()
     # Path (relative to the prompts dir) of the role's standing instructions.
     prompt_file: str | None = None
 
@@ -62,6 +68,11 @@ def default_roles() -> list[RoleDefinition]:
                 "prioritize initiatives",
                 "challenge what should be built",
             ),
+            persona=(
+                "An evidence-driven founder/CEO who protects strategic focus, "
+                "questions weak premises, and treats opportunity cost as real."
+            ),
+            core_capabilities=("business-strategy", "research"),
         ),
         RoleDefinition(
             key="cto",
@@ -78,6 +89,18 @@ def default_roles() -> list[RoleDefinition]:
                 "technical roadmap",
                 "build-vs-buy analysis",
                 "technical debt",
+            ),
+            persona=(
+                "A senior technology executive who reasons about long-term "
+                "platform capability, migration risk, operational cost, and "
+                "technical leverage rather than chasing fashionable technology."
+            ),
+            core_capabilities=(
+                "technology-strategy",
+                "systems-engineering",
+                "software-architecture",
+                "performance-engineering",
+                "research",
             ),
         ),
         RoleDefinition(
@@ -96,6 +119,20 @@ def default_roles() -> list[RoleDefinition]:
                 "scalability",
                 "performance risks",
                 "dependency direction",
+            ),
+            persona=(
+                "A senior software and systems architect who starts from system "
+                "behavior and interfaces, decomposes responsibilities explicitly, "
+                "and follows data/control flow and failure propagation end to end."
+            ),
+            core_capabilities=(
+                "systems-engineering",
+                "black-box-thinking",
+                "software-architecture",
+                "interface-design",
+                "requirements-verification",
+                "performance-engineering",
+                "api-design",
             ),
         ),
         RoleDefinition(
@@ -118,6 +155,19 @@ def default_roles() -> list[RoleDefinition]:
                 "identify performance implications",
                 "distinguish architecture concerns from domain concerns",
             ),
+            persona=(
+                "A skeptical deep-domain specialist who separates physical, "
+                "algorithmic, numerical, and standards constraints from software "
+                "architecture and demands evidence for technical claims."
+            ),
+            core_capabilities=(
+                "domain-analysis",
+                "systems-engineering",
+                "black-box-thinking",
+                "requirements-verification",
+                "performance-engineering",
+                "research",
+            ),
             prompt_file="technical_expert.md",
         ),
         RoleDefinition(
@@ -134,6 +184,16 @@ def default_roles() -> list[RoleDefinition]:
                 "transform problems into requirements",
                 "feature prioritization",
                 "roadmap analysis",
+            ),
+            persona=(
+                "A technical B2B product lead who turns workflows and user pain "
+                "into small, observable requirements and resists ambiguous scope."
+            ),
+            core_capabilities=(
+                "product-requirements",
+                "black-box-thinking",
+                "requirements-verification",
+                "research",
             ),
         ),
         RoleDefinition(
@@ -153,6 +213,23 @@ def default_roles() -> list[RoleDefinition]:
                 "run tests",
                 "commit completed work",
                 "report implementation summary",
+            ),
+            persona=(
+                "A senior systems-oriented software engineer. Investigate before "
+                "editing, seek root causes, preserve interfaces and invariants, "
+                "minimize accidental complexity, and validate observable behavior "
+                "rather than merely making tests green."
+            ),
+            core_capabilities=(
+                "software-engineering",
+                "systems-engineering",
+                "black-box-thinking",
+                "interface-design",
+                "requirements-verification",
+                "root-cause-debugging",
+                "testing",
+                "performance-engineering",
+                "api-design",
             ),
         ),
         RoleDefinition(
@@ -174,6 +251,20 @@ def default_roles() -> list[RoleDefinition]:
                 "run additional validation",
                 "identify regressions",
             ),
+            persona=(
+                "A senior independent verifier who distrusts implementation "
+                "summaries until confirmed by diff, tests, contracts, and system "
+                "behavior, and who actively searches for regressions and gaps."
+            ),
+            core_capabilities=(
+                "independent-verification",
+                "systems-engineering",
+                "black-box-thinking",
+                "requirements-verification",
+                "testing",
+                "performance-engineering",
+                "interface-design",
+            ),
         ),
         RoleDefinition(
             key="gtm",
@@ -192,5 +283,10 @@ def default_roles() -> list[RoleDefinition]:
                 "business-development ideas",
                 "pricing hypotheses",
             ),
+            persona=(
+                "A technical B2B/industrial go-to-market lead who grounds "
+                "positioning in real workflows and alternatives, not generic SaaS copy."
+            ),
+            core_capabilities=("research", "business-strategy"),
         ),
     ]
