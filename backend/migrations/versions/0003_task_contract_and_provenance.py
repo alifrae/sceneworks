@@ -5,7 +5,9 @@ files a completed implementation actually touched to be queryable without
 re-running Git against a possibly cleaned-up worktree.
 
 Both columns are additive JSON values with empty defaults so existing tasks keep
-exactly their previous behaviour.
+exactly their previous behaviour. The upgrade checks the existing table shape
+because SceneWorks adopts pre-Alembic databases by stamping a baseline; test and
+field databases may legitimately contain an additive column already.
 
 Revision ID: 0003
 Revises: 0002
@@ -24,27 +26,35 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "tasks",
-        sa.Column(
-            "engineering_contract",
-            sa.JSON(),
-            nullable=False,
-            server_default=sa.text("'{}'"),
-        ),
-    )
-    op.add_column(
-        "tasks",
-        sa.Column(
-            "changed_files",
-            sa.JSON(),
-            nullable=False,
-            server_default=sa.text("'[]'"),
-        ),
-    )
+    bind = op.get_bind()
+    existing = {column["name"] for column in sa.inspect(bind).get_columns("tasks")}
+    if "engineering_contract" not in existing:
+        op.add_column(
+            "tasks",
+            sa.Column(
+                "engineering_contract",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            ),
+        )
+    if "changed_files" not in existing:
+        op.add_column(
+            "tasks",
+            sa.Column(
+                "changed_files",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'[]'"),
+            ),
+        )
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    existing = {column["name"] for column in sa.inspect(bind).get_columns("tasks")}
     with op.batch_alter_table("tasks") as batch:
-        batch.drop_column("changed_files")
-        batch.drop_column("engineering_contract")
+        if "changed_files" in existing:
+            batch.drop_column("changed_files")
+        if "engineering_contract" in existing:
+            batch.drop_column("engineering_contract")
