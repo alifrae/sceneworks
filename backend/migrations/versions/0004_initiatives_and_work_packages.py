@@ -51,15 +51,17 @@ def upgrade() -> None:
     )
     op.create_index("ix_work_packages_initiative_id", "work_packages", ["initiative_id"])
 
-    op.add_column("tasks", sa.Column("work_package_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_tasks_work_package_id",
-        "tasks",
-        "work_packages",
-        ["work_package_id"],
-        ["id"],
-    )
-    op.create_index("ix_tasks_work_package_id", "tasks", ["work_package_id"])
+    # SQLite cannot ALTER TABLE ADD CONSTRAINT directly. Batch mode rebuilds
+    # the table while preserving task rows and also works on other backends.
+    with op.batch_alter_table("tasks") as batch:
+        batch.add_column(sa.Column("work_package_id", sa.Integer(), nullable=True))
+        batch.create_foreign_key(
+            "fk_tasks_work_package_id",
+            "work_packages",
+            ["work_package_id"],
+            ["id"],
+        )
+        batch.create_index("ix_tasks_work_package_id", ["work_package_id"])
 
 
 def downgrade() -> None:
