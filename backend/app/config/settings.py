@@ -9,10 +9,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+class ModelProfileRoute(BaseModel):
+    """Concrete execution target for one provider-neutral model profile.
+
+    Both fields are optional: a route may override only the backend and inherit
+    that backend's configured default model, or override only the model while
+    keeping the role's backend. No provider/model identifiers are hard-coded by
+    SceneWorks.
+    """
+
+    backend: str | None = None
+    model: str | None = None
 
 
 class Settings(BaseSettings):
@@ -33,6 +46,13 @@ class Settings(BaseSettings):
     # repository. Relative paths resolve against the backend working directory.
     worktree_root: Path = Path("data/worktrees")
 
+    # Provider-neutral role intent -> concrete backend/model mapping (WP8).
+    # Example environment value:
+    # SCENEWORKS_MODEL_PROFILE_ROUTES='{"strongest":{"backend":"gemini_acp","model":"<model>"}}'
+    # Empty by default: existing role backend + backend default model semantics
+    # remain intact until an operator deliberately configures a route.
+    model_profile_routes: dict[str, ModelProfileRoute] = Field(default_factory=dict)
+
     # Gemini CLI (ACP backend). None -> discover "gemini" on PATH.
     gemini_executable: str | None = None
     gemini_extra_args: list[str] = Field(default_factory=list)
@@ -48,16 +68,9 @@ class Settings(BaseSettings):
 
     # Timeout for a single git command (seconds). Creating a worktree checks
     # out the whole tree, which takes tens of seconds on a typical repository.
-    # Previously set to 900 s to paper over fsmonitor daemon accumulation;
-    # now that fsmonitor is suppressed per-process, 300 s is generous even
-    # for large repositories (~30k files measured ~45 s here).
     git_timeout_seconds: int = 300
 
     # Hard limit for a single agent execution (seconds).
-    # Long enough for an Engineer to iterate on tests and linting inside a
-    # real repository. 5400 s (90 min) covers multi-pass tool-calling loops
-    # on large codebases.  Keep configurable — a small task should never
-    # need this much, and an observer should not assume the UI is frozen.
     execution_timeout_seconds: int = 5400
     # Grace period after cancellation before the engine force-kills (seconds).
     cancel_grace_seconds: int = 15
@@ -81,10 +94,6 @@ class Settings(BaseSettings):
     roles_dir: Path = BACKEND_DIR / "app" / "roles" / "prompts"
 
     # OpenHands backend.
-    # `openhands_url` is the *Agent Server*; `openhands_base_url` is the *LLM*
-    # endpoint (any OpenAI-compatible server: LM Studio, vLLM, Ollama). They are
-    # different services and conflating them made a local deterministic
-    # validation impossible — see docs/backends.md.
     openhands_url: str | None = None
     openhands_base_url: str | None = None
     openhands_executable: str | None = None
@@ -94,12 +103,8 @@ class Settings(BaseSettings):
     openhands_model: str | None = None
     openhands_api_key: str | None = None
     #: Force a mode instead of resolving one: local | remote | http | cli.
-    #: Leave unset for automatic resolution (see OpenHandsBackend.resolve_mode).
     openhands_mode: str | None = None
-    #: Upper bound on agent turns per execution. The SDK default is 500, which a
-    #: model that never concludes will happily consume — an execution then runs
-    #: until the hard timeout with nothing to show. 40 is generous for the
-    #: single-task scope SceneWorks gives a role.
+    #: Upper bound on agent turns per execution.
     openhands_max_iterations: int = 40
     openhands_environment: dict[str, str] = Field(default_factory=dict)
 
