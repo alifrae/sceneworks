@@ -56,11 +56,29 @@ class RepoStatusOut(BaseModel):
     active_tasks: int = 0
 
 
+class EngineeringContract(BaseModel):
+    """Structured, checkable obligations for one engineering task (WP4).
+
+    Empty lists preserve pre-WP4 behaviour. The contract is deliberately
+    provider-independent and is rendered identically for every workflow role.
+    """
+
+    required_behavior: list[str] = Field(default_factory=list)
+    allowed_scope: list[str] = Field(default_factory=list)
+    forbidden_changes: list[str] = Field(default_factory=list)
+    architecture_constraints: list[str] = Field(default_factory=list)
+    required_tests: list[str] = Field(default_factory=list)
+    performance_requirements: list[str] = Field(default_factory=list)
+    compatibility_requirements: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+
+
 class TaskCreate(BaseModel):
     project_id: int
     title: str = Field(min_length=1, max_length=300)
     description: str = ""
     priority: Literal["low", "medium", "high"] = "medium"
+    engineering_contract: EngineeringContract = Field(default_factory=EngineeringContract)
 
 
 class TaskOut(BaseModel):
@@ -81,11 +99,31 @@ class TaskOut(BaseModel):
     architecture_result: str | None
     implementation_summary: str | None
     review_result: str | None
+    engineering_contract: dict[str, Any] = {}
+    changed_files: list[str] = []
     created_at: datetime
     updated_at: datetime
     project_name: str = ""
     allowed_actions: list[str] = []
     execution_status: str | None = None
+
+
+class TaskProvenanceOut(BaseModel):
+    task_id: int
+    project_id: int
+    title: str
+    status: str
+    base_commit: str | None
+    result_commit: str | None
+    task_branch: str | None
+    changed_files: list[str]
+    source_memory_ids: list[int] = []
+
+
+class ProjectProvenanceOut(BaseModel):
+    project_id: int
+    path: str | None = None
+    tasks: list[TaskProvenanceOut] = []
 
 
 class DiffOut(BaseModel):
