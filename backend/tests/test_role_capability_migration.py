@@ -18,10 +18,6 @@ def _settings(db, tmp_path) -> Settings:
     )
 
 
-def test_wp10_is_current_schema_head():
-    assert head_revision() == "0006"
-
-
 def test_0005_database_upgrades_without_fabricating_capabilities_or_evidence(tmp_path):
     db = tmp_path / "pre-wp10.db"
     settings = _settings(db, tmp_path)
@@ -48,7 +44,8 @@ def test_0005_database_upgrades_without_fabricating_capabilities_or_evidence(tmp
         con.close()
 
     state = ensure_schema_sync(settings)
-    assert state.revision_after == "0006"
+    assert state.revision_after == head_revision()
+    assert state.revision_after != "0005"
 
     con = sqlite3.connect(db)
     try:
