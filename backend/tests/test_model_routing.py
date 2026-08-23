@@ -92,7 +92,6 @@ async def test_service_execution_persists_resolved_backend_and_model(context):
     assert execution.backend == "fake"
     assert execution.model_name == "persisted-model"
 
-    # Changing configuration after queue time must not rewrite the execution.
     context.settings.model_profile_routes["strongest"] = ModelProfileRoute(
         backend="gemini_acp", model="later-model"
     )
@@ -101,6 +100,41 @@ async def test_service_execution_persists_resolved_backend_and_model(context):
         assert persisted is not None
         assert persisted.backend == "fake"
         assert persisted.model_name == "persisted-model"
+
+
+async def test_execution_api_exposes_resolved_model(client, context):
+    context.settings.model_profile_routes = {
+        "strongest": ModelProfileRoute(backend="fake", model="api-model")
+    }
+    execution = await context.workflow.create_execution(
+        task=None,
+        project=None,
+        role=context.roles.effective("architect"),
+        workspace={},
+        system_prompt="system",
+        user_prompt="user",
+    )
+
+    response = await client.get(f"/api/executions/{execution.id}")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model_profile"] == "strongest"
+    assert payload["backend"] == "fake"
+    assert payload["model_name"] == "api-model"
+
+
+async def test_settings_api_roundtrips_model_profile_routes(client):
+    route = {"coding": {"backend": "fake", "model": "coding-model"}}
+    response = await client.patch(
+        "/api/settings",
+        json={"model_profile_routes": route},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["model_profile_routes"] == route
+
+    response = await client.get("/api/settings")
+    assert response.status_code == 200
+    assert response.json()["model_profile_routes"] == route
 
 
 async def test_engine_transports_persisted_model_to_backend_request(context):
@@ -150,3 +184,8 @@ async def test_engine_transports_persisted_model_to_backend_request(context):
     assert capture.request is not None
     assert capture.request.model_profile == "coding"
     assert capture.request.model == "immutable-model"
+
+    events = await context.event_store.list_for_execution(execution.id)
+    started = next(event for event in events if event.type == "execution.started")
+    assert started.payload["model_profile"] == "coding"
+    assert started.payload["model"] == "immutable-model"
