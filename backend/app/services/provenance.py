@@ -1,24 +1,58 @@
 """Queryable Git provenance over persisted task evidence (WP6).
 
-Git remains authoritative for what changed. Workflow completion snapshots the
-changed-file list from Git onto the task so provenance survives worktree cleanup.
-This service only queries persisted evidence; it never infers changes from agent
-summaries.
+Git remains authoritative for what changed. The service snapshots changed files
+from the task worktree before terminal human actions so provenance survives
+worktree cleanup. It never infers changes from agent summaries.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.git.workspace import GitWorktreeService
 from app.models import ProjectMemory, Task
 
 
 class ProvenanceService:
-    def __init__(self, session_factory: async_sessionmaker):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        git: GitWorktreeService,
+    ):
         self._session_factory = session_factory
+        self._git = git
+
+    async def capture_task_changes(self, task_id: int) -> list[str]:
+        """Persist Git-observed changed paths for a task if evidence is available."""
+        async with self._session_factory() as session:
+            task = await session.get(Task, task_id)
+            if task is None:
+                return []
+            worktree_path = task.worktree_path
+            base_commit = task.base_commit
+
+        if not worktree_path or not base_commit:
+            return []
+        worktree = Path(worktree_path)
+        if not worktree.is_dir():
+            return []
+
+        changed = await self._git.changed_files(worktree, base_commit)
+        async with self._session_factory() as session:
+            task = await session.get(Task, task_id)
+            if task is None:
+                return changed
+            task.changed_files = changed
+            await session.commit()
+        return changed
 
     async def task(self, task_id: int) -> dict | None:
+        # Opportunistically persist evidence while the worktree still exists.
+        # Terminal task actions also call capture explicitly before state change.
+        await self.capture_task_changes(task_id)
         async with self._session_factory() as session:
             task = await session.get(Task, task_id)
             if task is None:
