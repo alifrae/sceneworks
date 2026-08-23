@@ -1,4 +1,4 @@
-﻿"""Company role definitions.
+"""Company role definitions.
 
 A role is *configuration*: purpose, responsibilities, permissions, backend,
 model profile, and whether it may modify source. Roles are decoupled from
@@ -7,12 +7,11 @@ backends — the same role can run on any registered backend.
 Roles are deliberately free of project-specific instructions. Project
 architecture rules arrive separately as project context files.
 
-**model_profile**: Guidance-only metadata indicating the role's
-recommended reasoning depth (strongest, coding, research). At present
-model_profile is NOT bound to backend model selection — the actual model
-is controlled by backend configuration (SCENEWORKS_GEMINI_MODEL,
-SCENEWORKS_OPENHANDS_MODEL, or backend defaults). A profile→model mapping
-is a candidate for V3.
+**model_profile** expresses provider-neutral execution intent (for example
+strongest, coding, research). WP8 resolves that intent to a concrete backend
+and model when an Execution is created, then persists the resolved target so
+queued/restarted work cannot drift with later configuration changes. Concrete
+provider model identifiers belong in settings, not role definitions.
 """
 
 from __future__ import annotations
