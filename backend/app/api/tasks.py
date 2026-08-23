@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_context
 from app.context import AppContext
 from app.domain.task_states import TaskStateMachine, TaskStatus
-from app.models import Execution, Project, Task
+from app.models import Execution, Initiative, Project, Task, WorkPackage
 from app.schemas import (
     ActionRequest,
     DiffOut,
@@ -96,8 +96,20 @@ async def create_task(body: TaskCreate, ctx: AppContext = Depends(get_context)) 
         project = await session.get(Project, body.project_id)
         if project is None:
             raise HTTPException(404, "project not found")
+
+        if body.work_package_id is not None:
+            work_package = await session.get(WorkPackage, body.work_package_id)
+            if work_package is None:
+                raise HTTPException(404, "work package not found")
+            initiative = await session.get(Initiative, work_package.initiative_id)
+            if initiative is None or initiative.project_id != body.project_id:
+                raise HTTPException(
+                    400, "work package belongs to a different project"
+                )
+
         task = Task(
             project_id=body.project_id,
+            work_package_id=body.work_package_id,
             title=body.title,
             description=body.description,
             priority=body.priority,
@@ -125,12 +137,7 @@ async def replace_engineering_contract(
     body: EngineeringContract,
     ctx: AppContext = Depends(get_context),
 ) -> TaskOut:
-    """Replace the task's binding contract before workflow execution starts.
-
-    Once architecture starts, the contract has already entered agent context.
-    Mutating it then would make the stored analysis and later review refer to
-    different requirements, so changes fail closed rather than silently drift.
-    """
+    """Replace the task's binding contract before workflow execution starts."""
     async with ctx.engine_factory() as session:
         task = await session.get(Task, task_id)
         if task is None:
