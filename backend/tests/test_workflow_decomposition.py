@@ -5,12 +5,14 @@ from __future__ import annotations
 import inspect
 
 from app.workflows import WorkflowManager as PublicWorkflowManager
+from app.workflows.advisory_runtime import WorkflowAdvisoryRuntime
 from app.workflows.control import WorkflowControl
 from app.workflows.manager import WorkflowManager as GraphWorkflowManager
 from app.workflows.orchestrator import WorkflowManager as OrchestratedWorkflowManager
 from app.workflows.recovery import WorkflowRecovery
 from app.workflows.role_runtime import WorkflowRoleRuntime
 from app.workflows.runtime import WorkflowRuntime
+import app.workflows.advisory_runtime as advisory_runtime_module
 import app.workflows.role_runtime as role_runtime_module
 import app.workflows.runtime as runtime_module
 
@@ -22,9 +24,15 @@ def test_public_workflow_manager_is_the_decomposed_orchestrator():
 
 
 def test_non_graph_runtimes_have_no_langgraph_dependency():
-    """Persistence and role execution mechanics remain framework-neutral."""
-    assert "langgraph" not in inspect.getsource(runtime_module).lower()
-    assert "langgraph" not in inspect.getsource(role_runtime_module).lower()
+    """Operational runtimes must remain independent of LangGraph imports."""
+    for module in (
+        runtime_module,
+        role_runtime_module,
+        advisory_runtime_module,
+    ):
+        source = inspect.getsource(module)
+        assert "from langgraph" not in source
+        assert "import langgraph" not in source
 
 
 async def test_application_context_wires_wp7_components(context):
@@ -32,6 +40,7 @@ async def test_application_context_wires_wp7_components(context):
     assert type(manager) is OrchestratedWorkflowManager
     assert isinstance(manager._runtime, WorkflowRuntime)
     assert isinstance(manager._roles_runtime, WorkflowRoleRuntime)
+    assert isinstance(manager._advisory_runtime, WorkflowAdvisoryRuntime)
     assert isinstance(manager._control, WorkflowControl)
     assert isinstance(manager._recovery, WorkflowRecovery)
     assert context.execution_engine.on_execution_finished == manager.on_execution_finished
