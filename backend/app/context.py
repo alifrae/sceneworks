@@ -27,7 +27,7 @@ from app.services.memory import MemoryService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
 from app.services.workflow import TaskWorkflowService
-from app.workflows.manager import WorkflowManager
+from app.workflows import WorkflowManager
 
 logger = logging.getLogger("sceneworks")
 
