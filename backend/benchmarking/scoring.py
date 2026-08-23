@@ -8,8 +8,15 @@ review quality is intentionally not converted into a fake numeric score.
 from __future__ import annotations
 
 import fnmatch
+import statistics
 
-from benchmarking.models import BenchmarkTask, PairComparison, TrialResult, TrialVerdict
+from benchmarking.models import (
+    BenchmarkTask,
+    ModeAggregate,
+    PairComparison,
+    TrialResult,
+    TrialVerdict,
+)
 
 
 UNSUPPORTED_PRODUCTIVITY_METRICS: dict[str, str] = {
@@ -140,3 +147,45 @@ def build_comparisons(trials: list[TrialResult]) -> list[PairComparison]:
         compare_pair(pair.get("sceneworks"), pair.get("direct"))
         for _, pair in sorted(pairs.items())
     ]
+
+
+def build_aggregates(trials: list[TrialResult]) -> list[ModeAggregate]:
+    aggregates: list[ModeAggregate] = []
+    for mode in ("sceneworks", "direct"):
+        selected = [trial for trial in trials if trial.mode == mode]
+        if not selected:
+            continue
+        measured = [trial for trial in selected if trial.verdict is not TrialVerdict.BLOCKED]
+        passed = [trial for trial in measured if trial.verdict is TrialVerdict.PASS]
+        success_rate = round(len(passed) / len(measured), 4) if measured else None
+        median_success = (
+            round(statistics.median(t.duration_seconds for t in passed), 3)
+            if passed
+            else None
+        )
+        mean_human = (
+            round(statistics.mean(t.human_interventions for t in measured), 3)
+            if measured
+            else None
+        )
+        mean_executions = (
+            round(statistics.mean(t.agent_executions for t in measured), 3)
+            if measured
+            else None
+        )
+        aggregates.append(
+            ModeAggregate(
+                mode=mode,
+                trial_count=len(selected),
+                measured_trial_count=len(measured),
+                pass_count=len(passed),
+                fail_count=sum(t.verdict is TrialVerdict.FAIL for t in selected),
+                blocked_count=sum(t.verdict is TrialVerdict.BLOCKED for t in selected),
+                success_rate=success_rate,
+                median_success_seconds=median_success,
+                mean_human_interventions=mean_human,
+                mean_agent_executions=mean_executions,
+                backend_failures=sum(t.backend_failures for t in measured),
+            )
+        )
+    return aggregates
