@@ -87,6 +87,7 @@ async def create_project(body: ProjectCreate, ctx: AppContext = Depends(get_cont
             architecture_context_paths=body.architecture_context_paths,
             test_commands=body.test_commands,
             build_commands=body.build_commands,
+            capability_profile=body.capability_profile.model_dump(),
             worktree_root_override=body.worktree_root_override,
         )
         session.add(project)
