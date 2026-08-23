@@ -239,8 +239,10 @@ async def task_action(
         elif action == "start-review":
             await wm.start_review(task_id)
         elif action == "accept":
+            await ctx.provenance.capture_task_changes(task_id)
             await wm.accept(task_id)
         elif action == "reject":
+            await ctx.provenance.capture_task_changes(task_id)
             await wm.reject(task_id, body.reason)
         elif action == "send-back":
             await wm.send_back_to_engineer(task_id, body.notes)
@@ -249,6 +251,7 @@ async def task_action(
         elif action == "retry":
             await wm.retry(task_id)
         elif action == "cleanup-worktree":
+            await ctx.provenance.capture_task_changes(task_id)
             await wm.cleanup_worktree(task_id)
         else:
             raise HTTPException(404, f"unknown action: {action}")
