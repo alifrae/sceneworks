@@ -75,6 +75,13 @@ class Task(Base):
     architecture_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     implementation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # WP4: explicit task obligations shared by Architect, Engineer and Reviewer.
+    # Kept as a JSON object so adding contract dimensions does not force a schema
+    # migration; validation and normalisation live in the Pydantic API schema.
+    engineering_contract: Mapped[dict] = mapped_column(JSON, default=dict)
+    # WP6: authoritative repo-relative paths observed from Git at implementation
+    # completion. Never populated from an agent-written summary.
+    changed_files: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
