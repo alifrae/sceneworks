@@ -115,6 +115,7 @@ export interface Execution {
   role: string;
   backend: string;
   model_profile: string | null;
+  model_name: string | null;
   status: string;
   workspace: Record<string, unknown>;
   prompt_preview: string | null;
@@ -166,11 +167,17 @@ export interface Artifact {
   created_at: string;
 }
 
+export interface ModelProfileRoute {
+  backend: string | null;
+  model: string | null;
+}
+
 export interface Settings {
   worktree_root: string;
   gemini_executable: string | null;
   gemini_model: string | null;
   gemini_extra_args: string[];
+  model_profile_routes: Record<string, ModelProfileRoute>;
   execution_timeout_seconds: number;
   cancel_grace_seconds: number;
   default_backend: string;
