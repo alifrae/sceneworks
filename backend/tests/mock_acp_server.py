@@ -13,6 +13,8 @@ Behavior is driven by environment variables:
 - MOCK_ACP_EXECUTE_MODE=1: issue a session/request_permission with kind="execute"
 - MOCK_ACP_UNKNOWN_METHOD=1: issue an unknown client method
 - MOCK_ACP_DENY_MODE=1: issue a session/request_permission with only reject options
+- MOCK_ACP_HOLD_PROMPT=1: acknowledge prompt arrival with an update but do not
+  complete it; used to test cancellation without a timing race
 - MOCK_ACP_STOP=refusal|max_tokens|end_turn: stopReason returned
 """
 
@@ -42,13 +44,13 @@ def main() -> int:
     execute_mode = os.environ.get("MOCK_ACP_EXECUTE_MODE") == "1"
     unknown_mode = os.environ.get("MOCK_ACP_UNKNOWN_METHOD") == "1"
     deny_mode = os.environ.get("MOCK_ACP_DENY_MODE") == "1"
+    hold_prompt = os.environ.get("MOCK_ACP_HOLD_PROMPT") == "1"
     stop = os.environ.get("MOCK_ACP_STOP", "end_turn")
     request_id = 9000
     session_id = "mock-session-1"
     pending_client_requests: dict[int, str] = {}
     prompt_request_id = None
     sent_chunks = False
-    countdown = 0
 
     def send_completion() -> None:
         """Send the remaining chunks and the prompt response (end of turn)."""
@@ -160,9 +162,6 @@ def main() -> int:
                         }
                     )
             if pending == "terminal":
-                # Simulate creating a realish terminal; the backend needs a pid.
-                # We send back a terminalId; the actual subprocess only matters
-                # if the test then reads its output.  We don't.
                 send(
                     {
                         "jsonrpc": "2.0",
@@ -219,6 +218,25 @@ def main() -> int:
                         "jsonrpc": "2.0",
                         "id": message_id,
                         "result": {"stopReason": "refusal", "usage": {"inputTokens": 1, "outputTokens": 1}},
+                    }
+                )
+                continue
+            if hold_prompt:
+                # Signal that the request has definitely reached the server,
+                # then leave it pending until SceneWorks sends session/cancel.
+                # This gives the cancellation test a deterministic in-flight
+                # synchronization point instead of relying on sleep timing.
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": "MOCK_PROMPT_HELD"},
+                            },
+                        },
                     }
                 )
                 continue
