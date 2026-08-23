@@ -6,6 +6,7 @@ FakeAgentBackend (settings.default_backend="fake").
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,20 @@ from app.context import build_context
 from app.main import create_app
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def deterministic_acp_cancellation(request, monkeypatch):
+    """Keep the mock ACP prompt in-flight for the cancellation regression test.
+
+    The old test relied on a fixed 100 ms sleep. Fast Linux runners could
+    complete the mock prompt before cancellation arrived, turning a valid
+    cancellation test into a scheduler race. The mock now has an explicit
+    hold mode; activate it only for that scenario so the test exercises a
+    genuinely in-flight request without slowing production code or the suite.
+    """
+    if request.node.name == "test_mock_acp_cancellation":
+        monkeypatch.setenv("MOCK_ACP_HOLD_PROMPT", "1")
 
 
 @pytest.fixture

@@ -28,6 +28,7 @@ from app.api import (
     dashboard_router,
     events_router,
     executions_router,
+    initiatives_router,
     memory_router,
     projects_router,
     roles_router,
@@ -85,11 +86,6 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        # The API binds to localhost only, so any local page is a trusted
-        # caller regardless of which port the dev server picked. Without this,
-        # `next dev` falling back to 3001 (port busy) or the user opening
-        # http://127.0.0.1:3000 made every browser request fail CORS and
-        # surface as "TypeError: Failed to fetch".
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
@@ -99,13 +95,6 @@ def create_app(settings=None, context=None) -> FastAPI:
 
     @app.middleware("http")
     async def request_diagnostics(request: Request, call_next):
-        """Attach low-noise correlation/timing headers to API responses.
-
-        The browser API client sends an X-Request-ID and records the matching
-        client duration. Keeping this as response metadata makes slow paths
-        diagnosable in development without adding per-request production log
-        noise or buffering SSE responses.
-        """
         correlation_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         started = time.perf_counter()
         response = await call_next(request)
@@ -113,10 +102,11 @@ def create_app(settings=None, context=None) -> FastAPI:
         response.headers["X-Request-ID"] = correlation_id
         response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.1f}"
         return response
+
     if context is not None:
-        # Test helper: context supplied directly, lifespan skipped.
         app.state.context = context
     app.include_router(projects_router)
+    app.include_router(initiatives_router)
     app.include_router(tasks_router)
     app.include_router(executions_router)
     app.include_router(company_router)
@@ -144,10 +134,8 @@ app = create_app()
 def main() -> None:
     """Run the API with the port from settings.
 
-    `uv run uvicorn app.main:app` ignores the configured port and binds
-    uvicorn's default 8000, while the frontend targets 8010 — the classic
-    "TypeError: Failed to fetch" footgun. Running the module (`uv run python
-    -m app.main`) makes the server and the web client agree by construction.
+    Running the module keeps the configured backend port and the web client in
+    agreement; invoking uvicorn without a port would otherwise use 8000.
     """
     import uvicorn
 

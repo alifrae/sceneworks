@@ -2,6 +2,7 @@ from app.api.company import router as company_router
 from app.api.dashboard import router as dashboard_router
 from app.api.events import router as events_router
 from app.api.executions import router as executions_router
+from app.api.initiatives import router as initiatives_router
 from app.api.memory import router as memory_router
 from app.api.projects import router as projects_router
 from app.api.settings import backends_router, roles_router, settings_router
@@ -12,6 +13,7 @@ __all__ = [
     "dashboard_router",
     "events_router",
     "executions_router",
+    "initiatives_router",
     "memory_router",
     "projects_router",
     "roles_router",

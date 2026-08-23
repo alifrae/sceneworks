@@ -7,6 +7,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+InitiativeStatus = Literal["planned", "active", "blocked", "completed", "cancelled"]
+WorkPackageStatus = Literal["planned", "ready", "active", "blocked", "completed", "cancelled"]
+
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -56,11 +59,93 @@ class RepoStatusOut(BaseModel):
     active_tasks: int = 0
 
 
+# --- Initiative / work-package hierarchy (WP5) ---
+
+
+class InitiativeCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    objective: str = ""
+    description: str = ""
+
+
+class InitiativeUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    objective: str | None = None
+    description: str | None = None
+    status: InitiativeStatus | None = None
+
+
+class InitiativeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    title: str
+    objective: str
+    description: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    work_package_count: int = 0
+    completed_work_packages: int = 0
+    task_count: int = 0
+
+
+class WorkPackageCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    title: str = Field(min_length=1, max_length=300)
+    description: str = ""
+    sequence: int | None = Field(default=None, ge=0)
+    depends_on: list[int] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+
+
+class WorkPackageUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    status: WorkPackageStatus | None = None
+    sequence: int | None = Field(default=None, ge=0)
+    depends_on: list[int] | None = None
+    acceptance_criteria: list[str] | None = None
+
+
+class WorkPackageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    initiative_id: int
+    key: str
+    title: str
+    description: str
+    status: str
+    sequence: int
+    depends_on: list[int]
+    acceptance_criteria: list[str]
+    created_at: datetime
+    updated_at: datetime
+    task_count: int = 0
+
+
+class EngineeringContract(BaseModel):
+    """Structured, checkable obligations for one engineering task (WP4)."""
+
+    required_behavior: list[str] = Field(default_factory=list)
+    allowed_scope: list[str] = Field(default_factory=list)
+    forbidden_changes: list[str] = Field(default_factory=list)
+    architecture_constraints: list[str] = Field(default_factory=list)
+    required_tests: list[str] = Field(default_factory=list)
+    performance_requirements: list[str] = Field(default_factory=list)
+    compatibility_requirements: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+
+
 class TaskCreate(BaseModel):
     project_id: int
+    work_package_id: int | None = None
     title: str = Field(min_length=1, max_length=300)
     description: str = ""
     priority: Literal["low", "medium", "high"] = "medium"
+    engineering_contract: EngineeringContract = Field(default_factory=EngineeringContract)
 
 
 class TaskOut(BaseModel):
@@ -68,6 +153,7 @@ class TaskOut(BaseModel):
 
     id: int
     project_id: int
+    work_package_id: int | None
     title: str
     description: str
     status: str
@@ -81,11 +167,31 @@ class TaskOut(BaseModel):
     architecture_result: str | None
     implementation_summary: str | None
     review_result: str | None
+    engineering_contract: dict[str, Any] = {}
+    changed_files: list[str] = []
     created_at: datetime
     updated_at: datetime
     project_name: str = ""
     allowed_actions: list[str] = []
     execution_status: str | None = None
+
+
+class TaskProvenanceOut(BaseModel):
+    task_id: int
+    project_id: int
+    title: str
+    status: str
+    base_commit: str | None
+    result_commit: str | None
+    task_branch: str | None
+    changed_files: list[str]
+    source_memory_ids: list[int] = []
+
+
+class ProjectProvenanceOut(BaseModel):
+    project_id: int
+    path: str | None = None
+    tasks: list[TaskProvenanceOut] = []
 
 
 class DiffOut(BaseModel):
@@ -199,8 +305,6 @@ class DashboardOut(BaseModel):
     failed_executions: list[ExecutionOut]
     roles: list[dict]
 
-
-# --- Project Memory schemas (V2.4) ---
 
 VALID_MEMORY_TYPES = {
     "initiative_summary",

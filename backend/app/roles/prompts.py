@@ -55,6 +55,17 @@ TRIAGE_SYSTEM_PROMPT = (
     "Do not include any other text outside the JSON."
 )
 
+CONTRACT_FIELDS = (
+    ("Required behavior", "required_behavior"),
+    ("Allowed scope", "allowed_scope"),
+    ("Forbidden changes", "forbidden_changes"),
+    ("Architecture constraints", "architecture_constraints"),
+    ("Required tests", "required_tests"),
+    ("Performance requirements", "performance_requirements"),
+    ("Compatibility requirements", "compatibility_requirements"),
+    ("Acceptance criteria", "acceptance_criteria"),
+)
+
 
 @dataclass
 class BuiltPrompt:
@@ -99,6 +110,23 @@ class PromptBuilder:
                 f"- Priority: {task.priority or 'medium'}\n"
                 f"- Description:\n{task.description or '(none)'}"
             )
+            contract = _format_engineering_contract(task.engineering_contract)
+            if contract:
+                task_block += (
+                    "\n\n# Engineering contract (binding)\n"
+                    "This contract is the checkable definition of done. Do not "
+                    "silently relax, reinterpret, or expand it. If a clause is "
+                    "impossible or conflicts with repository evidence, report the "
+                    "conflict explicitly.\n"
+                    + contract
+                )
+                if role.key == "reviewer":
+                    task_block += (
+                        "\nReviewer rule: evaluate the implementation against every "
+                        "applicable contract clause. If a required criterion or test "
+                        "cannot be verified, request changes rather than assuming it "
+                        "passed."
+                    )
             if task.architecture_result and role.key in ("engineer", "reviewer"):
                 task_block += (
                     "\n- Approved architecture analysis:\n"
@@ -186,11 +214,14 @@ class PromptBuilder:
     def build_triage_prompt(task: Task, project: Project) -> tuple[str, str]:
         """Build a system/user prompt pair for the triage node."""
         system = TRIAGE_SYSTEM_PROMPT
+        contract = _format_engineering_contract(task.engineering_contract)
+        contract_block = f"\n\nEngineering contract:\n{contract}" if contract else ""
         user = (
             "Classify the following task:\n\n"
             f"Project: {project.name}\n"
             f"Task: {task.title}\n"
             f"Description: {task.description or '(none)'}"
+            f"{contract_block}"
         )
         return system, user
 
@@ -321,6 +352,18 @@ class PromptBuilder:
                 break
             parts.append(f"--- {rel} ---\n{data}")
         return "\n\n".join(parts)
+
+
+def _format_engineering_contract(contract: dict | None) -> str:
+    if not isinstance(contract, dict):
+        return ""
+    sections: list[str] = []
+    for label, key in CONTRACT_FIELDS:
+        raw = contract.get(key) or []
+        values = [str(value).strip() for value in raw if str(value).strip()]
+        if values:
+            sections.append(f"## {label}\n" + "\n".join(f"- {value}" for value in values))
+    return "\n\n".join(sections)
 
 
 def _cap(text: str, max_bytes: int) -> str:

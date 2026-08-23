@@ -3,25 +3,54 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "@/lib/api";
-import type { Project } from "@/lib/types";
+import type { EngineeringContract, Project } from "@/lib/types";
 
 interface ComposerProps {
   defaultProjectId?: number;
-  // Set by pages that already surface the API outage page-wide, so one
-  // failure cannot stack duplicate "Cannot reach the API" banners.
   suppressError?: boolean;
 }
 
-// The primary entry point: "ask the team" creates a Task and immediately
-// starts the workflow (start_architecture), then navigates to its Work
-// Thread. Both calls are the same acknowledgement-oriented mutations
-// WP-WEB-1 already made fast; the second call is fired without blocking
-// navigation so the click-to-thread transition stays local-first.
+type ContractDraft = {
+  acceptance: string;
+  scope: string;
+  forbidden: string;
+  tests: string;
+};
+
+const EMPTY_CONTRACT: ContractDraft = {
+  acceptance: "",
+  scope: "",
+  forbidden: "",
+  tests: "",
+};
+
+function lines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function contractFromDraft(draft: ContractDraft): EngineeringContract {
+  return {
+    required_behavior: [],
+    allowed_scope: lines(draft.scope),
+    forbidden_changes: lines(draft.forbidden),
+    architecture_constraints: [],
+    required_tests: lines(draft.tests),
+    performance_requirements: [],
+    compatibility_requirements: [],
+    acceptance_criteria: lines(draft.acceptance),
+  };
+}
+
 export default function Composer({ defaultProjectId, suppressError = false }: ComposerProps) {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>(defaultProjectId ? String(defaultProjectId) : "");
   const [question, setQuestion] = useState("");
+  const [showContract, setShowContract] = useState(false);
+  const [contract, setContract] = useState<ContractDraft>(EMPTY_CONTRACT);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,9 +72,6 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         });
 
     load();
-    // One-shot fetches are the pages that could never recover from a backend
-    // restart; retry gently until the API answers so the composer does not
-    // stay wedged on an error after the server comes back.
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") load();
     }, 15_000);
@@ -72,6 +98,7 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         title,
         description: question.trim(),
         priority: "medium",
+        engineering_contract: contractFromDraft(contract),
       });
       api.taskAction(task.id, "start_architecture").catch(() => undefined);
       router.push(`/work/${task.id}`);
@@ -116,6 +143,61 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         }}
         disabled={busy}
       />
+
+      <div style={{ marginTop: 8 }}>
+        <button className="link-btn" type="button" onClick={() => setShowContract((value) => !value)} disabled={busy}>
+          {showContract ? "Hide engineering contract" : "Add engineering contract"}
+        </button>
+      </div>
+
+      {showContract && (
+        <div className="panel" style={{ marginTop: 8 }}>
+          <p className="small muted">
+            Optional. One item per line. These constraints become binding for Architect, Engineer and Reviewer once work starts.
+          </p>
+          <label className="field">
+            Acceptance criteria
+            <textarea
+              rows={3}
+              value={contract.acceptance}
+              onChange={(e) => setContract({ ...contract, acceptance: e.target.value })}
+              placeholder={"Existing behavior remains unchanged\nNew path is covered by tests"}
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            Allowed scope
+            <textarea
+              rows={2}
+              value={contract.scope}
+              onChange={(e) => setContract({ ...contract, scope: e.target.value })}
+              placeholder={"backend/app/...\nbackend/tests/..."}
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            Forbidden changes
+            <textarea
+              rows={2}
+              value={contract.forbidden}
+              onChange={(e) => setContract({ ...contract, forbidden: e.target.value })}
+              placeholder="Do not change the public API"
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            Required tests / evidence
+            <textarea
+              rows={2}
+              value={contract.tests}
+              onChange={(e) => setContract({ ...contract, tests: e.target.value })}
+              placeholder="uv run pytest tests/test_target.py"
+              disabled={busy}
+            />
+          </label>
+        </div>
+      )}
+
       <div className="row space-between composer-footer">
         {projects.length > 1 ? (
           <label className="composer-project">

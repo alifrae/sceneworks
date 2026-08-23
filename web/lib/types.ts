@@ -25,9 +25,50 @@ export interface RepoStatus {
   active_tasks: number;
 }
 
+export interface Initiative {
+  id: number;
+  project_id: number;
+  title: string;
+  objective: string;
+  description: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  work_package_count: number;
+  completed_work_packages: number;
+  task_count: number;
+}
+
+export interface WorkPackage {
+  id: number;
+  initiative_id: number;
+  key: string;
+  title: string;
+  description: string;
+  status: string;
+  sequence: number;
+  depends_on: number[];
+  acceptance_criteria: string[];
+  created_at: string;
+  updated_at: string;
+  task_count: number;
+}
+
+export interface EngineeringContract {
+  required_behavior: string[];
+  allowed_scope: string[];
+  forbidden_changes: string[];
+  architecture_constraints: string[];
+  required_tests: string[];
+  performance_requirements: string[];
+  compatibility_requirements: string[];
+  acceptance_criteria: string[];
+}
+
 export interface Task {
   id: number;
   project_id: number;
+  work_package_id: number | null;
   title: string;
   description: string;
   status: string;
@@ -41,11 +82,31 @@ export interface Task {
   architecture_result: string | null;
   implementation_summary: string | null;
   review_result: string | null;
+  engineering_contract: EngineeringContract;
+  changed_files: string[];
   created_at: string;
   updated_at: string;
   project_name: string;
   allowed_actions: string[];
   execution_status: string | null;
+}
+
+export interface TaskProvenance {
+  task_id: number;
+  project_id: number;
+  title: string;
+  status: string;
+  base_commit: string | null;
+  result_commit: string | null;
+  task_branch: string | null;
+  changed_files: string[];
+  source_memory_ids: number[];
+}
+
+export interface ProjectProvenance {
+  project_id: number;
+  path: string | null;
+  tasks: TaskProvenance[];
 }
 
 export interface Execution {
@@ -147,6 +208,7 @@ export interface ProjectMemory {
   source: string | null;
   source_task_id: number | null;
   source_execution_id: string | null;
+  source_commit: string | null;
   supersedes_id: number | null;
   created_at: string;
   updated_at: string;

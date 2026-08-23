@@ -11,7 +11,14 @@ from app.api.deps import get_context
 from app.context import AppContext
 from app.git.workspace import GitError
 from app.models import Project, Task
-from app.schemas import ProjectCreate, ProjectOut, ProjectUpdate, RepoStatusOut
+from app.schemas import (
+    ProjectCreate,
+    ProjectOut,
+    ProjectProvenanceOut,
+    ProjectUpdate,
+    RepoStatusOut,
+    TaskProvenanceOut,
+)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -141,6 +148,30 @@ async def project_status(project_id: int, ctx: AppContext = Depends(get_context)
         error=info.error,
         worktrees=worktrees,
         active_tasks=int(active_tasks),
+    )
+
+
+@router.get("/{project_id}/provenance")
+async def project_provenance(
+    project_id: int,
+    path: str | None = None,
+    limit: int = 100,
+    ctx: AppContext = Depends(get_context),
+) -> ProjectProvenanceOut:
+    """Answer which previous SceneWorks tasks changed a given repository path.
+
+    When ``path`` is omitted the endpoint returns recent persisted provenance for
+    the project. Results survive worktree cleanup because changed paths are
+    captured from Git when implementation completes.
+    """
+    async with ctx.engine_factory() as session:
+        if await session.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+    rows = await ctx.provenance.project_history(project_id, path=path, limit=limit)
+    return ProjectProvenanceOut(
+        project_id=project_id,
+        path=path.strip().replace("\\", "/") if path and path.strip() else None,
+        tasks=[TaskProvenanceOut(**row) for row in rows],
     )
 
 
