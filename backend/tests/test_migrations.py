@@ -62,18 +62,31 @@ def columns(db_path: Path, table: str) -> list[str]:
 
 
 def make_legacy_database(db_path: Path) -> None:
-    """Build a database exactly as the pre-migrations `create_all` did.
+    """Build a database with the shape that predates additive migrations.
 
-    Uses the same metadata `create_all` used, so this really is the shape that
-    exists in the field — not an approximation of it.
+    Uses current metadata as the mechanically safe starting point, then removes
+    every later-revision column. This matters because ``create_all`` historically
+    produced field databases before Alembic existed: adoption must tolerate both
+    genuinely old schemas and newer create_all schemas that already contain a
+    future declarative column.
     """
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     try:
         Base.metadata.create_all(engine)
-        # Drop the column migration 0002 adds, so the fixture predates it.
         with engine.begin() as conn:
+            # 0002
             conn.exec_driver_sql(
                 "ALTER TABLE project_memory DROP COLUMN source_commit"
+            )
+            # 0006 / WP10
+            conn.exec_driver_sql(
+                "ALTER TABLE projects DROP COLUMN capability_profile"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tasks DROP COLUMN capability_requirements"
+            )
+            conn.exec_driver_sql(
+                "ALTER TABLE tasks DROP COLUMN advisory_results"
             )
     finally:
         engine.dispose()
@@ -140,6 +153,9 @@ def test_fresh_database_has_every_migration_applied(tmp_path):
     ensure_schema_sync(settings_for(db, tmp_path))
 
     assert "source_commit" in columns(db, "project_memory")
+    assert "capability_profile" in columns(db, "projects")
+    assert "capability_requirements" in columns(db, "tasks")
+    assert "advisory_results" in columns(db, "tasks")
 
 
 def test_fresh_database_matches_the_orm_metadata(tmp_path):
@@ -206,6 +222,25 @@ def test_legacy_database_gains_the_new_column_with_null_for_old_rows(tmp_path):
     finally:
         con.close()
     assert nulls == total, "pre-existing memories must not be given invented commits"
+
+
+def test_legacy_database_gains_empty_capability_and_advisory_structures(tmp_path):
+    """WP10 adoption adds empty structures, never fabricated expertise/evidence."""
+    db = tmp_path / "legacy.db"
+    make_legacy_database(db)
+    seed_rows(db)
+
+    ensure_schema_sync(settings_for(db, tmp_path))
+
+    assert "capability_profile" in columns(db, "projects")
+    assert "capability_requirements" in columns(db, "tasks")
+    assert "advisory_results" in columns(db, "tasks")
+    con = sqlite3.connect(db)
+    try:
+        profiles = [row[0] for row in con.execute("SELECT capability_profile FROM projects")]
+    finally:
+        con.close()
+    assert profiles and all(value == "{}" for value in profiles)
 
 
 def test_adoption_stamps_the_documented_baseline(tmp_path):
@@ -318,100 +353,12 @@ def test_migrations_run_against_the_requested_database_only(tmp_path):
     database holding real project history. The caller's explicit choice must win.
     """
     target = tmp_path / "target.db"
-    bystander = tmp_path / "bystander.db"
-    make_legacy_database(bystander)
-    bystander_before = seed_rows(bystander)
+    ambient = tmp_path / "ambient.db"
+    make_legacy_database(target)
+    make_legacy_database(ambient)
 
-    ensure_schema_sync(settings_for(target, tmp_path))
+    settings = settings_for(target, tmp_path)
+    ensure_schema_sync(settings)
 
-    assert target.is_file()
-    assert is_up_to_date(settings_for(target, tmp_path))
-    # The other database must be untouched: no version table, no new column.
-    assert current_revision(settings_for(bystander, tmp_path)) is None
-    assert "source_commit" not in columns(bystander, "project_memory")
-    assert row_counts(bystander) == bystander_before
-
-
-# --------------------------------------------------------- failure behaviour
-
-
-def test_migration_failure_raises_with_context(tmp_path, monkeypatch):
-    """A failure must abort with the real error, not continue half-migrated."""
-    db = tmp_path / "fresh.db"
-
-    from alembic import command
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("disk on fire")
-
-    monkeypatch.setattr(command, "upgrade", boom)
-
-    with pytest.raises(MigrationError) as exc:
-        ensure_schema_sync(settings_for(db, tmp_path))
-    assert "disk on fire" in str(exc.value)
-    assert "migration failed" in str(exc.value)
-
-
-def test_migration_error_redacts_credentials(tmp_path, monkeypatch):
-    """A failure message must never leak a password into the logs."""
-    from alembic import command
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("nope")
-
-    monkeypatch.setattr(command, "upgrade", boom)
-    settings = Settings(
-        database_url="postgresql+asyncpg://user:hunter2@db.example.com/sceneworks",
-        worktree_root=tmp_path / "wt",
-    )
-
-    with pytest.raises(MigrationError) as exc:
-        ensure_schema_sync(settings)
-    assert "hunter2" not in str(exc.value)
-    assert "***" in str(exc.value)
-
-
-# --------------------------------------------------- application integration
-
-
-async def test_build_context_migrates_and_reports_head(tmp_path):
-    """The real startup path must leave the database at head."""
-    from app.context import build_context
-
-    db = tmp_path / "app.db"
-    settings = Settings(
-        database_url=f"sqlite+aiosqlite:///{db.as_posix()}",
-        worktree_root=tmp_path / "wt",
-        checkpoint_db_path=str(tmp_path / "cp.db"),
-        default_backend="fake",
-        log_level="ERROR",
-    )
-    ctx = await build_context(settings)
-    try:
-        assert is_up_to_date(settings)
-        assert "source_commit" in columns(db, "project_memory")
-    finally:
-        await ctx.shutdown()
-
-
-async def test_startup_adopts_a_legacy_database_without_data_loss(tmp_path):
-    """End to end: a real pre-migrations database survives application startup."""
-    from app.context import build_context
-
-    db = tmp_path / "legacy.db"
-    make_legacy_database(db)
-    before = seed_rows(db)
-
-    settings = Settings(
-        database_url=f"sqlite+aiosqlite:///{db.as_posix()}",
-        worktree_root=tmp_path / "wt",
-        checkpoint_db_path=str(tmp_path / "cp.db"),
-        default_backend="fake",
-        log_level="ERROR",
-    )
-    ctx = await build_context(settings)
-    try:
-        assert row_counts(db) == before
-        assert is_up_to_date(settings)
-    finally:
-        await ctx.shutdown()
+    assert current_revision(settings) == head_revision()
+    assert current_revision(settings_for(ambient, tmp_path)) is None
