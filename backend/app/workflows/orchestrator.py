@@ -1,10 +1,8 @@
-"""Thin public WorkflowManager facade for WP7.
+"""Public WorkflowManager composition facade for WP7.
 
-LangGraph topology and node coordination remain in the graph manager while
-runtime/persistence mechanics, triage/advisory execution, core role execution,
-founder-facing commands, and restart recovery are delegated to focused
-components. Callers keep the same WorkflowManager API while responsibilities
-move behind stable boundaries.
+The graph core owns only LangGraph topology/checkpointing/routing. Operational
+responsibilities are delegated to provider-independent components while this
+class preserves the WorkflowManager API used by FastAPI, evaluation and tests.
 """
 
 from __future__ import annotations
@@ -26,9 +24,9 @@ from app.roles.registry import RoleRegistry
 from app.services.memory import MemoryService
 from app.workflows.advisory_runtime import WorkflowAdvisoryRuntime
 from app.workflows.control import WorkflowControl
-from app.workflows.manager import (
+from app.workflows.graph_core import (
     MAX_REVIEW_ITERATIONS_DEFAULT,
-    WorkflowManager as GraphWorkflowManager,
+    GraphWorkflowManager,
 )
 from app.workflows.recovery import WorkflowRecovery
 from app.workflows.role_runtime import WorkflowRoleRuntime
@@ -37,7 +35,7 @@ from app.workflows.state import InitiativeState
 
 
 class WorkflowManager(GraphWorkflowManager):
-    """Compatibility facade with explicit WP7 component boundaries."""
+    """Stable workflow API composed from focused WP7 components."""
 
     def __init__(
         self,
@@ -55,17 +53,16 @@ class WorkflowManager(GraphWorkflowManager):
     ) -> None:
         super().__init__(
             session_factory,
-            engine,
-            git,
-            prompt_builder,
-            roles,
-            bus,
-            event_store,
-            settings,
             checkpoint_db_path=checkpoint_db_path,
             max_review_iterations=max_review_iterations,
-            memory_service=memory_service,
         )
+        # Retain these public-manager attributes for command scheduling and for
+        # compatibility with existing tests/diagnostics. The graph core itself
+        # does not depend on them.
+        self._engine = engine
+        self._git = git
+        self._settings = settings
+
         self._runtime = WorkflowRuntime(
             session_factory,
             git,
