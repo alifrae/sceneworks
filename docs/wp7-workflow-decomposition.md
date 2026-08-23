@@ -7,39 +7,51 @@ unrelated responsibilities: LangGraph topology/routing, node bodies, execution
 preparation, persistence, worktree lifecycle, result capture, recovery, memory
 injection, event publication, and task-less company artifact handling.
 
-The risk is architectural rather than cosmetic. A change to persistence or
-recovery should not require editing the same class that defines graph routing,
-and provider-independent runtime infrastructure should not be coupled to
-LangGraph.
+WP7 fixes responsibility sprawl, not merely file size.
 
-## Invariants
+## Preserved invariants
 
-WP7 is a behavioral refactor. These contracts do not change:
+WP7 is a behavioral refactor. These contracts remain unchanged:
 
-- `WorkflowManager` remains the public API used by FastAPI and tests.
+- `WorkflowManager` remains the public API used by FastAPI/evaluation/tests.
 - LangGraph remains the sole task-workflow orchestrator.
 - Human architecture approval remains mandatory before implementation.
-- The workflow remains pinned to one repository commit.
-- Agent roles continue to operate only in isolated worktrees.
+- One pinned repository commit is reused across the workflow.
+- Agent roles operate in isolated worktrees.
 - Reviewer repair-loop and restart semantics remain unchanged.
-- ExecutionEngine and agent backends do not depend on LangGraph.
-- The deterministic qualification suite is the merge barrier.
+- ExecutionEngine/agent backends do not depend on LangGraph.
+- Deterministic qualification is the merge barrier.
 
-## Current decomposition
+## Final decomposition
 
 ```text
 app.workflows.WorkflowManager
         |
         v
-orchestrator.py  -- public compatibility facade
-   |       |       |
-   |       |       +--> recovery.py   restart reconciliation policy
-   |       +----------> control.py    founder commands + graph scheduling
-   +------------------> runtime.py    persistence/events/execution bridge/memory
-        |
-        v
-manager.py       -- graph topology/nodes during migration
+orchestrator.py     public composition facade / stable API
+   |
+   +--> graph_core.py         LangGraph topology, routing, checkpoints, thin nodes
+   +--> runtime.py            persistence, events, execution bridge, memory
+   +--> advisory_runtime.py   triage + Product/CTO/Technical Expert execution
+   +--> role_runtime.py       Architect/Engineer/Reviewer execution lifecycle
+   +--> control.py            founder commands + graph scheduling
+   +--> recovery.py           restart reconciliation policy
+
+manager.py          backward-compatible re-export only
 ```
+
+### `graph_core.py`
+
+The only workflow module that owns graph topology. It contains:
+
+- checkpoint connection/lifecycle
+- graph construction and conditional edges
+- thin node coordination
+- routing decisions
+- graph invocation/error containment
+
+It does not create executions, prepare worktrees/prompts, persist task results,
+retrieve memory, or own restart policy.
 
 ### `runtime.py`
 
@@ -48,67 +60,56 @@ Framework-neutral workflow infrastructure:
 - task/project lookup
 - validated task-state transitions
 - workflow event persistence/publication
-- execution row creation
-- execution completion signalling
+- execution row creation and completion signalling
 - memory retrieval/injection evidence
 - task notes
 - task-less company artifact capture and ask-worktree cleanup
 
 It intentionally imports no LangGraph package.
 
+### `advisory_runtime.py`
+
+Owns operational mechanics for Triage and optional Product/CTO/Technical Expert
+runs: pinned snapshots, prompts, execution lifecycle, degraded-triage evidence,
+and disposable advisory worktree cleanup.
+
+### `role_runtime.py`
+
+Owns Architect/Engineer/Reviewer mechanics: worktree preparation, prompts,
+execution creation, implementation commit capture, reviewer diff context,
+result persistence, approval cleanup and review-worktree cleanup.
+
 ### `control.py`
 
-Owns commands exposed by the application/API:
-
-- start workflow
-- resume architecture approval
-- start implementation/review
-- accept/reject/send back
-- cancel/retry
-- worktree cleanup
-- active graph scheduling/waiting
-
-The controller may use LangGraph `Command`, but it does not own node topology or
-role execution details.
+Owns founder/API commands: start/resume, implementation/review triggers,
+accept/reject/send-back, cancel/retry, worktree cleanup, and active graph
+scheduling/waiting.
 
 ### `recovery.py`
 
-Owns restart policy for checkpointed workflows. It decides which waiting states
-remain paused and which resumable states are restarted.
+Owns restart policy for checkpointed workflows. Human-waiting states remain
+paused; resumable implementation/repair states are restarted deliberately.
 
 ### `orchestrator.py`
 
-Preserves the existing `WorkflowManager` contract while delegating the concerns
-above. The composition root imports `WorkflowManager` from `app.workflows`, not
-from the graph implementation module.
+Composes the graph core and operational components while preserving the existing
+`WorkflowManager` method contract.
 
-## Migration sequence
+### `manager.py`
 
-1. **Runtime/control/recovery boundaries** — implemented in the first WP7 slice.
-2. **Role execution lifecycle** — move architect/engineer/reviewer preparation,
-   result capture, commit capture, approval cleanup, and disposable worktree
-   handling behind a role-runtime component.
-3. **Triage/advisory execution** — move repository snapshot preparation and
-   advisory-role execution out of graph node methods so nodes become thin
-   orchestration adapters.
-4. **Graph core** — leave only topology, routing, checkpoint management and thin
-   node coordination in the graph implementation.
-5. **Compatibility cleanup** — reduce `manager.py` to a compatibility export or
-   remove it once internal imports have migrated.
-
-WP7 is complete only after the old responsibility-sprawl implementation is no
-longer the runtime owner and the qualification/recovery suites remain green.
+A small compatibility shim for older imports. A regression test keeps it below
+50 source lines so the monolith cannot silently grow back.
 
 ## Verification
 
-The first slice adds `tests/test_workflow_decomposition.py` and reuses the
-existing higher-value barriers:
+`tests/test_workflow_decomposition.py` locks the architectural boundaries and the
+existing higher-value barriers verify behavior:
 
 - full provider-independent qualification scenarios
-- workflow graph tests
-- recovery tests
+- workflow graph and recovery tests
 - API/state-machine tests
 - non-live backend suite
 - frontend production build
 
-No WP7 change is accepted on architectural inspection alone.
+WP7 is complete only when the final compatibility-cleanup head passes all of
+those barriers. No architectural inspection alone counts as completion.
