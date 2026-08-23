@@ -11,6 +11,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agents.model_routing import ModelRouter
 from app.config.settings import Settings
 from app.domain.task_states import TaskStatus
 from app.events.bus import EventBus
@@ -50,18 +51,19 @@ class WorkflowManager(GraphWorkflowManager):
         checkpoint_db_path: str = "data/workflow_checkpoints.db",
         max_review_iterations: int = MAX_REVIEW_ITERATIONS_DEFAULT,
         memory_service: MemoryService | None = None,
+        model_router: ModelRouter | None = None,
     ) -> None:
         super().__init__(
             session_factory,
             checkpoint_db_path=checkpoint_db_path,
             max_review_iterations=max_review_iterations,
         )
-        # Retain these public-manager attributes for command scheduling and for
-        # compatibility with existing tests/diagnostics. The graph core itself
-        # does not depend on them.
         self._engine = engine
         self._git = git
         self._settings = settings
+        model_router = model_router or ModelRouter(
+            settings, ("gemini_acp", "openhands", "fake")
+        )
 
         self._runtime = WorkflowRuntime(
             session_factory,
@@ -69,6 +71,7 @@ class WorkflowManager(GraphWorkflowManager):
             bus,
             event_store,
             memory_service,
+            model_router,
         )
         self._roles_runtime = WorkflowRoleRuntime(
             session_factory,
@@ -91,15 +94,11 @@ class WorkflowManager(GraphWorkflowManager):
         self._control = WorkflowControl(self)
         self._recovery = WorkflowRecovery(self)
 
-    # --------------------------------------------------------- engine bridge
-
     async def on_execution_finished(self, execution_id: str) -> None:
         await self._runtime.on_execution_finished(execution_id)
 
     async def _wait_for_execution(self, execution_id: str) -> Execution:
         return await self._runtime.wait_for_execution(execution_id)
-
-    # ----------------------------------------------------------- persistence
 
     async def _get_task(self, session: AsyncSession, task_id: int) -> Task:
         return await self._runtime.get_task(session, task_id)
@@ -175,8 +174,6 @@ class WorkflowManager(GraphWorkflowManager):
     ) -> None:
         await self._runtime.emit_memory_injection(task_id, node, ctx)
 
-    # ----------------------------------------------- triage/advisory runtime
-
     async def _run_triage(self, state: InitiativeState) -> InitiativeState:
         return await self._advisory_runtime.run_triage(state)
 
@@ -191,8 +188,6 @@ class WorkflowManager(GraphWorkflowManager):
             role_key,
             display,
         )
-
-    # ------------------------------------------------------ role lifecycle
 
     async def _prepare_and_start_architect(
         self,
@@ -276,8 +271,6 @@ class WorkflowManager(GraphWorkflowManager):
     async def _cleanup_architect_worktree(self, task_id: int) -> None:
         await self._roles_runtime.cleanup_architect_worktree(task_id)
 
-    # ------------------------------------------------------ public controls
-
     async def start_workflow(self, task_id: int) -> None:
         await self._control.start_workflow(task_id)
 
@@ -321,8 +314,6 @@ class WorkflowManager(GraphWorkflowManager):
 
     async def _await_previous_graph(self, task_id: int) -> None:
         await self._control.await_previous_graph(task_id)
-
-    # ------------------------------------------------------------ recovery
 
     async def recover_workflows(self) -> list[int]:
         return await self._recovery.recover()
