@@ -67,6 +67,23 @@ def summary(report) -> str:
         f"Status: {report.status.value}",
         f"Trials: {len(report.trials)}  PASS={pass_count} FAIL={fail_count} BLOCKED={blocked_count}",
     ]
+    for aggregate in report.aggregates:
+        rate = (
+            f"{aggregate.success_rate * 100:.1f}%"
+            if aggregate.success_rate is not None
+            else "n/a"
+        )
+        median = (
+            f"{aggregate.median_success_seconds:.1f}s"
+            if aggregate.median_success_seconds is not None
+            else "n/a"
+        )
+        lines.append(
+            f"{aggregate.mode}: success={rate}, median successful time={median}, "
+            f"mean human interventions={aggregate.mean_human_interventions}, "
+            f"mean agent executions={aggregate.mean_agent_executions}, "
+            f"backend failures={aggregate.backend_failures}"
+        )
     if report.comparisons:
         outcomes: dict[str, int] = {}
         for item in report.comparisons:
