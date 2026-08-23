@@ -1,9 +1,10 @@
 """Thin public WorkflowManager facade for WP7.
 
 LangGraph topology and node coordination remain in the graph manager while
-runtime/persistence mechanics, role execution, founder-facing commands, and
-restart recovery are delegated to focused components. Callers keep the same
-WorkflowManager API while responsibilities move behind stable boundaries.
+runtime/persistence mechanics, triage/advisory execution, core role execution,
+founder-facing commands, and restart recovery are delegated to focused
+components. Callers keep the same WorkflowManager API while responsibilities
+move behind stable boundaries.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app.roles.definitions import RoleDefinition
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
 from app.services.memory import MemoryService
+from app.workflows.advisory_runtime import WorkflowAdvisoryRuntime
 from app.workflows.control import WorkflowControl
 from app.workflows.manager import (
     MAX_REVIEW_ITERATIONS_DEFAULT,
@@ -79,6 +81,15 @@ class WorkflowManager(GraphWorkflowManager):
             roles,
             event_store,
             self._runtime,
+        )
+        self._advisory_runtime = WorkflowAdvisoryRuntime(
+            session_factory,
+            engine,
+            git,
+            prompt_builder,
+            roles,
+            self._runtime,
+            self._roles_runtime,
         )
         self._control = WorkflowControl(self)
         self._recovery = WorkflowRecovery(self)
@@ -166,6 +177,23 @@ class WorkflowManager(GraphWorkflowManager):
         ctx: dict,
     ) -> None:
         await self._runtime.emit_memory_injection(task_id, node, ctx)
+
+    # ----------------------------------------------- triage/advisory runtime
+
+    async def _run_triage(self, state: InitiativeState) -> InitiativeState:
+        return await self._advisory_runtime.run_triage(state)
+
+    async def _run_advisory_role(
+        self,
+        state: InitiativeState,
+        role_key: str,
+        display: str,
+    ) -> InitiativeState:
+        return await self._advisory_runtime.run_advisory_role(
+            state,
+            role_key,
+            display,
+        )
 
     # ------------------------------------------------------ role lifecycle
 
