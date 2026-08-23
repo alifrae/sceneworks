@@ -98,7 +98,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         session_factory, execution_engine, git, prompt_builder, roles, bus, event_store, settings
     )
     memory = MemoryService(session_factory, event_store, bus)
-    provenance = ProvenanceService(session_factory)
+    provenance = ProvenanceService(session_factory, git)
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
