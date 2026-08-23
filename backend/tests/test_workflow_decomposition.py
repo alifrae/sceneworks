@@ -13,6 +13,7 @@ from app.workflows.recovery import WorkflowRecovery
 from app.workflows.role_runtime import WorkflowRoleRuntime
 from app.workflows.runtime import WorkflowRuntime
 import app.workflows.advisory_runtime as advisory_runtime_module
+import app.workflows.manager as compatibility_manager_module
 import app.workflows.role_runtime as role_runtime_module
 import app.workflows.runtime as runtime_module
 
@@ -20,6 +21,12 @@ import app.workflows.runtime as runtime_module
 def test_public_workflow_manager_is_the_decomposed_orchestrator():
     assert PublicWorkflowManager is OrchestratedWorkflowManager
     assert issubclass(PublicWorkflowManager, GraphWorkflowManager)
+
+
+def test_legacy_manager_is_only_a_compatibility_shim():
+    assert compatibility_manager_module.WorkflowManager is PublicWorkflowManager
+    source_lines = inspect.getsource(compatibility_manager_module).splitlines()
+    assert len(source_lines) < 50, "manager.py must not become a monolith again"
 
 
 def test_non_graph_runtimes_have_no_langgraph_dependency():
