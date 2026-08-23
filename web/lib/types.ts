@@ -25,6 +25,35 @@ export interface RepoStatus {
   active_tasks: number;
 }
 
+export interface Initiative {
+  id: number;
+  project_id: number;
+  title: string;
+  objective: string;
+  description: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  work_package_count: number;
+  completed_work_packages: number;
+  task_count: number;
+}
+
+export interface WorkPackage {
+  id: number;
+  initiative_id: number;
+  key: string;
+  title: string;
+  description: string;
+  status: string;
+  sequence: number;
+  depends_on: number[];
+  acceptance_criteria: string[];
+  created_at: string;
+  updated_at: string;
+  task_count: number;
+}
+
 export interface EngineeringContract {
   required_behavior: string[];
   allowed_scope: string[];
@@ -39,6 +68,7 @@ export interface EngineeringContract {
 export interface Task {
   id: number;
   project_id: number;
+  work_package_id: number | null;
   title: string;
   description: string;
   status: string;
