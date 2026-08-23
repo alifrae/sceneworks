@@ -1,4 +1,4 @@
-"""Task resource routes: CRUD + workflow actions + diff view."""
+"""Task resource routes: CRUD + workflow actions + diff/provenance views."""
 
 from __future__ import annotations
 
@@ -12,7 +12,14 @@ from app.api.deps import get_context
 from app.context import AppContext
 from app.domain.task_states import TaskStateMachine, TaskStatus
 from app.models import Execution, Project, Task
-from app.schemas import ActionRequest, DiffOut, TaskCreate, TaskOut
+from app.schemas import (
+    ActionRequest,
+    DiffOut,
+    EngineeringContract,
+    TaskCreate,
+    TaskOut,
+    TaskProvenanceOut,
+)
 from app.services.workflow import WorkflowError
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -94,6 +101,7 @@ async def create_task(body: TaskCreate, ctx: AppContext = Depends(get_context)) 
             title=body.title,
             description=body.description,
             priority=body.priority,
+            engineering_contract=body.engineering_contract.model_dump(),
             status=TaskStatus.NEW.value,
         )
         session.add(task)
@@ -109,6 +117,44 @@ async def get_task(task_id: int, ctx: AppContext = Depends(get_context)) -> Task
         if task is None:
             raise HTTPException(404, "task not found")
     return await _task_out(ctx, task)
+
+
+@router.put("/{task_id}/contract")
+async def replace_engineering_contract(
+    task_id: int,
+    body: EngineeringContract,
+    ctx: AppContext = Depends(get_context),
+) -> TaskOut:
+    """Replace the task's binding contract before workflow execution starts.
+
+    Once architecture starts, the contract has already entered agent context.
+    Mutating it then would make the stored analysis and later review refer to
+    different requirements, so changes fail closed rather than silently drift.
+    """
+    async with ctx.engine_factory() as session:
+        task = await session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(404, "task not found")
+        if task.status != TaskStatus.NEW.value:
+            raise HTTPException(
+                409,
+                "engineering contract can only be changed while task is NEW; "
+                "create/revise the contract before starting architecture",
+            )
+        task.engineering_contract = body.model_dump()
+        await session.commit()
+        await session.refresh(task)
+    return await _task_out(ctx, task)
+
+
+@router.get("/{task_id}/provenance")
+async def task_provenance(
+    task_id: int, ctx: AppContext = Depends(get_context)
+) -> TaskProvenanceOut:
+    row = await ctx.provenance.task(task_id)
+    if row is None:
+        raise HTTPException(404, "task not found")
+    return TaskProvenanceOut(**row)
 
 
 @router.delete("/{task_id}", status_code=204)
