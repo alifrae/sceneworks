@@ -6,13 +6,16 @@ import type {
   Backend,
   Dashboard,
   Diff,
+  EngineeringContract,
   Execution,
   Project,
   ProjectMemory,
+  ProjectProvenance,
   RepoStatus,
   Role,
   Settings,
   Task,
+  TaskProvenance,
 } from "./types";
 
 export const API_URL: string =
@@ -31,10 +34,6 @@ export class ApiError extends Error {
   }
 }
 
-// The message shown to users when the backend never answered. `fetch` rejects
-// with a bare "TypeError: Failed to fetch" for connection refused, CORS
-// blocks, and DNS failures alike; surfacing that raw text taught the user
-// nothing. Status 0 marks transport-level failures distinctly from HTTP ones.
 function unreachableMessage(): string {
   return `the SceneWorks API at ${API_URL} did not respond (connection failed). Is the backend running?`;
 }
@@ -50,11 +49,6 @@ type RequestOptions = {
 
 type CacheEntry = { value: unknown; expiresAt: number };
 
-// The app intentionally keeps server state in the API module instead of
-// introducing another global state framework. This prevents duplicate GETs
-// during route transitions and shares a very short-lived snapshot between
-// independently mounted views. Mutations invalidate relevant entries without
-// automatically refetching unrelated pages.
 const GET_CACHE = new Map<string, CacheEntry>();
 const GET_INFLIGHT = new Map<string, Promise<unknown>>();
 const DEFAULT_CACHE_TTL_MS = 2_000;
@@ -169,12 +163,8 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
 }
 
 export const api = {
-  // dashboard
   dashboard: () => request<Dashboard>("/api/dashboard", undefined, { diagnosticCause: "dashboard-load" }),
 
-  // projects
-  // Projects change rarely (manual registration); a 30s snapshot prevents
-  // Composer/Work/Team/Sidebar consumers from each refetching on navigation.
   projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load", cacheTtlMs: 30_000 }),
   project: (id: number) => request<Project>(`/api/projects/${id}`),
   createProject: (body: Record<string, unknown>) =>
@@ -182,8 +172,11 @@ export const api = {
   updateProject: (id: number, body: Record<string, unknown>) =>
     request<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   projectStatus: (id: number) => request<RepoStatus>(`/api/projects/${id}/status`),
+  projectProvenance: (id: number, path?: string) => {
+    const query = path ? `?${new URLSearchParams({ path }).toString()}` : "";
+    return request<ProjectProvenance>(`/api/projects/${id}/provenance${query}`);
+  },
 
-  // tasks
   tasks: (params?: Record<string, string>) => {
     const query = new URLSearchParams(params ?? {}).toString();
     return request<Task[]>(`/api/tasks${query ? `?${query}` : ""}`, undefined, { diagnosticCause: "tasks-load" });
@@ -191,6 +184,9 @@ export const api = {
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
   createTask: (body: Record<string, unknown>) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(body) }),
+  replaceTaskContract: (id: number, contract: EngineeringContract) =>
+    request<Task>(`/api/tasks/${id}/contract`, { method: "PUT", body: JSON.stringify(contract) }),
+  taskProvenance: (id: number) => request<TaskProvenance>(`/api/tasks/${id}/provenance`),
   taskEvents: (id: number) => request<AppEvent[]>(`/api/tasks/${id}/events`),
   taskDiff: (id: number) => request<Diff>(`/api/tasks/${id}/diff`),
   taskAction: (id: number, action: string, body?: Record<string, string>) =>
@@ -199,7 +195,6 @@ export const api = {
       body: JSON.stringify(body ?? {}),
     }),
 
-  // executions
   executions: (params?: Record<string, string>) => {
     const query = new URLSearchParams(params ?? {}).toString();
     return request<Execution[]>(`/api/executions${query ? `?${query}` : ""}`, undefined, { diagnosticCause: "executions-load" });
@@ -209,20 +204,17 @@ export const api = {
   cancelExecution: (id: string) =>
     request<{ cancelled: boolean }>(`/api/executions/${id}/cancel`, { method: "POST" }),
 
-  // company
   roles: () => request<Role[]>("/api/roles", undefined, { cacheTtlMs: 60_000 }),
   companyRoles: () => request<Role[]>("/api/company/roles", undefined, { cacheTtlMs: 60_000 }),
   companyAsk: (body: { role: string; project_id: number | null; question: string }) =>
     request<Execution>("/api/company/ask", { method: "POST", body: JSON.stringify(body) }),
   artifacts: () => request<Artifact[]>("/api/company/artifacts", undefined, { cacheTtlMs: 4_000 }),
 
-  // system
   backends: () => request<Backend[]>("/api/backends", undefined, { cacheTtlMs: 30_000 }),
   settings: () => request<Settings>("/api/settings", undefined, { cacheTtlMs: 30_000 }),
   updateSettings: (body: Record<string, unknown>) =>
     request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(body) }),
 
-  // memory (V2.4)
   memoryList: (projectId: number, params?: Record<string, string>) => {
     const query = new URLSearchParams(params ?? {}).toString();
     return request<ProjectMemory[]>(
