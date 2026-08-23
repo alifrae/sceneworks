@@ -33,7 +33,7 @@ class EmitCallback(Protocol):
 class Workspace:
     """The sandboxed working area for one execution."""
 
-    path: Path  # cwd for the agent (a worktree, or a read-only repo checkout)
+    path: Path
     repo_path: Path
     branch: str | None = None
     base_commit: str | None = None
@@ -46,7 +46,10 @@ class AgentRequest:
     role: str
     system_prompt: str
     user_prompt: str
+    # Provider-neutral intent plus the concrete immutable resolution selected
+    # when the Execution row was created (WP8).
     model_profile: str | None = None
+    model: str | None = None
     metadata: dict = field(default_factory=dict)
 
 
@@ -67,11 +70,7 @@ class BackendHealth:
 
 
 class AgentEventSink:
-    """Per-execution channel into SceneWorks event storage + streaming.
-
-    Backends call emit() for anything user-visible. `cancelled()` lets a
-    backend poll for cancellation while it is waiting on I/O.
-    """
+    """Per-execution channel into SceneWorks event storage + streaming."""
 
     def __init__(
         self,
@@ -85,11 +84,6 @@ class AgentEventSink:
         self._cancel_event = asyncio.Event()
 
     async def emit(self, type: str, payload: dict, severity: str = "info") -> None:
-        # The execution id must travel with the event. Without it every
-        # agent event (text deltas, tool calls, file changes, command output)
-        # was persisted with execution_id and task_id NULL, so none of it was
-        # reachable from /api/tasks/{id}/events or /api/executions/{id}/events
-        # and the UI event log showed no agent activity at all.
         await self._emit_callback(
             type, payload, severity, execution_id=self.execution_id
         )
