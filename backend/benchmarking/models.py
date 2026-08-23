@@ -148,10 +148,13 @@ class BenchmarkReport(BaseModel):
     environment: dict[str, Any] = Field(default_factory=dict)
 
     def finalize(self, expected_trials: int) -> "BenchmarkReport":
+        from benchmarking.scoring import build_aggregates
+
         complete = (
             len(self.trials) == expected_trials
             and all(trial.verdict is not TrialVerdict.BLOCKED for trial in self.trials)
         )
         self.status = BenchmarkStatus.COMPLETE if complete else BenchmarkStatus.INCOMPLETE
+        self.aggregates = build_aggregates(self.trials)
         self.finished_at = datetime.now(timezone.utc).isoformat()
         return self
