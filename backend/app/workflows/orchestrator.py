@@ -1,12 +1,14 @@
 """Thin public WorkflowManager facade for WP7.
 
-LangGraph topology and node coordination remain in the legacy graph manager for
-this migration step. Runtime/persistence mechanics, founder-facing commands,
-and restart recovery are delegated to focused components. Callers keep the
-same WorkflowManager API while responsibilities move behind stable boundaries.
+LangGraph topology and node coordination remain in the graph manager while
+runtime/persistence mechanics, role execution, founder-facing commands, and
+restart recovery are delegated to focused components. Callers keep the same
+WorkflowManager API while responsibilities move behind stable boundaries.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,7 +29,9 @@ from app.workflows.manager import (
     WorkflowManager as GraphWorkflowManager,
 )
 from app.workflows.recovery import WorkflowRecovery
+from app.workflows.role_runtime import WorkflowRoleRuntime
 from app.workflows.runtime import WorkflowRuntime
+from app.workflows.state import InitiativeState
 
 
 class WorkflowManager(GraphWorkflowManager):
@@ -66,6 +70,15 @@ class WorkflowManager(GraphWorkflowManager):
             bus,
             event_store,
             memory_service,
+        )
+        self._roles_runtime = WorkflowRoleRuntime(
+            session_factory,
+            engine,
+            git,
+            prompt_builder,
+            roles,
+            event_store,
+            self._runtime,
         )
         self._control = WorkflowControl(self)
         self._recovery = WorkflowRecovery(self)
@@ -153,6 +166,90 @@ class WorkflowManager(GraphWorkflowManager):
         ctx: dict,
     ) -> None:
         await self._runtime.emit_memory_injection(task_id, node, ctx)
+
+    # ------------------------------------------------------ role lifecycle
+
+    async def _prepare_and_start_architect(
+        self,
+        task_id: int,
+        state: InitiativeState | None = None,
+    ) -> Execution:
+        return await self._roles_runtime.prepare_and_start_architect(task_id, state)
+
+    async def _prepare_and_start_engineer(
+        self,
+        task_id: int,
+        is_correction: bool = False,
+    ) -> Execution:
+        return await self._roles_runtime.prepare_and_start_engineer(
+            task_id,
+            is_correction,
+        )
+
+    async def _prepare_and_start_reviewer(self, task_id: int) -> Execution:
+        return await self._roles_runtime.prepare_and_start_reviewer(task_id)
+
+    async def _finish_architect(
+        self,
+        task_id: int,
+        execution: Execution,
+        requires_implementation: bool = True,
+    ) -> None:
+        await self._roles_runtime.finish_architect(
+            task_id,
+            execution,
+            requires_implementation,
+        )
+
+    async def _finish_engineer(self, task_id: int, execution: Execution) -> None:
+        await self._roles_runtime.finish_engineer(task_id, execution)
+
+    async def _capture_engineer_commit(
+        self,
+        task_id: int,
+        worktree: Path,
+        base_commit: str | None,
+    ) -> tuple[str | None, bool]:
+        return await self._roles_runtime.capture_engineer_commit(
+            task_id,
+            worktree,
+            base_commit,
+        )
+
+    async def _finish_reviewer(
+        self,
+        task_id: int,
+        execution: Execution,
+        verdict: str,
+    ) -> None:
+        await self._roles_runtime.finish_reviewer(task_id, execution, verdict)
+
+    async def _store_task_advisory_result(
+        self,
+        task_id: int,
+        role_key: str,
+        content: str,
+    ) -> None:
+        await self._roles_runtime.store_task_advisory_result(
+            task_id,
+            role_key,
+            content,
+        )
+
+    async def _cleanup_review_worktree(self, task: Task) -> None:
+        await self._roles_runtime.cleanup_review_worktree(task)
+
+    async def _approve_architecture_impl(self, task_id: int) -> None:
+        await self._roles_runtime.approve_architecture(task_id)
+
+    async def _reject_architecture_impl(self, task_id: int, reason: str) -> None:
+        await self._roles_runtime.reject_architecture(task_id, reason)
+
+    async def _request_revision_impl(self, task_id: int, notes: str) -> None:
+        await self._roles_runtime.request_revision(task_id, notes)
+
+    async def _cleanup_architect_worktree(self, task_id: int) -> None:
+        await self._roles_runtime.cleanup_architect_worktree(task_id)
 
     # ------------------------------------------------------ public controls
 
