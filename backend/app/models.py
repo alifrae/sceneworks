@@ -35,6 +35,9 @@ class Project(Base):
     architecture_context_paths: Mapped[list] = mapped_column(JSON, default=list)
     test_commands: Mapped[list] = mapped_column(JSON, default=list)
     build_commands: Mapped[list] = mapped_column(JSON, default=list)
+    # Provider/model-neutral professional capability overlays. These describe
+    # relevant skills/domains/methods, never project facts.
+    capability_profile: Mapped[dict] = mapped_column(JSON, default=dict)
     worktree_root_override: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -105,6 +108,11 @@ class Task(Base):
     implementation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     engineering_contract: Mapped[dict] = mapped_column(JSON, default=dict)
+    # More-specific overlays layered on top of the project's capability profile.
+    capability_requirements: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Advisory role outputs survive the Architect phase independently instead of
+    # being flattened into/replaced by architecture_result.
+    advisory_results: Mapped[dict] = mapped_column(JSON, default=dict)
     changed_files: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
