@@ -1,5 +1,15 @@
 // SceneWorks backend types (mirror of backend/app/schemas.py).
 
+export interface RoleCapabilityOverlay {
+  skills: string[];
+  domains: string[];
+  methods: string[];
+}
+
+export interface CapabilityProfile extends RoleCapabilityOverlay {
+  roles: Record<string, RoleCapabilityOverlay>;
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -10,6 +20,7 @@ export interface Project {
   architecture_context_paths: string[];
   test_commands: string[];
   build_commands: string[];
+  capability_profile: CapabilityProfile;
   worktree_root_override: string | null;
   created_at: string;
   updated_at: string;
@@ -83,6 +94,8 @@ export interface Task {
   implementation_summary: string | null;
   review_result: string | null;
   engineering_contract: EngineeringContract;
+  capability_requirements: CapabilityProfile;
+  advisory_results: Record<string, string>;
   changed_files: string[];
   created_at: string;
   updated_at: string;
@@ -154,6 +167,8 @@ export interface Role {
   can_modify_source: boolean;
   can_commit: boolean;
   responsibilities: string[];
+  persona: string;
+  core_capabilities: string[];
 }
 
 export interface Artifact {
