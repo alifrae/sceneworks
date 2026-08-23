@@ -35,6 +35,8 @@ async def list_roles(ctx: AppContext = Depends(get_context)) -> list[RoleOut]:
             can_modify_source=r.can_modify_source,
             can_commit=r.can_commit,
             responsibilities=list(r.responsibilities),
+            persona=r.persona,
+            core_capabilities=list(r.core_capabilities),
         )
         for r in ctx.roles.all()
     ]
