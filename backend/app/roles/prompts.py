@@ -1,8 +1,8 @@
 """Prompt building layer.
 
-Composes role instructions + project context + task context + workspace info
-+ permissions + requested output format into one system prompt and one user
-prompt. No API route handler ever builds prompts directly.
+Composes role instructions + professional capabilities + project context + task
+context + workspace info + permissions + requested output format into one
+system prompt and one user prompt. No API route handler builds prompts directly.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.config.settings import Settings
 from app.models import Project, Task
+from app.roles.capabilities import resolve_capabilities
 from app.roles.definitions import RoleDefinition
 from app.roles.registry import RoleRegistry
 
@@ -143,9 +144,27 @@ class PromptBuilder:
                     + _cap(task.review_result, 10_000)
                 )
 
-        # Upstream advisory context for Architect and Engineer.
+            # Advisory outputs are independent evidence, not merely prose folded
+            # into the Architect result. Engineer and Reviewer receive the
+            # applicable original constraints directly.
+            if role.key in ("engineer", "reviewer"):
+                advisory = task.advisory_results or {}
+                if isinstance(advisory, dict):
+                    for advisory_role, label in (
+                        ("product", "Product requirements"),
+                        ("cto", "CTO recommendation"),
+                        ("technical_expert", "Technical Expert assessment"),
+                    ):
+                        value = advisory.get(advisory_role)
+                        if value:
+                            task_block += (
+                                f"\n\n# {label} (original advisory evidence)\n"
+                                + _cap(str(value), 20_000)
+                            )
+
+        # Explicit upstream context supplied by workflow state.
         upstream_block = ""
-        if upstream_contexts and role.key in ("architect", "engineer"):
+        if upstream_contexts and role.key in ("architect", "engineer", "reviewer"):
             for label, content in upstream_contexts.items():
                 if content:
                     upstream_block += (
@@ -208,6 +227,9 @@ class PromptBuilder:
             user += REVIEW_VERDICT_LINE
 
         system = self._roles.system_instructions(role.key)
+        capability_context = resolve_capabilities(role, project, task).render()
+        if capability_context:
+            system = system.rstrip() + "\n\n" + capability_context
         return BuiltPrompt(system=system, user=user, context_files=[])
 
     @staticmethod
