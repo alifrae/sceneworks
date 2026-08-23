@@ -1,11 +1,7 @@
 """Task workflow utilities (preparation helpers, state transitions).
 
-LangGraph now handles task workflow orchestration (WorkflowManager).
-This module retains shared utilities used by CompanyService, API-level
-task operations, and the WorkflowManager's internal methods.
-
-Do not add new task orchestration logic here — use the LangGraph
-WorkflowManager for that.
+LangGraph handles task workflow orchestration. This module retains shared
+utilities used by CompanyService and API-level task operations.
 """
 
 from __future__ import annotations
@@ -16,6 +12,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agents.model_routing import ModelRouter
 from app.config.settings import Settings
 from app.events.bus import EventBus
 from app.events.store import EventStore
@@ -41,13 +38,7 @@ class WorkflowError(Exception):
 
 
 class TaskWorkflowService:
-    """Shared utility layer for task workflow operations.
-
-    Task orchestration is now handled by LangGraph (WorkflowManager).
-    This class retains helpers for creating executions, managing
-    worktrees, and transitioning task states — used by both the
-    WorkflowManager and the CompanyService.
-    """
+    """Shared utility layer for non-orchestration workflow operations."""
 
     def __init__(
         self,
@@ -59,6 +50,7 @@ class TaskWorkflowService:
         bus: EventBus,
         event_store: EventStore,
         settings: Settings,
+        model_router: ModelRouter | None = None,
     ):
         self._session_factory = session_factory
         self.engine = engine
@@ -68,8 +60,7 @@ class TaskWorkflowService:
         self._bus = bus
         self._events = event_store
         self._settings = settings
-
-    # -------------------------------------------------------------- helpers
+        self._model_router = model_router or ModelRouter(settings, ())
 
     async def _get_task(self, session: AsyncSession, task_id: int) -> Task:
         task = await session.get(Task, task_id)
@@ -93,12 +84,14 @@ class TaskWorkflowService:
         system_prompt: str,
         user_prompt: str,
     ) -> Execution:
+        resolution = self._model_router.resolve(role)
         execution = Execution(
             id=uuid.uuid4().hex,
             task_id=task.id if task else None,
             role=role.key,
-            backend=role.backend,
-            model_profile=role.model_profile,
+            backend=resolution.backend,
+            model_profile=resolution.profile,
+            model_name=resolution.model,
             status="QUEUED",
             workspace=workspace,
             system_prompt=system_prompt,

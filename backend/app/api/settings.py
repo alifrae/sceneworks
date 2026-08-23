@@ -1,4 +1,4 @@
-﻿"""Backend health + roles + settings routes."""
+"""Backend health + roles + settings routes."""
 
 from __future__ import annotations
 
@@ -49,6 +49,10 @@ async def get_settings(ctx: AppContext = Depends(get_context)) -> SettingsOut:
         gemini_executable=settings.gemini_executable,
         gemini_model=settings.gemini_model,
         gemini_extra_args=list(settings.gemini_extra_args),
+        model_profile_routes={
+            profile: route.model_dump()
+            for profile, route in settings.model_profile_routes.items()
+        },
         execution_timeout_seconds=settings.execution_timeout_seconds,
         cancel_grace_seconds=settings.cancel_grace_seconds,
         default_backend=settings.default_backend,
@@ -67,15 +71,12 @@ async def update_settings(
     if patch:
         overrides = await ctx.settings_store.update(patch)
         ctx.settings_overrides = overrides
-        # apply_overrides mutates the shared Settings instance, so services
-        # holding a reference to it (engine, git, backends) pick the new values
-        # up immediately.
+        # apply_overrides mutates the shared Settings instance. Existing model
+        # routers and provider registries therefore see route changes without
+        # rewriting already-persisted Executions.
         ctx.settings = apply_overrides(ctx.settings, overrides)
         ctx.git = GitWorktreeService(ctx.settings)
         ctx.backends = BackendRegistry(ctx.settings)
-        # The role registry captured the default backend at startup; update it
-        # in place, otherwise the Settings page reports a backend change that
-        # nothing actually honours until a restart.
         ctx.roles.set_default_backend(
             ctx.settings.default_backend
             if ctx.settings.default_backend != "gemini_acp"

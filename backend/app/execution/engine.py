@@ -1,12 +1,9 @@
-﻿"""Execution engine.
+"""Execution engine.
 
-Runs agent executions as asyncio tasks (never blocking the API event loop),
-persists lifecycle events, supports cancellation with process cleanup, and
-reconciles interrupted executions on startup.
-
-The engine is generic: it does not know about tasks, projects, roles or
-prompts. The workflow service builds prompts and creates execution rows; the
-engine executes them and reports back through the on_execution_finished hook.
+Runs agent executions as asyncio tasks, persists lifecycle events, supports
+cancellation with process cleanup, and reconciles interrupted work on startup.
+The engine is generic: workflows create immutable Execution rows; the engine
+executes the backend/model already resolved on those rows.
 """
 
 from __future__ import annotations
@@ -33,13 +30,7 @@ logger = logging.getLogger("sceneworks.execution")
 
 ACTIVE_STATUSES = {"QUEUED", "STARTING", "RUNNING"}
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"}
-
-#: Task states that assert an agent is currently working. After a restart no
-#: agent and no graph survived, so a task in one of these is making a false
-#: claim and must be reconciled. Kept as strings: the engine is deliberately
-#: ignorant of the task domain and must not import the state machine.
 RUNNING_TASK_STATES = {"ARCHITECTURE_ANALYSIS", "IMPLEMENTING", "REVIEWING"}
-
 ResultStatus = Callable[[str], Awaitable[None]]
 
 
@@ -70,17 +61,9 @@ class ExecutionEngine:
         self._settings = settings
         self._active: dict[str, ActiveRun] = {}
         self.on_execution_finished: ResultStatus | None = None
-        # Set while shutdown() is tearing runs down, so an execution cancelled
-        # by the shutdown is recorded as INTERRUPTED rather than CANCELLED.
-        # Conflating the two told an operator "somebody cancelled this" when the
-        # truth was "the process stopped underneath it", and left restart
-        # reconciliation unable to find the work it was supposed to recover.
         self._shutting_down = False
 
-    # ------------------------------------------------------------ lifecycle
-
     async def start(self, execution_id: str) -> None:
-        """Register and launch an execution (idempotent)."""
         if execution_id in self._active:
             return
         async with self._session_factory() as session:
@@ -93,7 +76,7 @@ class ExecutionEngine:
             await session.commit()
             task_id = row.task_id
             backend_key = row.backend
-        if execution_id in self._active:  # another caller raced us
+        if execution_id in self._active:
             return
         sink = AgentEventSink(execution_id, task_id, self._emit)
         run = ActiveRun(task=None, sink=sink, backend_key=backend_key)
@@ -103,23 +86,18 @@ class ExecutionEngine:
         )
 
     async def cancel(self, execution_id: str) -> bool:
-        """Signal cancellation. The backend observes it and cleans up its
-        subprocess; the execution finalizes as CANCELLED. A watchdog force-
-        cancels the asyncio task after a grace period."""
         run = self._active.get(execution_id)
         if run is None:
             return False
         run.sink.cancel()
         try:
-            backend = self._backends.get(run.backend_key)
-            await backend.cancel(execution_id)
-        except Exception:  # noqa: BLE001 - cancellation must never raise
+            await self._backends.get(run.backend_key).cancel(execution_id)
+        except Exception:  # noqa: BLE001
             logger.exception("backend cancel failed for %s", execution_id)
         asyncio.create_task(self._force_cancel_after_grace(execution_id))
         return True
 
     async def fail_before_start(self, execution_id: str, error: str) -> None:
-        """Finalize work that failed before the backend was launched."""
         await self._finalize(
             execution_id,
             status="FAILED",
@@ -151,7 +129,6 @@ class ExecutionEngine:
         await self._notify_finished(execution_id)
 
     async def shutdown(self) -> None:
-        """Cancel everything and mark active executions INTERRUPTED."""
         self._shutting_down = True
         for execution_id, run in list(self._active.items()):
             run.sink.cancel()
@@ -165,11 +142,11 @@ class ExecutionEngine:
             except asyncio.CancelledError:
                 pass
             await self._finalize(
-                execution_id, status="INTERRUPTED", error="SceneWorks shutting down"
+                execution_id,
+                status="INTERRUPTED",
+                error="interrupted by SceneWorks shutdown",
             )
         self._active.clear()
-
-    # ------------------------------------------------------------ execution
 
     async def _execute(self, execution_id: str, sink: AgentEventSink) -> None:
         try:
@@ -182,6 +159,7 @@ class ExecutionEngine:
                     "role": row.role,
                     "backend": row.backend,
                     "model_profile": row.model_profile,
+                    "model": row.model_name,
                     "task_id": row.task_id,
                     "workspace": dict(row.workspace or {}),
                     "system_prompt": row.system_prompt,
@@ -189,7 +167,12 @@ class ExecutionEngine:
                 }
             await self._emit(
                 event_types.EXECUTION_STARTED,
-                {"role": snapshot["role"], "backend": snapshot["backend"]},
+                {
+                    "role": snapshot["role"],
+                    "backend": snapshot["backend"],
+                    "model_profile": snapshot["model_profile"],
+                    "model": snapshot["model"],
+                },
                 execution_id=execution_id,
             )
             cwd = snapshot["workspace"].get("cwd") or snapshot["workspace"].get("repo_path")
@@ -206,6 +189,7 @@ class ExecutionEngine:
                 system_prompt=snapshot["system_prompt"] or "",
                 user_prompt=snapshot["user_prompt"] or "",
                 model_profile=snapshot["model_profile"],
+                model=snapshot["model"],
                 metadata={"task_id": snapshot["task_id"]},
             )
             backend: AgentBackend = self._backends.get(snapshot["backend"])
@@ -221,13 +205,10 @@ class ExecutionEngine:
                 )
             except asyncio.CancelledError:
                 result = AgentResult(status="cancelled", error="execution cancelled")
-            except Exception as exc:  # noqa: BLE001 - adapter boundary
+            except Exception as exc:  # noqa: BLE001
                 logger.exception("backend run crashed for %s", execution_id)
                 result = AgentResult(status="failed", error=f"{type(exc).__name__}: {exc}")
 
-            # A cancellation observed while shutting down is an interruption, not
-            # a decision somebody made. Recording it correctly is what lets
-            # recover_interrupted() find the work again after restart.
             cancelled_status = "INTERRUPTED" if self._shutting_down else "CANCELLED"
             cancelled_event = (
                 event_types.EXECUTION_INTERRUPTED
@@ -249,9 +230,6 @@ class ExecutionEngine:
                     status="cancelled",
                     error="interrupted by SceneWorks shutdown; check logs before retrying",
                 )
-            # Terminal status and terminal event commit together. Written
-            # separately, a client could poll the execution to COMPLETED and
-            # then fetch events that do not yet contain execution.completed.
             await self._finalize(
                 execution_id,
                 status=status_map[result.status],
@@ -266,7 +244,7 @@ class ExecutionEngine:
             )
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - never let a crash kill the worker
+        except Exception:  # noqa: BLE001
             logger.exception("execution %s crashed in engine", execution_id)
             await self._finalize(
                 execution_id, status="FAILED", error="engine failure (see logs)"
@@ -281,7 +259,7 @@ class ExecutionEngine:
             return
         try:
             await hook(execution_id)
-        except Exception:  # noqa: BLE001 - workflow continuation must not crash the worker
+        except Exception:  # noqa: BLE001
             logger.exception("workflow continuation failed for %s", execution_id)
             await self._mark_task_failed_on_continuation_error(execution_id)
 
@@ -295,11 +273,7 @@ class ExecutionEngine:
                 task.status = "FAILED"
                 await session.commit()
 
-    # --------------------------------------------------------------- helpers
-
-    async def _load_execution(
-        self, session: AsyncSession, execution_id: str
-    ) -> Execution:
+    async def _load_execution(self, session: AsyncSession, execution_id: str) -> Execution:
         row = await session.get(Execution, execution_id)
         if row is None:
             raise ExecutionNotFoundError(execution_id)
@@ -313,7 +287,6 @@ class ExecutionEngine:
         *,
         execution_id: str | None = None,
     ) -> None:
-        # Resolve task_id for the event row.
         task_id: int | None = None
         if execution_id:
             async with self._session_factory() as session:
@@ -350,11 +323,6 @@ class ExecutionEngine:
         event_payload: dict | None = None,
         event_severity: str = "info",
     ) -> None:
-        """Move an execution to a terminal status.
-
-        When event_type is given, the event is written in the same transaction
-        as the status change, so observers never see one without the other.
-        """
         published: dict | None = None
         async with self._session_factory() as session:
             row = await session.get(Execution, execution_id)
@@ -386,34 +354,10 @@ class ExecutionEngine:
                     "timestamp": event_row.timestamp.isoformat(),
                 }
             await session.commit()
-        # Publish only after the transaction commits, so an SSE consumer that
-        # reacts to the event always finds the terminal row already written.
         if published is not None:
             await self._bus.publish(published)
 
-    # -------------------------------------------------------------- recovery
-
     async def recover_interrupted(self) -> list[str]:
-        """Reconcile executions and tasks that were mid-flight when SceneWorks stopped.
-
-        Two passes, because either can happen on its own:
-
-        1. Executions still marked active (QUEUED/STARTING/RUNNING) — the process
-           died without unwinding. They become INTERRUPTED.
-        2. Tasks left in a running state (ARCHITECTURE_ANALYSIS, IMPLEMENTING,
-           REVIEWING) with no execution still active. Nothing is running and no
-           graph survived the restart, so the state is a false claim of progress.
-           They become FAILED, which is the state `retry` accepts.
-
-        Pass 2 exists because a *clean* shutdown finalizes its executions itself,
-        so pass 1 finds nothing and the task used to stay in ARCHITECTURE_ANALYSIS
-        forever — visible in the UI as permanently working, with no agent, no
-        graph and no way to retry. Found by the WP1 restart-recovery scenario.
-
-        Human-waiting states (AWAITING_ARCHITECTURE_APPROVAL, CHANGES_REQUESTED,
-        READY_FOR_HUMAN, ACCEPTED, REJECTED) are left alone: nothing about them
-        depends on a live process.
-        """
         interrupted: list[str] = []
         failed_task_ids: list[int] = []
         async with self._session_factory() as session:
@@ -435,7 +379,6 @@ class ExecutionEngine:
                         failed_task_ids.append(task.id)
             await session.commit()
 
-            # Pass 2: tasks claiming to be running with nothing running.
             stranded = (
                 (await session.execute(
                     select(Task).where(Task.status.in_(sorted(RUNNING_TASK_STATES)))
@@ -462,8 +405,7 @@ class ExecutionEngine:
                 task.updated_at = datetime.now(timezone.utc)
                 failed_task_ids.append(task.id)
                 logger.warning(
-                    "task %s was left in a running state with no active execution; "
-                    "marked FAILED so it can be retried",
+                    "task %s was left in a running state with no active execution; marked FAILED so it can be retried",
                     task.id,
                 )
             await session.commit()

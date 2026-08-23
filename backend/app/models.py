@@ -13,15 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import (
-    JSON,
-    DateTime,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -45,9 +37,7 @@ class Project(Base):
     build_commands: Mapped[list] = mapped_column(JSON, default=list)
     worktree_root_override: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     tasks: Mapped[list[Task]] = relationship(back_populates="project")
     initiatives: Mapped[list[Initiative]] = relationship(back_populates="project")
@@ -65,23 +55,17 @@ class Initiative(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(30), default="planned")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="initiatives")
-    work_packages: Mapped[list[WorkPackage]] = relationship(
-        back_populates="initiative", order_by="WorkPackage.sequence"
-    )
+    work_packages: Mapped[list[WorkPackage]] = relationship(back_populates="initiative", order_by="WorkPackage.sequence")
 
 
 class WorkPackage(Base):
     """One bounded, dependency-aware unit of an Initiative."""
 
     __tablename__ = "work_packages"
-    __table_args__ = (
-        UniqueConstraint("initiative_id", "key", name="uq_work_package_initiative_key"),
-    )
+    __table_args__ = (UniqueConstraint("initiative_id", "key", name="uq_work_package_initiative_key"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     initiative_id: Mapped[int] = mapped_column(ForeignKey("initiatives.id"), index=True)
@@ -90,14 +74,10 @@ class WorkPackage(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(30), default="planned")
     sequence: Mapped[int] = mapped_column(Integer, default=0)
-    # IDs of WorkPackages in the same Initiative. API validation prevents
-    # cross-initiative dependencies and cycles are rejected on mutation.
     depends_on: Mapped[list] = mapped_column(JSON, default=list)
     acceptance_criteria: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     initiative: Mapped[Initiative] = relationship(back_populates="work_packages")
     tasks: Mapped[list[Task]] = relationship(back_populates="work_package")
@@ -108,9 +88,7 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
-    work_package_id: Mapped[int | None] = mapped_column(
-        ForeignKey("work_packages.id"), nullable=True, index=True
-    )
+    work_package_id: Mapped[int | None] = mapped_column(ForeignKey("work_packages.id"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(50), default="NEW")
@@ -120,22 +98,16 @@ class Task(Base):
     base_commit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     task_branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
     worktree_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    architecture_worktree_path: Mapped[str | None] = mapped_column(
-        String(1000), nullable=True
-    )
+    architecture_worktree_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     review_worktree_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     result_commit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     architecture_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     implementation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_result: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # WP4: explicit task obligations shared by Architect, Engineer and Reviewer.
     engineering_contract: Mapped[dict] = mapped_column(JSON, default=dict)
-    # WP6: authoritative repo-relative paths observed from Git, never agent prose.
     changed_files: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="tasks")
     work_package: Mapped[WorkPackage | None] = relationship(back_populates="tasks")
@@ -144,15 +116,16 @@ class Task(Base):
 
 class Execution(Base):
     __tablename__ = "executions"
-    __table_args__ = (
-        UniqueConstraint("task_id", "role", "started_at", name="uq_task_role_started"),
-    )
+    __table_args__ = (UniqueConstraint("task_id", "role", "started_at", name="uq_task_role_started"),)
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     role: Mapped[str] = mapped_column(String(50))
     backend: Mapped[str] = mapped_column(String(100))
     model_profile: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Concrete model selected from the profile when this execution was created.
+    # Persisted so queued/restarted work cannot drift with later setting changes.
+    model_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="QUEUED")
     workspace: Mapped[dict] = mapped_column(JSON, default=dict)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -172,16 +145,12 @@ class Event(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    execution_id: Mapped[str | None] = mapped_column(
-        ForeignKey("executions.id"), nullable=True, index=True
-    )
+    execution_id: Mapped[str | None] = mapped_column(ForeignKey("executions.id"), nullable=True, index=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
     type: Mapped[str] = mapped_column(String(100))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     severity: Mapped[str] = mapped_column(String(20), default="info")
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, index=True
-    )
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
     execution: Mapped[Execution | None] = relationship(back_populates="events")
 
@@ -204,9 +173,7 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON, default=dict)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class ProjectMemory(Base):
@@ -225,19 +192,7 @@ class ProjectMemory(Base):
     source_commit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("project_memory.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
-all_models = (
-    Project,
-    Initiative,
-    WorkPackage,
-    Task,
-    Execution,
-    Event,
-    Artifact,
-    AppSetting,
-    ProjectMemory,
-)
+all_models = (Project, Initiative, WorkPackage, Task, Execution, Event, Artifact, AppSetting, ProjectMemory)

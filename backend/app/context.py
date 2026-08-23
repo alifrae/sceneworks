@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from app.agents.model_routing import ModelRouter
 from app.agents.registry import BackendRegistry
 from app.config.settings import Settings, get_settings
 from app.db.session import close_db, create_engine_and_sessionmaker, init_db
@@ -40,6 +41,7 @@ class AppContext:
     bus: EventBus
     event_store: EventStore
     backends: BackendRegistry
+    model_router: ModelRouter
     git: GitWorktreeService
     roles: RoleRegistry
     prompt_builder: PromptBuilder
@@ -66,16 +68,13 @@ async def _warm_backend_health(backends: BackendRegistry) -> None:
         await backends.health_all()
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001 - warm-up must never break startup
+    except Exception:  # noqa: BLE001
         logger.debug("backend health warm-up failed", exc_info=True)
 
 
 async def build_context(settings: Settings | None = None) -> AppContext:
     settings = settings or get_settings()
     db_engine, session_factory = create_engine_and_sessionmaker(settings)
-    # Migrations run before any service touches the database. A failure here
-    # aborts startup with the real error rather than letting services run
-    # against a half-migrated schema.
     await init_db(db_engine, settings)
 
     settings_store = SettingsStore(session_factory)
@@ -85,17 +84,28 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     bus = EventBus()
     event_store = EventStore(session_factory)
     backends = BackendRegistry(settings)
+    model_router = ModelRouter(settings, backends.keys())
     git = GitWorktreeService(settings)
     roles = RoleRegistry(
         settings.roles_dir,
-        default_backend=settings.default_backend if settings.default_backend != "gemini_acp" else None,
+        default_backend=(
+            settings.default_backend if settings.default_backend != "gemini_acp" else None
+        ),
     )
     prompt_builder = PromptBuilder(settings, roles)
     execution_engine = ExecutionEngine(
         session_factory, bus, event_store, backends, settings
     )
     workflow = TaskWorkflowService(
-        session_factory, execution_engine, git, prompt_builder, roles, bus, event_store, settings
+        session_factory,
+        execution_engine,
+        git,
+        prompt_builder,
+        roles,
+        bus,
+        event_store,
+        settings,
+        model_router=model_router,
     )
     memory = MemoryService(session_factory, event_store, bus)
     provenance = ProvenanceService(session_factory, git)
@@ -111,9 +121,12 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         checkpoint_db_path=str(settings.checkpoint_db_path),
         max_review_iterations=settings.max_review_iterations,
         memory_service=memory,
+        model_router=model_router,
     )
     execution_engine.on_execution_finished = workflow_manager.on_execution_finished
-    company = CompanyService(session_factory, workflow, roles, git, prompt_builder, execution_engine)
+    company = CompanyService(
+        session_factory, workflow, roles, git, prompt_builder, execution_engine
+    )
 
     ctx = AppContext(
         settings=settings,
@@ -122,6 +135,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         bus=bus,
         event_store=event_store,
         backends=backends,
+        model_router=model_router,
         git=git,
         roles=roles,
         prompt_builder=prompt_builder,
@@ -135,8 +149,6 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         settings_overrides=overrides,
     )
 
-    # Probe backend health in the background so the first dashboard/settings
-    # request is served from cache instead of waiting on agent CLI startup.
     ctx.health_warmup = asyncio.create_task(_warm_backend_health(backends))
 
     interrupted = await execution_engine.recover_interrupted()

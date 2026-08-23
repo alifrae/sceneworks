@@ -16,6 +16,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agents.model_routing import ModelRouter
 from app.domain.task_states import TaskStateMachine, TaskStatus
 from app.events import types as event_types
 from app.events.bus import EventBus
@@ -41,15 +42,15 @@ class WorkflowRuntime:
         bus: EventBus,
         event_store: EventStore,
         memory_service: MemoryService | None = None,
+        model_router: ModelRouter | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._git = git
         self._bus = bus
         self._events = event_store
         self._memory = memory_service
+        self._model_router = model_router
         self._pending_executions: dict[str, asyncio.Event] = {}
-
-    # --------------------------------------------------------- model access
 
     async def get_task(self, session: AsyncSession, task_id: int) -> Task:
         task = await session.get(Task, task_id)
@@ -62,8 +63,6 @@ class WorkflowRuntime:
         if project is None:
             raise WorkflowError(f"project {project_id} not found", 404)
         return project
-
-    # ------------------------------------------------------ task transitions
 
     async def transition(
         self,
@@ -143,8 +142,6 @@ class WorkflowRuntime:
             }
         )
 
-    # ---------------------------------------------------------- executions
-
     async def create_execution(
         self,
         *,
@@ -154,12 +151,16 @@ class WorkflowRuntime:
         system_prompt: str,
         user_prompt: str,
     ) -> Execution:
+        if self._model_router is None:
+            raise RuntimeError("WorkflowRuntime requires a ModelRouter to create executions")
+        resolution = self._model_router.resolve(role)
         execution = Execution(
             id=uuid.uuid4().hex,
             task_id=task.id,
             role=role.key,
-            backend=role.backend,
-            model_profile=role.model_profile,
+            backend=resolution.backend,
+            model_profile=resolution.profile,
+            model_name=resolution.model,
             status="QUEUED",
             workspace=workspace,
             system_prompt=system_prompt,
@@ -210,8 +211,6 @@ class WorkflowRuntime:
         if event:
             event.set()
 
-    # ------------------------------------------------------------- events
-
     async def append_task_note(self, task_id: int, title: str, detail: str) -> None:
         await self._events.append(
             execution_id=None,
@@ -243,8 +242,6 @@ class WorkflowRuntime:
                 "timestamp": row.timestamp.isoformat(),
             }
         )
-
-    # ------------------------------------------------------------- memory
 
     async def inject_memory(
         self,
@@ -286,8 +283,6 @@ class WorkflowRuntime:
     @staticmethod
     def permission_names(role: RoleDefinition) -> list[str]:
         return sorted(permission.value for permission in role.permissions)
-
-    # ----------------------------------------------------- task-less asks
 
     async def _store_company_artifact(
         self,
