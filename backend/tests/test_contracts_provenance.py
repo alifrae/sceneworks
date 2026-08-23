@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.models import Task
+from app.models import Project, Task
 
 
 async def _project(client, git_repo) -> dict:
@@ -51,6 +51,7 @@ async def test_engineering_contract_round_trips_and_is_immutable_after_start(
 
     async with context.engine_factory() as session:
         row = await session.get(Task, task["id"])
+        assert row is not None
         row.status = "ARCHITECTURE_ANALYSIS"
         await session.commit()
 
@@ -76,15 +77,13 @@ async def test_contract_is_rendered_identically_and_reviewer_must_verify_it(
             },
         },
     )
+    assert response.status_code == 201, response.text
     task_id = response.json()["id"]
 
     async with context.engine_factory() as session:
         task = await session.get(Task, task_id)
-        project_row = task.project
-        # Relationship may not be eagerly loaded in async mode; fetch directly.
-        if project_row is None:
-            from app.models import Project
-            project_row = await session.get(Project, task.project_id)
+        project_row = await session.get(Project, project["id"])
+        assert task is not None and project_row is not None
 
     workspace = {
         "cwd": str(git_repo),
@@ -135,6 +134,7 @@ async def test_git_provenance_is_persisted_and_queryable_by_path(
 
     async with context.engine_factory() as session:
         task = await session.get(Task, task_id)
+        assert task is not None
         task.base_commit = base
         task.result_commit = result
         task.worktree_path = str(git_repo)
@@ -152,6 +152,7 @@ async def test_git_provenance_is_persisted_and_queryable_by_path(
     # The path list is persisted, not just returned from a one-off Git query.
     async with context.engine_factory() as session:
         task = await session.get(Task, task_id)
+        assert task is not None
         assert task.changed_files == ["app.py"]
 
     response = await client.get(
