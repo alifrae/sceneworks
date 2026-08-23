@@ -1,12 +1,12 @@
 """Persistent domain models (SQLAlchemy 2.x declarative).
 
 Schema notes:
-- Task holds workflow-scoped, coarse results as text blobs; fine-grained
-  traceability lives in Execution and Event rows.
+- Initiative and WorkPackage provide durable objective decomposition above Task.
+- Task holds workflow-scoped, coarse results; fine-grained traceability lives in
+  Execution and Event rows.
 - Execution is the unit of agent invocation (one row per agent run).
 - Event rows are the durable record of everything an execution produced.
-- Artifact stores company-role outputs (decisions, analyses) that are not
-  attached to a task.
+- Artifact stores company-role outputs that are not attached to a task.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ class Project(Base):
     repository_path: Mapped[str] = mapped_column(String(1000))
     default_branch: Mapped[str] = mapped_column(String(200), default="")
     status: Mapped[str] = mapped_column(String(50), default="active")
-    # JSON list of repo-relative paths (e.g. ["docs/architecture.md"]).
     architecture_context_paths: Mapped[list] = mapped_column(JSON, default=list)
     test_commands: Mapped[list] = mapped_column(JSON, default=list)
     build_commands: Mapped[list] = mapped_column(JSON, default=list)
@@ -51,6 +50,57 @@ class Project(Base):
     )
 
     tasks: Mapped[list[Task]] = relationship(back_populates="project")
+    initiatives: Mapped[list[Initiative]] = relationship(back_populates="project")
+
+
+class Initiative(Base):
+    """A durable project objective decomposed into ordered work packages."""
+
+    __tablename__ = "initiatives"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    objective: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(30), default="planned")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Project] = relationship(back_populates="initiatives")
+    work_packages: Mapped[list[WorkPackage]] = relationship(
+        back_populates="initiative", order_by="WorkPackage.sequence"
+    )
+
+
+class WorkPackage(Base):
+    """One bounded, dependency-aware unit of an Initiative."""
+
+    __tablename__ = "work_packages"
+    __table_args__ = (
+        UniqueConstraint("initiative_id", "key", name="uq_work_package_initiative_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    initiative_id: Mapped[int] = mapped_column(ForeignKey("initiatives.id"), index=True)
+    key: Mapped[str] = mapped_column(String(100))
+    title: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(30), default="planned")
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    # IDs of WorkPackages in the same Initiative. API validation prevents
+    # cross-initiative dependencies and cycles are rejected on mutation.
+    depends_on: Mapped[list] = mapped_column(JSON, default=list)
+    acceptance_criteria: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    initiative: Mapped[Initiative] = relationship(back_populates="work_packages")
+    tasks: Mapped[list[Task]] = relationship(back_populates="work_package")
 
 
 class Task(Base):
@@ -58,6 +108,9 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    work_package_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_packages.id"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(50), default="NEW")
@@ -76,11 +129,8 @@ class Task(Base):
     implementation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     # WP4: explicit task obligations shared by Architect, Engineer and Reviewer.
-    # Kept as a JSON object so adding contract dimensions does not force a schema
-    # migration; validation and normalisation live in the Pydantic API schema.
     engineering_contract: Mapped[dict] = mapped_column(JSON, default=dict)
-    # WP6: authoritative repo-relative paths observed from Git at implementation
-    # completion. Never populated from an agent-written summary.
+    # WP6: authoritative repo-relative paths observed from Git, never agent prose.
     changed_files: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -88,6 +138,7 @@ class Task(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="tasks")
+    work_package: Mapped[WorkPackage | None] = relationship(back_populates="tasks")
     executions: Mapped[list[Execution]] = relationship(back_populates="task")
 
 
@@ -139,7 +190,7 @@ class Artifact(Base):
     __tablename__ = "artifacts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    kind: Mapped[str] = mapped_column(String(50))  # e.g. "company_decision"
+    kind: Mapped[str] = mapped_column(String(50))
     role: Mapped[str] = mapped_column(String(50))
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(500))
@@ -171,9 +222,6 @@ class ProjectMemory(Base):
     source: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     source_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    #: Repository state the decision was made against. NULL means "not
-    #: recorded" — never "the base commit". Memories created before this column
-    #: existed (migration 0002) legitimately have no commit to attribute.
     source_commit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("project_memory.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -182,4 +230,14 @@ class ProjectMemory(Base):
     )
 
 
-all_models = (Project, Task, Execution, Event, Artifact, AppSetting, ProjectMemory)
+all_models = (
+    Project,
+    Initiative,
+    WorkPackage,
+    Task,
+    Execution,
+    Event,
+    Artifact,
+    AppSetting,
+    ProjectMemory,
+)
