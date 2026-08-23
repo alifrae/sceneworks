@@ -13,12 +13,12 @@ from tests.conftest import require_git
 async def test_paired_benchmark_runs_both_arms_on_same_pinned_commit(git_repo, tmp_path):
     """Exercise real worktrees, prompts, workflow/direct backends and scoring.
 
-    The stock fake backend deliberately makes no source change. The direct arm
-    therefore satisfies this plumbing-only acceptance command, while SceneWorks
-    cannot claim success merely because the command passes: its normal workflow
-    has no implementation commit to review and does not reach READY_FOR_HUMAN.
-    That asymmetry is intentional here and proves both the runner and the
-    control-plane-delivery guard are active end to end.
+    The stock fake backend deliberately makes no source change, and this
+    plumbing-only acceptance command does not require one. Both arms therefore
+    legitimately pass. The point of this test is to prove that both execution
+    paths run end to end from the same pinned commit and produce comparable
+    aggregates; workflow-failure rejection is covered separately with an
+    explicit FAILED lifecycle fixture.
     """
     require_git()
     manifest = BenchmarkManifest(
@@ -47,7 +47,8 @@ async def test_paired_benchmark_runs_both_arms_on_same_pinned_commit(git_repo, t
     assert len(report.trials) == 2
     by_mode = {trial.mode: trial for trial in report.trials}
     assert by_mode["direct"].verdict is TrialVerdict.PASS
-    assert by_mode["sceneworks"].verdict is TrialVerdict.FAIL
+    assert by_mode["sceneworks"].verdict is TrialVerdict.PASS
+    assert by_mode["sceneworks"].final_task_status == "READY_FOR_HUMAN"
     assert by_mode["sceneworks"].resolved_base_commit == by_mode["direct"].resolved_base_commit
-    assert report.comparisons[0].outcome == "direct_only_pass"
+    assert report.comparisons[0].outcome == "both_pass"
     assert {aggregate.mode for aggregate in report.aggregates} == {"sceneworks", "direct"}
