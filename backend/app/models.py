@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -21,6 +21,9 @@ from app.db.session import Base
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_EMPTY_JSON = text("'{}'")
 
 
 class Project(Base):
@@ -36,8 +39,12 @@ class Project(Base):
     test_commands: Mapped[list] = mapped_column(JSON, default=list)
     build_commands: Mapped[list] = mapped_column(JSON, default=list)
     # Provider/model-neutral professional capability overlays. These describe
-    # relevant skills/domains/methods, never project facts.
-    capability_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    # relevant skills/domains/methods, never project facts. A server default is
+    # deliberate: older/raw insert paths must remain compatible with a
+    # create_all-produced database, matching migration 0006 behavior.
+    capability_profile: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=_EMPTY_JSON
+    )
     worktree_root_override: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -109,10 +116,14 @@ class Task(Base):
     review_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     engineering_contract: Mapped[dict] = mapped_column(JSON, default=dict)
     # More-specific overlays layered on top of the project's capability profile.
-    capability_requirements: Mapped[dict] = mapped_column(JSON, default=dict)
+    capability_requirements: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=_EMPTY_JSON
+    )
     # Advisory role outputs survive the Architect phase independently instead of
     # being flattened into/replaced by architecture_result.
-    advisory_results: Mapped[dict] = mapped_column(JSON, default=dict)
+    advisory_results: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=_EMPTY_JSON
+    )
     changed_files: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
