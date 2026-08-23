@@ -450,6 +450,18 @@ class WorkflowRoleRuntime:
             task = await self._runtime.get_task(session, task_id)
             task.current_role = None
             task.current_execution_id = None
+
+            # Persist original advisory evidence independently. architecture_result
+            # is later replaced by the Architect's final analysis, so using it as
+            # the sole carrier silently discarded Product/CTO/Technical Expert
+            # evidence before Engineer/Reviewer execution.
+            advisory = dict(task.advisory_results or {})
+            advisory[role_key] = content[:20_000]
+            task.advisory_results = advisory
+
+            # Keep the legacy pre-architecture combined view for compatibility
+            # with existing UI/workflow behavior. The durable source is now
+            # advisory_results and survives finish_architect().
             prefix = task.architecture_result or ""
             if role_key == "product":
                 heading = "Product Assessment"
