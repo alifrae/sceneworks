@@ -61,7 +61,9 @@ def finalize_trial(trial: TrialResult, task: BenchmarkTask) -> TrialResult:
 
     BLOCKED is reserved for a run that did not produce comparable evidence.
     FAIL is a valid engineering outcome and therefore remains usable benchmark
-    data.
+    data. A SceneWorks arm must also complete its control-plane lifecycle: code
+    that happens to pass checks while the workflow itself failed is not a
+    successful SceneWorks delivery.
     """
     trial.unsupported_metrics = dict(UNSUPPORTED_PRODUCTIVITY_METRICS)
     if trial.blocker:
@@ -75,8 +77,12 @@ def finalize_trial(trial: TrialResult, task: BenchmarkTask) -> TrialResult:
     verification_passed = bool(trial.verification) and all(
         result.passed for result in trial.verification
     )
+    workflow_delivered = (
+        trial.mode != "sceneworks" or trial.final_task_status == "READY_FOR_HUMAN"
+    )
     trial.quality_gate_passed = (
         verification_passed
+        and workflow_delivered
         and not trial.expected_files_missing
         and not trial.forbidden_files_changed
     )
