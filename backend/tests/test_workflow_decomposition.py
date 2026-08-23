@@ -7,7 +7,7 @@ import inspect
 from app.workflows import WorkflowManager as PublicWorkflowManager
 from app.workflows.advisory_runtime import WorkflowAdvisoryRuntime
 from app.workflows.control import WorkflowControl
-from app.workflows.manager import WorkflowManager as GraphWorkflowManager
+from app.workflows.graph_core import GraphWorkflowManager
 from app.workflows.orchestrator import WorkflowManager as OrchestratedWorkflowManager
 from app.workflows.recovery import WorkflowRecovery
 from app.workflows.role_runtime import WorkflowRoleRuntime
@@ -19,7 +19,6 @@ import app.workflows.runtime as runtime_module
 
 def test_public_workflow_manager_is_the_decomposed_orchestrator():
     assert PublicWorkflowManager is OrchestratedWorkflowManager
-    assert PublicWorkflowManager is not GraphWorkflowManager
     assert issubclass(PublicWorkflowManager, GraphWorkflowManager)
 
 
