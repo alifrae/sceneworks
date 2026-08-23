@@ -47,18 +47,15 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Keep `uv run pytest` portable. On some pytest/uv/Linux combinations the
+# console-script directory, not the backend source root, is first on sys.path;
+# without this the suite fails in conftest before collecting a single test.
+pythonpath = ["."]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
 markers = [
-    # End-to-end tests that drive a whole workflow through the qualification
-    # harness (worktrees, subprocesses, LangGraph). Tens of seconds each.
-    # Deselect with: -m "not slow"
     "slow: drives a full workflow; slow by nature",
-    # Tests that need a real agent provider and a real model. They skip cleanly
-    # when the provider is not configured — never falling back to a fake — so an
-    # unavailable provider can never be reported as a pass.
-    # Deselect with: -m "not live"
     "live: requires a real agent provider and model",
     "openhands: requires a working OpenHands install",
 ]
