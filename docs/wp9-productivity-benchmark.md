@@ -34,7 +34,7 @@ The model does not grade itself. After each run, the harness independently colle
 - backend failures;
 - concrete backend / model-profile / model for each execution.
 
-A trial passes only when all verification commands pass, every required file pattern was touched, and no forbidden file was touched.
+A direct trial passes only when all verification commands pass, every required file pattern was touched, and no forbidden file was touched. A SceneWorks trial must satisfy those same independent acceptance gates **and** complete its own workflow at `READY_FOR_HUMAN`. Code that happens to pass tests while SceneWorks itself ends `FAILED`, `CANCELLED`, or stuck in `CHANGES_REQUESTED` is therefore a SceneWorks failure, not a success.
 
 A failed implementation is **valid benchmark evidence**. A backend that was unavailable, an unusable repository, timeout, or invalid benchmark precondition is **BLOCKED** and makes the benchmark `INCOMPLETE` rather than being counted as a loss.
 
