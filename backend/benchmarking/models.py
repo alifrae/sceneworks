@@ -35,6 +35,7 @@ class BenchmarkTask(BaseModel):
     repository_path: Path
     base_ref: str = Field(default="HEAD", min_length=1)
     verification_commands: list[str] = Field(min_length=1)
+    baseline_expectation: Literal["must_fail", "must_pass", "any"] = "must_fail"
     architecture_context_paths: list[str] = Field(default_factory=list)
     expected_changed_files: list[str] = Field(default_factory=list)
     forbidden_changed_files: list[str] = Field(default_factory=list)
