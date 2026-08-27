@@ -22,6 +22,7 @@ from app.domain.task_states import TaskStatus
 from app.events import types as event_types
 from app.git.workspace import GitError
 from app.models import Execution
+from app.services.policy_check import POLICY_VIOLATION_MARKER
 from app.services.workflow import WorkflowError, parse_review_verdict
 from app.workflows.state import InitiativeState
 
@@ -455,6 +456,18 @@ class GraphWorkflowManager:
 
         if final.status == "COMPLETED":
             verdict = parse_review_verdict(final.result or "")
+            if POLICY_VIOLATION_MARKER in (final.user_prompt or ""):
+                await self._emit_workflow_event(
+                    task_id,
+                    "policy.violation_detected",
+                    {
+                        "review_execution_id": final.id,
+                        "kind": "protected_path",
+                        "model_verdict": verdict,
+                        "effective_verdict": "CHANGES_REQUESTED",
+                    },
+                )
+                verdict = "CHANGES_REQUESTED"
             await self._finish_reviewer(task_id, final, verdict)
             if verdict == "APPROVED":
                 return {
