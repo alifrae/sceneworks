@@ -85,6 +85,17 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # WP11 MCP reasoning interface. The endpoint is available by default on the
+    # same bind address as the API. Tools that create executions or mutate task
+    # state are separately gated and default OFF so merely connecting a client
+    # never grants operational authority.
+    mcp_enabled: bool = True
+    mcp_allow_actions: bool = False
+    # Total text budget returned by one semantic MCP tool call. Large diffs and
+    # artifacts are truncated with an explicit marker rather than overflowing
+    # an external model's context window.
+    mcp_tool_max_chars: int = 120_000
+
     # LangGraph workflow checkpoint database path (plain file path, not a URL).
     checkpoint_db_path: str = "data/workflow_checkpoints.db"
     # Maximum review-repair iterations before forcing human intervention.
@@ -101,6 +112,7 @@ class Settings(BaseSettings):
     #: "anthropic/claude-sonnet-4-20250514". Required: the SDK rejects an
     #: unspecified model.
     openhands_model: str | None = None
+    #: LLM/provider API key used by the OpenHands SDK. Never returned by the API.
     openhands_api_key: str | None = None
     #: Force a mode instead of resolving one: local | remote | http | cli.
     openhands_mode: str | None = None
