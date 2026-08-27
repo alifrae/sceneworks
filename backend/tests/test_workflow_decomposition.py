@@ -1,10 +1,16 @@
-"""WP7 workflow-manager responsibility boundary tests."""
+"""WP7 workflow-manager responsibility boundary tests.
+
+WP11 intentionally made the adaptive manager the public WorkflowManager. These
+tests therefore protect decomposition/inheritance boundaries rather than
+requiring exact identity with the pre-WP11 orchestrator class.
+"""
 
 from __future__ import annotations
 
 import inspect
 
 from app.workflows import WorkflowManager as PublicWorkflowManager
+from app.workflows.adaptive import WorkflowManager as AdaptiveWorkflowManager
 from app.workflows.advisory_runtime import WorkflowAdvisoryRuntime
 from app.workflows.control import WorkflowControl
 from app.workflows.graph_core import GraphWorkflowManager
@@ -18,8 +24,9 @@ import app.workflows.role_runtime as role_runtime_module
 import app.workflows.runtime as runtime_module
 
 
-def test_public_workflow_manager_is_the_decomposed_orchestrator():
-    assert PublicWorkflowManager is OrchestratedWorkflowManager
+def test_public_workflow_manager_is_adaptive_decomposed_orchestrator():
+    assert PublicWorkflowManager is AdaptiveWorkflowManager
+    assert issubclass(PublicWorkflowManager, OrchestratedWorkflowManager)
     assert issubclass(PublicWorkflowManager, GraphWorkflowManager)
 
 
@@ -43,7 +50,8 @@ def test_non_graph_runtimes_have_no_langgraph_dependency():
 
 async def test_application_context_wires_wp7_components(context):
     manager = context.workflow_manager
-    assert type(manager) is OrchestratedWorkflowManager
+    assert type(manager) is PublicWorkflowManager
+    assert isinstance(manager, OrchestratedWorkflowManager)
     assert isinstance(manager._runtime, WorkflowRuntime)
     assert isinstance(manager._roles_runtime, WorkflowRoleRuntime)
     assert isinstance(manager._advisory_runtime, WorkflowAdvisoryRuntime)
