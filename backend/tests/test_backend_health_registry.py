@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from app.agents.fake import FakeAgentBackend
 from app.agents.registry import BackendRegistry
 
@@ -20,6 +22,10 @@ async def test_cold_health_reports_fake_available_immediately(settings):
     # Do not leak the scheduled provider probe into the next test.
     if registry._refresh_task is not None:
         registry._refresh_task.cancel()
+        try:
+            await registry._refresh_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def test_forced_backend_endpoint_returns_real_fake_health(client, context):
