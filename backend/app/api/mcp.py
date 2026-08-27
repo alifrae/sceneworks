@@ -22,15 +22,19 @@ async def mcp_info(request: Request) -> dict[str, Any]:
     ctx = request.app.state.context
     if not ctx.settings.mcp_enabled:
         raise HTTPException(status_code=404, detail="MCP interface is disabled")
+    mode = ctx.settings.effective_mcp_mode
     return {
         "name": "SceneWorks",
         "version": __version__,
         "endpoint": "/mcp",
         "transport": "streamable HTTP / JSON-RPC",
-        "action_tools_enabled": bool(ctx.settings.mcp_allow_actions),
+        "mode": mode,
+        "action_tools_enabled": mode in {"standard", "advanced"},
+        "advanced_agent_sessions_enabled": mode == "advanced",
         "security": (
-            "SceneWorks does not add OAuth at this endpoint. Keep it local/use a trusted "
-            "tunnel, or put authenticated TLS infrastructure in front of it."
+            "SceneWorks does not add OAuth at this endpoint. Keep it local/use a "
+            "trusted tunnel, or put authenticated TLS infrastructure in front of it. "
+            "Advanced shell execution is worktree-cwd gated but is not an OS sandbox."
         ),
     }
 
@@ -67,7 +71,10 @@ async def mcp_rpc(request: Request) -> Response:
                 content={
                     "jsonrpc": "2.0",
                     "id": payload.get("id"),
-                    "error": {"code": -32600, "message": "Mcp-Method header does not match JSON-RPC method"},
+                    "error": {
+                        "code": -32600,
+                        "message": "Mcp-Method header does not match JSON-RPC method",
+                    },
                 },
             )
         if name_header and method == "tools/call":
@@ -78,7 +85,10 @@ async def mcp_rpc(request: Request) -> Response:
                     content={
                         "jsonrpc": "2.0",
                         "id": payload.get("id"),
-                        "error": {"code": -32600, "message": "Mcp-Name header does not match tools/call name"},
+                        "error": {
+                            "code": -32600,
+                            "message": "Mcp-Name header does not match tools/call name",
+                        },
                     },
                 )
 
