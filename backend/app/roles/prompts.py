@@ -17,6 +17,7 @@ from app.models import Project, Task
 from app.roles.capabilities import resolve_capabilities
 from app.roles.definitions import RoleDefinition
 from app.roles.registry import RoleRegistry
+from app.services.policy_check import check_protected_paths, render_violations
 
 logger = logging.getLogger("sceneworks.prompts")
 
@@ -67,6 +68,17 @@ CONTRACT_FIELDS = (
     ("Acceptance criteria", "acceptance_criteria"),
 )
 
+POLICY_FIELDS = (
+    ("Protected paths", "protected_paths"),
+    ("Architecture invariants", "architecture_invariants"),
+    ("Forbidden dependency directions", "forbidden_dependency_directions"),
+    ("Documentation requirements", "documentation_requirements"),
+    ("Performance constraints", "performance_constraints"),
+    ("Required review checks", "required_review_checks"),
+    ("Go/no-go commands", "go_no_go_commands"),
+    ("Release requirements", "release_requirements"),
+)
+
 
 @dataclass
 class BuiltPrompt:
@@ -101,6 +113,37 @@ class PromptBuilder:
                 "\n\n# Project context files (authoritative reference)\n"
                 + context_files
             )
+
+        policy_block = ""
+        if project is not None:
+            policy = project.engineering_policy or {}
+            policy_text = _format_project_policy(policy)
+            policy_files = await self._read_policy_files(project, context_worktree_path)
+            if policy_text or policy_files:
+                policy_block = (
+                    "\n\n# Project engineering policy (binding)\n"
+                    "This policy contains long-lived project constraints that apply "
+                    "to every task. It is distinct from the task-specific engineering "
+                    "contract. Do not silently relax or override it; surface any "
+                    "conflict explicitly.\n"
+                )
+                if policy_text:
+                    policy_block += policy_text
+                if policy_files:
+                    policy_block += "\n\n## Repository-owned policy files\n" + policy_files
+
+            if role.key == "reviewer" and task is not None:
+                changed_files = _changed_files_from_review(task, extra)
+                violations = check_protected_paths(
+                    list(policy.get("protected_paths") or []),
+                    changed_files,
+                )
+                violation_text = render_violations(violations)
+                if violation_text:
+                    policy_block += (
+                        "\n\n# Deterministic project-policy finding\n"
+                        + violation_text
+                    )
 
         task_block = ""
         if task is not None:
@@ -144,9 +187,6 @@ class PromptBuilder:
                     + _cap(task.review_result, 10_000)
                 )
 
-            # Advisory outputs are independent evidence, not merely prose folded
-            # into the Architect result. Engineer and Reviewer receive the
-            # applicable original constraints directly.
             if role.key in ("engineer", "reviewer"):
                 advisory = task.advisory_results or {}
                 if isinstance(advisory, dict):
@@ -162,14 +202,11 @@ class PromptBuilder:
                                 + _cap(str(value), 20_000)
                             )
 
-        # Explicit upstream context supplied by workflow state.
         upstream_block = ""
         if upstream_contexts and role.key in ("architect", "engineer", "reviewer"):
             for label, content in upstream_contexts.items():
                 if content:
-                    upstream_block += (
-                        f"\n\n## {label}\n" + _cap(content, 30_000)
-                    )
+                    upstream_block += f"\n\n## {label}\n" + _cap(content, 30_000)
         if upstream_block:
             upstream_block = "\n\n# Upstream analysis\n" + upstream_block
 
@@ -204,7 +241,6 @@ class PromptBuilder:
             if value:
                 extra_block += f"\n\n# {key.replace('_', ' ').title()}\n{value}"
 
-        # Correction iteration prefix for engineer.
         correction_prefix = ""
         if is_correction and role.key == "engineer":
             correction_prefix = (
@@ -220,7 +256,7 @@ class PromptBuilder:
             f"{correction_prefix}"
             f"Execute your responsibilities for this request. Be precise and "
             f"concise; do not invent facts."
-            f"{project_block}{task_block}{upstream_block}{context_block}"
+            f"{project_block}{policy_block}{task_block}{upstream_block}{context_block}"
             f"{workspace_block}{extra_block}"
         )
         if role.key == "reviewer":
@@ -238,24 +274,20 @@ class PromptBuilder:
         system = TRIAGE_SYSTEM_PROMPT
         contract = _format_engineering_contract(task.engineering_contract)
         contract_block = f"\n\nEngineering contract:\n{contract}" if contract else ""
+        policy = _format_project_policy(project.engineering_policy or {})
+        policy_block = f"\n\nProject engineering policy:\n{policy}" if policy else ""
         user = (
             "Classify the following task:\n\n"
             f"Project: {project.name}\n"
             f"Task: {task.title}\n"
             f"Description: {task.description or '(none)'}"
-            f"{contract_block}"
+            f"{policy_block}{contract_block}"
         )
         return system, user
 
     @staticmethod
     def _extract_json_object(text: str) -> dict | None:
-        """Pull the first complete JSON object out of model output.
-
-        Models wrap JSON in prose or in a ```json fence, and the object can
-        contain nested objects. A non-greedy `\\{[^{}]*\\}` regex matched
-        neither case, so a perfectly good reply was discarded. Scan for a
-        balanced object instead, ignoring braces inside strings.
-        """
+        """Pull the first complete JSON object out of model output."""
         for start, char in enumerate(text):
             if char != "{":
                 continue
@@ -291,12 +323,7 @@ class PromptBuilder:
 
     @staticmethod
     def parse_triage_result(text: str) -> dict:
-        """Extract a triage decision from model output.
-
-        Returns defaults on parse failure, with `triage_parse_failed` set so
-        the caller can report that routing was not actually decided by triage
-        rather than presenting the fallback as a real decision.
-        """
+        """Extract a triage decision from model output."""
         parsed = PromptBuilder._extract_json_object(text or "")
         if parsed is not None:
             return {
@@ -321,30 +348,44 @@ class PromptBuilder:
             "triage_parse_failed": True,
         }
 
-    # ------------------------------------------------------------------ files
-
     async def _read_project_context(
         self, project: Project | None, worktree_path: str | None = None,
     ) -> str:
-        """Read configured + default context files from the repository or a
-        specified worktree.
-
-        When worktree_path is provided, context is read from that snapshot
-        (committed state). Otherwise falls back to project.repository_path
-        (human working tree — only for conversational company asks without a
-        task).
-        """
+        """Read configured + default context files from the repository/worktree."""
         if project is None:
             return ""
-        base = Path(worktree_path).resolve() if worktree_path else Path(project.repository_path).resolve()
+        candidates = [
+            p.strip()
+            for p in (project.architecture_context_paths or [])
+            if isinstance(p, str) and p.strip()
+        ]
+        candidates.extend(DEFAULT_CONTEXT_FILES)
+        return self._read_files(project, candidates, worktree_path)
+
+    async def _read_policy_files(
+        self, project: Project, worktree_path: str | None = None,
+    ) -> str:
+        policy = project.engineering_policy or {}
+        candidates = [
+            p.strip()
+            for p in (policy.get("policy_file_paths") or [])
+            if isinstance(p, str) and p.strip()
+        ]
+        return self._read_files(project, candidates, worktree_path)
+
+    def _read_files(
+        self,
+        project: Project,
+        candidates: list[str],
+        worktree_path: str | None,
+    ) -> str:
+        base = (
+            Path(worktree_path).resolve()
+            if worktree_path
+            else Path(project.repository_path).resolve()
+        )
         if not base.is_dir():
             return ""
-        candidates: list[str] = []
-        for p in project.architecture_context_paths or []:
-            if isinstance(p, str) and p.strip():
-                candidates.append(p.strip())
-        for p in DEFAULT_CONTEXT_FILES:
-            candidates.append(p)
         seen: set[str] = set()
         parts: list[str] = []
         total = 0
@@ -386,6 +427,40 @@ def _format_engineering_contract(contract: dict | None) -> str:
         if values:
             sections.append(f"## {label}\n" + "\n".join(f"- {value}" for value in values))
     return "\n\n".join(sections)
+
+
+def _format_project_policy(policy: dict | None) -> str:
+    if not isinstance(policy, dict):
+        return ""
+    sections: list[str] = []
+    for label, key in POLICY_FIELDS:
+        raw = policy.get(key) or []
+        values = [str(value).strip() for value in raw if str(value).strip()]
+        if values:
+            sections.append(f"## {label}\n" + "\n".join(f"- {value}" for value in values))
+    return "\n\n".join(sections)
+
+
+def _changed_files_from_review(task: Task, extra: dict) -> list[str]:
+    """Prefer persisted WP6 provenance; otherwise derive paths from Git diff headers."""
+    persisted = [
+        str(path).strip().replace("\\", "/")
+        for path in (task.changed_files or [])
+        if str(path).strip()
+    ]
+    if persisted:
+        return sorted(set(persisted))
+
+    diff_text = str(extra.get("Diff to review (base_commit..result_commit)") or "")
+    changed: set[str] = set()
+    for line in diff_text.splitlines():
+        if not line.startswith("diff --git a/") or " b/" not in line:
+            continue
+        _, right = line.split(" b/", 1)
+        path = right.strip().replace("\\", "/")
+        if path:
+            changed.add(path)
+    return sorted(changed)
 
 
 def _cap(text: str, max_bytes: int) -> str:
