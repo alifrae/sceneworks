@@ -21,18 +21,11 @@ import type {
   WorkPackage,
 } from "./types";
 
-function defaultApiUrl(): string {
-  // Keep local development on one host identity. The previous hard-coded
-  // localhost -> 127.0.0.1 cross-origin hop was unnecessary and made browser
-  // networking/CORS failures harder to diagnose. Remote deployments should
-  // continue to set NEXT_PUBLIC_API_URL explicitly.
-  if (typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
-    return `http://${window.location.hostname}:8010`;
-  }
-  return "http://127.0.0.1:8010";
-}
-
-export const API_URL: string = process.env.NEXT_PUBLIC_API_URL ?? defaultApiUrl();
+// The backend binds IPv4 loopback by default. Keep that exact address rather
+// than deriving localhost from the frontend host, which could resolve to ::1
+// on some Windows setups. Remote deployments should set NEXT_PUBLIC_API_URL.
+export const API_URL: string =
+  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8010";
 
 export class ApiError extends Error {
   status: number;
