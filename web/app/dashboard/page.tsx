@@ -58,6 +58,7 @@ export default function DashboardPage() {
   const openhands = backends.find((b) => b.key === "openhands");
   const fake = backends.find((b) => b.key === "fake");
   const liveBackendUp = Boolean(gemini?.available || openhands?.available);
+  const linkStyle = { color: "inherit", textDecoration: "none" } as const;
 
   return (
     <div>
@@ -74,19 +75,19 @@ export default function DashboardPage() {
       {error && <div className="notice error">Latest refresh failed: {error}</div>}
 
       <div className="kpi-grid" style={{ margin: "16px 0" }}>
-        <Link className="kpi kpi-link" href="/work?filter=active">
+        <Link className="kpi" style={linkStyle} href="/work?filter=active">
           <div className="value">{data.active_tasks}</div>
           <div className="label">Active tasks</div>
         </Link>
-        <Link className="kpi kpi-link" href="/work?filter=attention">
+        <Link className="kpi" style={linkStyle} href="/work?filter=attention">
           <div className="value">{data.awaiting_approval}</div>
           <div className="label">Awaiting your approval</div>
         </Link>
-        <Link className="kpi kpi-link" href="/executions?status=RUNNING">
+        <Link className="kpi" style={linkStyle} href="/executions?status=RUNNING">
           <div className="value">{data.running_executions}</div>
           <div className="label">Running agents</div>
         </Link>
-        <Link className="kpi kpi-link" href="/executions?status=FAILED">
+        <Link className="kpi" style={linkStyle} href="/executions?status=FAILED">
           <div className="value">{data.failed_executions.length}</div>
           <div className="label">Recent failed executions</div>
         </Link>
@@ -108,7 +109,11 @@ export default function DashboardPage() {
         </div>
         <div className="stack sm" style={{ marginTop: 12 }}>
           {backends.map((be) => (
-            <Link key={be.key} href="/settings" className="backend-health-row">
+            <Link
+              key={be.key}
+              href="/settings"
+              style={{ ...linkStyle, display: "flex", alignItems: "center", gap: 12 }}
+            >
               <span
                 className={`badge ${be.available ? "success" : "error"}`}
                 style={{ fontSize: 13 }}
