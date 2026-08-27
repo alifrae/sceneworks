@@ -5,6 +5,8 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass
 
+POLICY_VIOLATION_MARKER = "[SCENEWORKS_POLICY_VIOLATION]"
+
 PATTERN_SYNTAX_NOTE = (
     "Patterns are shell globs matched case-sensitively against repo-relative "
     "POSIX paths with fnmatch.fnmatchcase. `*` matches across `/`."
@@ -40,10 +42,11 @@ def render_violations(violations: list[ProtectedPathViolation]) -> str:
     if not violations:
         return ""
     lines = [
+        POLICY_VIOLATION_MARKER,
         "SceneWorks computed the following project-policy violations directly "
-        "from persisted Git changed-file provenance. These are deterministic "
-        "findings, not an agent interpretation. Unless the approved task contract "
-        "explicitly authorizes the protected path, the review must not approve:",
+        "from Git changed-file evidence. These are deterministic findings, not "
+        "an agent interpretation. Unless the approved task contract explicitly "
+        "authorizes the protected path, the review must not approve:",
         "",
     ]
     lines.extend(
