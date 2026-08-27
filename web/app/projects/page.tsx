@@ -34,6 +34,15 @@ function readStored<T>(key: string, fallback: T): T {
   }
 }
 
+function historyEntryToForm(item: RegistrationHistoryEntry): ProjectForm {
+  return {
+    name: item.name,
+    description: item.description,
+    repository_path: item.repository_path,
+    test_commands: item.test_commands,
+  };
+}
+
 function isE2ETestProject(project: Project): boolean {
   return (
     project.name.startsWith("e2e-") &&
@@ -71,10 +80,7 @@ export default function ProjectsPage() {
     const draft = readStored<ProjectForm | null>(DRAFT_KEY, null);
     setHistory(Array.isArray(storedHistory) ? storedHistory.slice(0, HISTORY_LIMIT) : []);
     if (draft) setForm(draft);
-    else if (storedHistory.length > 0) {
-      const { saved_at: _savedAt, ...recent } = storedHistory[0];
-      setForm(recent);
-    }
+    else if (storedHistory.length > 0) setForm(historyEntryToForm(storedHistory[0]));
     setStorageReady(true);
   }, []);
 
@@ -106,9 +112,7 @@ export default function ProjectsPage() {
 
   function restoreHistory(index: number) {
     const item = history[index];
-    if (!item) return;
-    const { saved_at: _savedAt, ...saved } = item;
-    setForm(saved);
+    if (item) setForm(historyEntryToForm(item));
   }
 
   async function submit() {
