@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.api.deps import get_context
@@ -21,6 +22,20 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+class ProjectPolicyBody(BaseModel):
+    """Long-lived engineering constraints that apply to every project task."""
+
+    protected_paths: list[str] = Field(default_factory=list)
+    architecture_invariants: list[str] = Field(default_factory=list)
+    forbidden_dependency_directions: list[str] = Field(default_factory=list)
+    documentation_requirements: list[str] = Field(default_factory=list)
+    performance_constraints: list[str] = Field(default_factory=list)
+    required_review_checks: list[str] = Field(default_factory=list)
+    go_no_go_commands: list[str] = Field(default_factory=list)
+    release_requirements: list[str] = Field(default_factory=list)
+    policy_file_paths: list[str] = Field(default_factory=list)
 
 
 async def _to_out(ctx: AppContext, project: Project) -> ProjectOut:
@@ -119,6 +134,48 @@ async def update_project(
         await session.commit()
         await session.refresh(project)
     return await _to_out(ctx, project)
+
+
+@router.get("/{project_id}/policy", response_model=ProjectPolicyBody)
+async def get_project_policy(
+    project_id: int, ctx: AppContext = Depends(get_context)
+) -> ProjectPolicyBody:
+    """Return an always-answerable project policy; unconfigured means empty."""
+    async with ctx.engine_factory() as session:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        return ProjectPolicyBody.model_validate(project.engineering_policy or {})
+
+
+@router.put("/{project_id}/policy", response_model=ProjectPolicyBody)
+async def put_project_policy(
+    project_id: int,
+    body: ProjectPolicyBody,
+    ctx: AppContext = Depends(get_context),
+) -> ProjectPolicyBody:
+    """Fully replace a project's engineering policy."""
+    async with ctx.engine_factory() as session:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        project.engineering_policy = body.model_dump()
+        await session.commit()
+        await session.refresh(project)
+        return ProjectPolicyBody.model_validate(project.engineering_policy or {})
+
+
+@router.delete("/{project_id}/policy", status_code=204)
+async def delete_project_policy(
+    project_id: int, ctx: AppContext = Depends(get_context)
+) -> None:
+    """Clear project policy without deleting the project."""
+    async with ctx.engine_factory() as session:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        project.engineering_policy = {}
+        await session.commit()
 
 
 @router.get("/{project_id}/status")
