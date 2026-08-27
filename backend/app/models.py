@@ -38,6 +38,13 @@ class Project(Base):
     architecture_context_paths: Mapped[list] = mapped_column(JSON, default=list)
     test_commands: Mapped[list] = mapped_column(JSON, default=list)
     build_commands: Mapped[list] = mapped_column(JSON, default=list)
+    # Long-lived, project-wide engineering invariants and guardrails. This is
+    # deliberately separate from Task.engineering_contract: policy constrains
+    # every task in a project, while a task contract defines one task's scope
+    # and acceptance criteria.
+    engineering_policy: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=_EMPTY_JSON
+    )
     # Provider/model-neutral professional capability overlays. These describe
     # relevant skills/domains/methods, never project facts. A server default is
     # deliberate: older/raw insert paths must remain compatible with a
@@ -77,7 +84,7 @@ class WorkPackage(Base):
     __tablename__ = "work_packages"
     __table_args__ = (UniqueConstraint("initiative_id", "key", name="uq_work_package_initiative_key"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key_key=True)
     initiative_id: Mapped[int] = mapped_column(ForeignKey("initiatives.id"), index=True)
     key: Mapped[str] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(String(300))
