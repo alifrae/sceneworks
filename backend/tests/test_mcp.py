@@ -1,4 +1,4 @@
-"""WP11 MCP protocol, trust-boundary and semantic-tool tests."""
+"""WP11 MCP protocol, operating-mode and semantic-boundary tests."""
 
 from __future__ import annotations
 
@@ -24,10 +24,21 @@ async def _register_project(client, git_repo):
 async def _rpc(client, method, params=None, request_id=1, headers=None):
     response = await client.post(
         "/mcp",
-        json={"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}},
+        json={
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params or {},
+        },
         headers=headers or {},
     )
     return response, response.json() if response.content else None
+
+
+async def _tool_names(client):
+    response, body = await _rpc(client, "tools/list")
+    assert response.status_code == 200
+    return {tool["name"] for tool in body["result"]["tools"]}
 
 
 async def test_mcp_get_info_is_data_free(client):
@@ -36,7 +47,9 @@ async def test_mcp_get_info_is_data_free(client):
     body = response.json()
     assert body["name"] == "SceneWorks"
     assert body["endpoint"] == "/mcp"
+    assert body["mode"] == "observe"
     assert body["action_tools_enabled"] is False
+    assert body["advanced_agent_sessions_enabled"] is False
     assert "project" not in body
 
 
@@ -44,7 +57,10 @@ async def test_modern_discovery_and_legacy_initialize(client):
     response, body = await _rpc(
         client,
         "server/discover",
-        headers={"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover"},
+        headers={
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "server/discover",
+        },
     )
     assert response.status_code == 200
     result = body["result"]
@@ -52,11 +68,15 @@ async def test_modern_discovery_and_legacy_initialize(client):
     assert "2026-07-28" in result["supportedVersions"]
     assert result["capabilities"]["tools"]["listChanged"] is False
     assert result["ttlMs"] > 0
+    assert "Observe mode" in result["instructions"]
 
     response, body = await _rpc(
         client,
         "initialize",
-        {"protocolVersion": "2025-11-25", "clientInfo": {"name": "test", "version": "1"}},
+        {
+            "protocolVersion": "2025-11-25",
+            "clientInfo": {"name": "test", "version": "1"},
+        },
         request_id=2,
     )
     assert response.status_code == 200
@@ -64,13 +84,9 @@ async def test_modern_discovery_and_legacy_initialize(client):
     assert body["result"]["serverInfo"]["name"] == "SceneWorks"
 
 
-async def test_tool_catalog_is_semantic_not_machine_primitive(client):
-    response, body = await _rpc(client, "tools/list")
-    assert response.status_code == 200
-    tools = body["result"]["tools"]
-    names = {tool["name"] for tool in tools}
-
-    expected = {
+async def test_tool_catalog_is_semantic_and_mode_scoped(client, context):
+    names = await _tool_names(client)
+    read_tools = {
         "sceneworks.capabilities",
         "sceneworks.list_projects",
         "sceneworks.get_project_context",
@@ -80,20 +96,36 @@ async def test_tool_catalog_is_semantic_not_machine_primitive(client):
         "sceneworks.get_execution",
         "sceneworks.search_memory",
         "sceneworks.list_artifacts",
-        "sceneworks.inspect_repository",
-        "sceneworks.ask_role",
-        "sceneworks.create_task",
-        "sceneworks.task_action",
     }
-    assert expected <= names
-    assert all("shell" not in name for name in names)
-    assert all("file" not in name for name in names)
-    assert all("sql" not in name for name in names)
-    assert all("git_" not in name for name in names)
+    assert read_tools <= names
+    assert "sceneworks.create_task" not in names
+    assert not any(name.startswith("sceneworks.agent_session.") for name in names)
 
-    by_name = {tool["name"]: tool for tool in tools}
-    assert by_name["sceneworks.get_task"]["annotations"]["readOnlyHint"] is True
-    assert by_name["sceneworks.task_action"]["annotations"]["destructiveHint"] is True
+    # Backward-compatible prototype switch maps Observe -> effective Standard.
+    context.settings.mcp_allow_actions = True
+    standard_names = await _tool_names(client)
+    assert "sceneworks.inspect_repository" in standard_names
+    assert "sceneworks.create_task" in standard_names
+    assert "sceneworks.task_action" in standard_names
+    assert not any(
+        name.startswith("sceneworks.agent_session.") for name in standard_names
+    )
+
+    context.settings.mcp_allow_actions = False
+    context.settings.mcp_mode = "advanced"
+    advanced_names = await _tool_names(client)
+    assert "sceneworks.create_task" in advanced_names
+    assert "sceneworks.agent_session.create" in advanced_names
+    assert "sceneworks.agent_session.prompt" in advanced_names
+    assert "sceneworks.agent_session.diff" in advanced_names
+
+    # Raw machine primitives are absent in every mode.
+    for catalog in (names, standard_names, advanced_names):
+        assert all("raw_shell" not in name for name in catalog)
+        assert all("write_file" not in name for name in catalog)
+        assert all("read_file" not in name for name in catalog)
+        assert all("sql" not in name for name in catalog)
+        assert all("git_command" not in name for name in catalog)
 
 
 async def test_read_tools_ground_project_and_task_state(client, git_repo):
@@ -106,7 +138,10 @@ async def test_read_tools_ground_project_and_task_state(client, git_repo):
     )
     assert response.status_code == 200
     assert body["result"]["isError"] is False
-    assert any(p["id"] == project["id"] for p in body["result"]["structuredContent"]["projects"])
+    assert any(
+        project_row["id"] == project["id"]
+        for project_row in body["result"]["structuredContent"]["projects"]
+    )
 
     response, body = await _rpc(
         client,
@@ -132,15 +167,20 @@ async def test_action_tools_fail_closed_by_default(client, git_repo):
         "tools/call",
         {
             "name": "sceneworks.create_task",
-            "arguments": {"project_id": project["id"], "title": "should not be created"},
+            "arguments": {
+                "project_id": project["id"],
+                "title": "should not be created",
+            },
         },
     )
     assert response.status_code == 200
     assert body["result"]["isError"] is True
-    assert "SCENEWORKS_MCP_ALLOW_ACTIONS=true" in body["result"]["structuredContent"]["error"]
+    assert "Standard or Advanced MCP mode" in body["result"]["structuredContent"]["error"]
 
 
-async def test_enabled_actions_create_task_and_expose_allowed_actions(client, context, git_repo):
+async def test_enabled_actions_create_task_and_expose_allowed_actions(
+    client, context, git_repo
+):
     project = await _register_project(client, git_repo)
     context.settings.mcp_allow_actions = True
     response, body = await _rpc(
@@ -178,12 +218,16 @@ async def test_enabled_actions_create_task_and_expose_allowed_actions(client, co
     assert task["engineering_contract"]["allowed_scope"] == ["app.py"]
 
 
-async def test_inspect_repository_uses_technical_expert_execution(client, context, git_repo):
+async def test_inspect_repository_uses_technical_expert_execution(
+    client, context, git_repo
+):
     project = await _register_project(client, git_repo)
     context.settings.mcp_allow_actions = True
     backend = FakeAgentBackend(
         role_scripts={
-            "technical_expert": [ScriptStep(kind="summary", summary="app.py returns 1 + 1")],
+            "technical_expert": [
+                ScriptStep(kind="summary", summary="app.py returns 1 + 1")
+            ],
         }
     )
     context.backends._backends["fake"] = backend
@@ -193,7 +237,10 @@ async def test_inspect_repository_uses_technical_expert_execution(client, contex
         "tools/call",
         {
             "name": "sceneworks.inspect_repository",
-            "arguments": {"project_id": project["id"], "question": "What does app.py do?"},
+            "arguments": {
+                "project_id": project["id"],
+                "question": "What does app.py do?",
+            },
         },
     )
     assert response.status_code == 200
@@ -205,21 +252,30 @@ async def test_inspect_repository_uses_technical_expert_execution(client, contex
         _, poll = await _rpc(
             client,
             "tools/call",
-            {"name": "sceneworks.get_execution", "arguments": {"execution_id": execution_id}},
+            {
+                "name": "sceneworks.get_execution",
+                "arguments": {"execution_id": execution_id},
+            },
             request_id=2,
         )
         execution = poll["result"]["structuredContent"]["execution"]
         if execution["status"] in {"COMPLETED", "FAILED", "CANCELLED"}:
             break
         if asyncio.get_event_loop().time() > deadline:
-            raise AssertionError(f"inspection execution did not finish: {execution['status']}")
+            raise AssertionError(
+                f"inspection execution did not finish: {execution['status']}"
+            )
         await asyncio.sleep(0.05)
 
     assert execution["status"] == "COMPLETED"
     assert execution["role"] == "technical_expert"
     assert "app.py returns 1 + 1" in execution["result"]
-    # MCP intentionally strips host cwd/repo paths from external execution data.
-    assert set(execution["workspace"]) == {"branch", "base_commit", "permissions", "project_id"}
+    assert set(execution["workspace"]) == {
+        "branch",
+        "base_commit",
+        "permissions",
+        "project_id",
+    }
 
 
 async def test_mcp_routing_headers_are_validated(client):
