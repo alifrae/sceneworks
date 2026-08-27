@@ -75,6 +75,17 @@ export default function ProjectsPage() {
 
   useEffect(() => refresh(), [refresh]);
 
+  // A local frontend can come up slightly before the API. The previous page
+  // turned that one startup race into a persistent red banner. Retry only while
+  // the page remains failed and clear the state as soon as a request succeeds.
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [error, refresh]);
+
   useEffect(() => {
     const storedHistory = readStored<RegistrationHistoryEntry[]>(HISTORY_KEY, []);
     const draft = readStored<ProjectForm | null>(DRAFT_KEY, null);
@@ -205,7 +216,12 @@ export default function ProjectsPage() {
         </div>
       </div>
 
-      {error && <div className="notice error">{error}</div>}
+      {error && (
+        <div className="notice error row space-between">
+          <span>{error}</span>
+          <button className="btn small" onClick={refresh}>Retry now</button>
+        </div>
+      )}
 
       {showForm && (
         <div className="panel">
