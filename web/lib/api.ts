@@ -9,6 +9,7 @@ import type {
   EngineeringContract,
   Execution,
   Initiative,
+  McpSettings,
   Project,
   ProjectMemory,
   ProjectProvenance,
@@ -206,6 +207,8 @@ export const api = {
   backends: () => request<Backend[]>("/api/backends", undefined, { cacheTtlMs: 30_000 }),
   settings: () => request<Settings>("/api/settings", undefined, { cacheTtlMs: 30_000 }),
   updateSettings: (body: Record<string, unknown>) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(body) }),
+  mcpSettings: () => request<McpSettings>("/api/settings/mcp", undefined, { cacheTtlMs: 5_000 }),
+  updateMcpSettings: (body: Record<string, unknown>) => request<McpSettings>("/api/settings/mcp", { method: "PATCH", body: JSON.stringify(body) }),
 
   memoryList: (projectId: number, params?: Record<string, string>) => {
     const query = new URLSearchParams(params ?? {}).toString();
