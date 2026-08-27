@@ -1,4 +1,4 @@
-"""WP9 productivity benchmark regression tests."""
+"""Productivity benchmark and WP12 adoption-gate regression tests."""
 
 from __future__ import annotations
 
@@ -7,18 +7,22 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from benchmarking.cli import main
+from benchmarking.cli import load_manifest, main
 from benchmarking.models import (
+    AdoptionGatePolicy,
+    AdoptionVerdict,
     BenchmarkManifest,
     BenchmarkReport,
     BenchmarkStatus,
     BenchmarkTask,
     CommandResult,
+    ModeAggregate,
+    PairComparison,
     TrialResult,
     TrialVerdict,
 )
 from benchmarking.runner import _preflight
-from benchmarking.scoring import compare_pair, finalize_trial
+from benchmarking.scoring import compare_pair, evaluate_adoption_gate, finalize_trial
 from tests.conftest import require_git
 
 
@@ -139,6 +143,121 @@ def test_cli_validate_does_not_run_agents(tmp_path, capsys):
     path.write_text(json.dumps(manifest), encoding="utf-8")
     assert main(["--manifest", str(path), "--validate"]) == 0
     assert "valid benchmark manifest" in capsys.readouterr().out
+
+
+def test_repository_path_supports_environment_substitution(tmp_path, monkeypatch):
+    monkeypatch.setenv("PCS_REPO", str(tmp_path / "pcs"))
+    payload = {
+        "schema_version": 1,
+        "name": "portable-pcs",
+        "tasks": [
+            {
+                "key": "one",
+                "title": "One",
+                "description": "One historical PCS task",
+                "repository_path": "${PCS_REPO}",
+                "verification_commands": ["python check.py"],
+            }
+        ],
+    }
+    path = tmp_path / "pcs.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    manifest = load_manifest(path)
+    assert manifest.tasks[0].repository_path == tmp_path / "pcs"
+
+
+def _gate_manifest(task_count=5, repeats=3, **policy_overrides):
+    policy = AdoptionGatePolicy(**policy_overrides)
+    return BenchmarkManifest(
+        name="PCS gate",
+        repeats=repeats,
+        adoption_gate=policy,
+        tasks=[
+            _task(key=f"task-{index}", expected_changed_files=[], forbidden_changed_files=[])
+            for index in range(task_count)
+        ],
+    )
+
+
+def _ready_report(*, sw_rate=1.0, direct_rate=1.0, ratio=1.25, sw_failures=0):
+    comparisons = [
+        PairComparison(
+            task_key=f"task-{index}",
+            repeat=1,
+            outcome="both_pass",
+            sceneworks_seconds=12.5,
+            direct_seconds=10.0,
+            elapsed_ratio_sceneworks_over_direct=ratio,
+        )
+        for index in range(5)
+    ]
+    return BenchmarkReport(
+        manifest_name="PCS gate",
+        backend="fake",
+        status=BenchmarkStatus.COMPLETE,
+        comparisons=comparisons,
+        aggregates=[
+            ModeAggregate(
+                mode="sceneworks",
+                trial_count=15,
+                measured_trial_count=15,
+                pass_count=round(15 * sw_rate),
+                fail_count=15 - round(15 * sw_rate),
+                blocked_count=0,
+                success_rate=sw_rate,
+                median_success_seconds=12.5,
+                mean_human_interventions=1.0,
+                mean_agent_executions=3.0,
+                backend_failures=sw_failures,
+            ),
+            ModeAggregate(
+                mode="direct",
+                trial_count=15,
+                measured_trial_count=15,
+                pass_count=round(15 * direct_rate),
+                fail_count=15 - round(15 * direct_rate),
+                blocked_count=0,
+                success_rate=direct_rate,
+                median_success_seconds=10.0,
+                mean_human_interventions=0.0,
+                mean_agent_executions=1.0,
+                backend_failures=0,
+            ),
+        ],
+    )
+
+
+def test_adoption_gate_ready_requires_quality_and_bounded_overhead():
+    manifest = _gate_manifest()
+    result = evaluate_adoption_gate(_ready_report(), manifest)
+    assert result.verdict is AdoptionVerdict.READY_FOR_PILOT
+    assert result.blockers == []
+    assert all(check.passed for check in result.checks)
+
+
+def test_adoption_gate_complete_benchmark_can_still_be_not_ready():
+    manifest = _gate_manifest()
+    report = _ready_report(sw_rate=0.8, direct_rate=1.0)
+    result = evaluate_adoption_gate(report, manifest)
+    assert result.verdict is AdoptionVerdict.NOT_READY
+    failed = {check.key for check in result.checks if not check.passed}
+    assert "success_rate_vs_direct" in failed
+
+
+def test_adoption_gate_incomplete_corpus_is_insufficient_evidence():
+    manifest = _gate_manifest(task_count=2, repeats=1)
+    result = evaluate_adoption_gate(_ready_report(), manifest)
+    assert result.verdict is AdoptionVerdict.INSUFFICIENT_EVIDENCE
+    assert any("historical task" in blocker for blocker in result.blockers)
+    assert any("repeat" in blocker for blocker in result.blockers)
+
+
+def test_adoption_gate_backend_failure_blocks_readiness():
+    manifest = _gate_manifest()
+    result = evaluate_adoption_gate(_ready_report(sw_failures=1), manifest)
+    assert result.verdict is AdoptionVerdict.NOT_READY
+    failed = {check.key for check in result.checks if not check.passed}
+    assert "backend_reliability" in failed
 
 
 async def test_preflight_proves_must_fail_baseline(git_repo, tmp_path):
