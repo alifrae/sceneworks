@@ -51,6 +51,7 @@ ADVANCED_PERMISSION_NAMES = frozenset(
 
 _TERMINAL_SESSION_STATUSES = {"CLOSED"}
 _RECOVERABLE_SESSION_STATUSES = {"ACTIVE", "FAILED", "INTERRUPTED"}
+_TURN_FINALIZE_TIMEOUT_SECONDS = 15.0
 
 
 class AgentSessionError(RuntimeError):
@@ -263,6 +264,17 @@ class AgentSessionService:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._active.clear()
 
+    def _discard_active_turn(self, session_id: int, task: asyncio.Task) -> None:
+        """Remove only the turn represented by ``task``.
+
+        A done callback from an earlier turn may run after a new turn has already
+        replaced the dictionary entry. Blindly popping by session id would then
+        erase the newer turn and break cancellation/single-turn enforcement.
+        """
+        current = self._active.get(session_id)
+        if current is not None and current.task is task:
+            self._active.pop(session_id, None)
+
     async def create(
         self,
         project_id: int,
@@ -365,8 +377,41 @@ class AgentSessionService:
             raise AgentSessionError("prompt is required")
         async with self._lock:
             active = self._active.get(session_id)
-            if active and not active.task.done():
-                raise AgentSessionError(f"agent session {session_id} already has a running turn")
+            if active is not None:
+                if active.task.done():
+                    self._discard_active_turn(session_id, active.task)
+                else:
+                    # The persisted status becomes ACTIVE/FAILED as soon as the
+                    # model turn has a result, while the coroutine may still be
+                    # closing the short-lived ACP process. A supervisor polling
+                    # that status can legitimately send the next prompt during
+                    # this bounded finalization window. Wait for cleanup instead
+                    # of spuriously reporting "already running". A genuinely
+                    # RUNNING turn still fails fast.
+                    async with self._session_factory() as db:
+                        prior = await self._get_row(db, session_id)
+                    if prior.status not in _RECOVERABLE_SESSION_STATUSES:
+                        raise AgentSessionError(
+                            f"agent session {session_id} already has a running turn"
+                        )
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(active.task),
+                            timeout=_TURN_FINALIZE_TIMEOUT_SECONDS,
+                        )
+                    except asyncio.TimeoutError as exc:
+                        raise AgentSessionError(
+                            f"agent session {session_id} previous turn is still finalizing"
+                        ) from exc
+                    except asyncio.CancelledError:
+                        # If the previous turn itself was cancelled, its cleanup
+                        # is complete enough to continue. If *this* request was
+                        # cancelled, preserve cancellation rather than swallowing
+                        # it because shield keeps the previous task alive.
+                        if not active.task.cancelled():
+                            raise
+                    self._discard_active_turn(session_id, active.task)
+
             async with self._session_factory() as db:
                 row = await self._get_row(db, session_id)
                 if row.status in _TERMINAL_SESSION_STATUSES:
@@ -389,7 +434,9 @@ class AgentSessionService:
                 name=f"advanced-agent-session-{session_id}",
             )
             self._active[session_id] = _ActiveTurn(task=task, sink=sink)
-            task.add_done_callback(lambda _task, sid=session_id: self._active.pop(sid, None))
+            task.add_done_callback(
+                lambda finished, sid=session_id: self._discard_active_turn(sid, finished)
+            )
             await self._event(
                 session_id,
                 "prompt_started",
