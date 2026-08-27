@@ -4,7 +4,9 @@ Schema notes:
 - Initiative and WorkPackage provide durable objective decomposition above Task.
 - Task holds workflow-scoped, coarse results; fine-grained traceability lives in
   Execution and Event rows.
-- Execution is the unit of agent invocation (one row per agent run).
+- Execution is the unit of governed role invocation (one row per agent run).
+- AgentSession persists ChatGPT-supervised advanced Gemini sessions independently
+  from governed Task workflows.
 - Event rows are the durable record of everything an execution produced.
 - Artifact stores company-role outputs that are not attached to a task.
 """
@@ -167,6 +169,36 @@ class Execution(Base):
     events: Mapped[list[Event]] = relationship(back_populates="execution")
 
 
+class AgentSession(Base):
+    """Persistent external-supervisor session over a provider agent.
+
+    WP11 Advanced mode stores only SceneWorks-owned control/provenance metadata
+    here. Conversation history remains owned by the provider (Gemini CLI) and
+    is restored with ACP session/load using ``provider_session_id``.
+    """
+
+    __tablename__ = "agent_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    backend: Mapped[str] = mapped_column(String(100), default="gemini_acp")
+    provider_session_id: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="STARTING", index=True)
+    base_commit: Mapped[str] = mapped_column(String(100))
+    branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    worktree_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    permissions: Mapped[list] = mapped_column(JSON, default=list)
+    model_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    provider_capabilities: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=_EMPTY_JSON
+    )
+    last_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Event(Base):
     __tablename__ = "events"
 
@@ -221,4 +253,15 @@ class ProjectMemory(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
-all_models = (Project, Initiative, WorkPackage, Task, Execution, Event, Artifact, AppSetting, ProjectMemory)
+all_models = (
+    Project,
+    Initiative,
+    WorkPackage,
+    Task,
+    Execution,
+    AgentSession,
+    Event,
+    Artifact,
+    AppSetting,
+    ProjectMemory,
+)
