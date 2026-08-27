@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "evaluate PCS pilot-readiness thresholds after the benchmark. "
-            "A manifest adoption_gate is also evaluated automatically."
+            "An enabled manifest adoption_gate is also evaluated automatically."
         ),
     )
     parser.add_argument(
@@ -155,7 +155,11 @@ async def _run(args) -> int:
         return EXIT_USAGE
 
     if args.validate:
-        gate = " with adoption gate" if manifest.adoption_gate else ""
+        gate = (
+            " with adoption gate"
+            if manifest.adoption_gate is not None and manifest.adoption_gate.enabled
+            else ""
+        )
         print(
             f"valid benchmark manifest: {manifest.name} "
             f"({len(manifest.tasks)} task(s), {manifest.repeats} repeat(s)){gate}"
@@ -176,7 +180,11 @@ async def _run(args) -> int:
             f"-> {task.key} #{repeat} [{mode}]", flush=True
         ),
     )
-    if args.adoption_gate or manifest.adoption_gate is not None:
+    gate_enabled = bool(
+        args.adoption_gate
+        or (manifest.adoption_gate is not None and manifest.adoption_gate.enabled)
+    )
+    if gate_enabled:
         report.adoption_gate = evaluate_adoption_gate(report, manifest)
 
     print()
