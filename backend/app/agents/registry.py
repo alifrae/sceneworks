@@ -12,6 +12,7 @@ from app.agents.openhands import OpenHandsBackend
 from app.config.settings import Settings
 
 HEALTH_CACHE_SECONDS = 60.0
+HEALTH_PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class BackendNotFoundError(KeyError):
@@ -128,6 +129,36 @@ class BackendRegistry:
     def keys(self) -> list[str]:
         return list(self._backends.keys())
 
+    def _cold_health(self) -> list[BackendHealth]:
+        """Return truthful cheap state while provider probes run in background.
+
+        The scripted backend has no external dependency, so reporting it as
+        unavailable during a slow Gemini/OpenHands probe is simply wrong. Real
+        providers stay explicitly in a probing state until their checks finish.
+        """
+        healths: list[BackendHealth] = []
+        for key, backend in self._backends.items():
+            if isinstance(backend, FakeAgentBackend):
+                healths.append(
+                    BackendHealth(
+                        key=key,
+                        label=getattr(backend, "label", key),
+                        available=True,
+                        version="fake-1.0",
+                        detail="scripted test backend; no external provider required",
+                    )
+                )
+            else:
+                healths.append(
+                    BackendHealth(
+                        key=key,
+                        label=getattr(backend, "label", key),
+                        available=False,
+                        detail="probing...",
+                    )
+                )
+        return healths
+
     async def health_all(self, force: bool = False) -> list[BackendHealth]:
         """Health of every backend, served stale-while-revalidate."""
         if force:
@@ -139,28 +170,8 @@ class BackendRegistry:
                 self._schedule_refresh()
             return cached
 
-        if self._health_lock.locked():
-            self._schedule_refresh()
-            return [
-                BackendHealth(
-                    key=key,
-                    label=getattr(backend, "label", key),
-                    available=False,
-                    detail="probing...",
-                )
-                for key, backend in self._backends.items()
-            ]
-
         self._schedule_refresh()
-        return [
-            BackendHealth(
-                key=key,
-                label=getattr(backend, "label", key),
-                available=False,
-                detail="probing...",
-            )
-            for key, backend in self._backends.items()
-        ]
+        return self._cold_health()
 
     def _schedule_refresh(self) -> None:
         if self._refresh_task is not None and not self._refresh_task.done():
@@ -175,9 +186,38 @@ class BackendRegistry:
         except Exception:  # noqa: BLE001
             pass
 
+    async def _probe_one(self, key: str, backend: AgentBackend) -> BackendHealth:
+        try:
+            return await asyncio.wait_for(
+                backend.health(), timeout=HEALTH_PROBE_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            return BackendHealth(
+                key=key,
+                label=getattr(backend, "label", key),
+                available=False,
+                detail=f"health check timed out after {HEALTH_PROBE_TIMEOUT_SECONDS:g}s",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - health must isolate providers
+            return BackendHealth(
+                key=key,
+                label=getattr(backend, "label", key),
+                available=False,
+                detail=f"health check failed: {exc}",
+            )
+
     async def _probe(self) -> list[BackendHealth]:
         async with self._health_lock:
-            healths = [await backend.health() for backend in self._backends.values()]
-            self._health_cache = healths
+            # Providers are independent. Sequential probing allowed one slow or
+            # broken provider to keep every backend (including Fake) red.
+            healths = await asyncio.gather(
+                *(
+                    self._probe_one(key, backend)
+                    for key, backend in self._backends.items()
+                )
+            )
+            self._health_cache = list(healths)
             self._health_checked_at = time.monotonic()
-            return healths
+            return self._health_cache
