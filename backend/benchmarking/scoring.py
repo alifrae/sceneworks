@@ -212,9 +212,10 @@ def evaluate_adoption_gate(
 ) -> AdoptionGateResult:
     """Evaluate whether measured evidence is strong enough for a PCS pilot.
 
-    Gate checks use only data already captured by the benchmark. A missing metric
-    is never treated optimistically: it produces insufficient evidence rather
-    than silently passing the gate.
+    Gate checks use only data already captured by the benchmark. A missing
+    required comparison is never treated optimistically. By contrast, zero
+    both-pass pairs after otherwise complete trials is negative evidence about
+    engineering quality, not missing evidence; that therefore yields NOT_READY.
     """
     policy = policy or manifest.adoption_gate or AdoptionGatePolicy()
     checks: list[GateCheck] = []
@@ -267,16 +268,31 @@ def evaluate_adoption_gate(
             f"only {manifest.repeats} repeat(s); need at least {policy.min_repeats}"
         )
 
+    expected_pairs = task_count * manifest.repeats
+    observed_pairs = len(report.comparisons)
     incomplete_pairs = sum(item.outcome == "incomplete" for item in report.comparisons)
-    pair_ok = not policy.require_complete_pairs or incomplete_pairs == 0
+    pair_count_ok = not policy.require_complete_pairs or observed_pairs == expected_pairs
+    pair_outcomes_ok = not policy.require_complete_pairs or incomplete_pairs == 0
+    pair_ok = pair_count_ok and pair_outcomes_ok
     check(
         "complete_pairs",
         pair_ok,
-        incomplete_pairs,
-        0 if policy.require_complete_pairs else "not required",
-        "Each SceneWorks trial must have a comparable direct-agent partner.",
+        {
+            "observed": observed_pairs,
+            "expected": expected_pairs,
+            "incomplete": incomplete_pairs,
+        },
+        {
+            "count": expected_pairs if policy.require_complete_pairs else "not required",
+            "incomplete": 0 if policy.require_complete_pairs else "not required",
+        },
+        "Every expected SceneWorks trial must have exactly one comparable direct-agent partner.",
     )
-    if not pair_ok:
+    if not pair_count_ok:
+        evidence_missing.append(
+            f"only {observed_pairs} paired comparison(s); expected {expected_pairs}"
+        )
+    if not pair_outcomes_ok:
         evidence_missing.append(f"{incomplete_pairs} paired comparison(s) are incomplete")
 
     by_mode = {aggregate.mode: aggregate for aggregate in report.aggregates}
@@ -328,10 +344,11 @@ def evaluate_adoption_gate(
         bool(median_ratio is not None and median_ratio <= policy.max_median_time_ratio),
         median_ratio,
         f"<={policy.max_median_time_ratio}x direct",
-        "Latency is compared only on pairs where both arms passed.",
+        (
+            "Latency is compared only on pairs where both arms passed. No both-pass "
+            "pairs is a failed readiness check, not evidence that should be ignored."
+        ),
     )
-    if median_ratio is None:
-        evidence_missing.append("no both-pass pairs exist for elapsed-time comparison")
 
     mean_human = sw.mean_human_interventions
     check(
