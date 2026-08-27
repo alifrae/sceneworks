@@ -17,8 +17,10 @@ settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 @backends_router.get("")
-async def list_backends(ctx: AppContext = Depends(get_context)) -> list[BackendOut]:
-    healths = await ctx.backends.health_all()
+async def list_backends(
+    refresh: bool = False, ctx: AppContext = Depends(get_context)
+) -> list[BackendOut]:
+    healths = await ctx.backends.health_all(force=refresh)
     return [BackendOut.model_validate(h.__dict__) for h in healths]
 
 
