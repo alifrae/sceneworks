@@ -45,8 +45,9 @@ def render_violations(violations: list[ProtectedPathViolation]) -> str:
         POLICY_VIOLATION_MARKER,
         "SceneWorks computed the following project-policy violations directly "
         "from Git changed-file evidence. These are deterministic findings, not "
-        "an agent interpretation. Unless the approved task contract explicitly "
-        "authorizes the protected path, the review must not approve:",
+        "an agent interpretation. A protected-path match is a policy violation "
+        "and the review must not approve it. If such a change is intended, the "
+        "project policy must be changed explicitly:",
         "",
     ]
     lines.extend(
