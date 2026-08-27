@@ -6,12 +6,22 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, or_, select
 
 from app.api.deps import get_context
 from app.context import AppContext
 from app.git.workspace import GitError
-from app.models import Project, Task
+from app.models import (
+    AgentSession,
+    Artifact,
+    Event,
+    Execution,
+    Initiative,
+    Project,
+    ProjectMemory,
+    Task,
+    WorkPackage,
+)
 from app.schemas import (
     ProjectCreate,
     ProjectOut,
@@ -22,6 +32,20 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+ACTIVE_TASK_STATES = {
+    "NEW",
+    "TRIAGING",
+    "ARCHITECTURE_ANALYSIS",
+    "AWAITING_ARCHITECTURE_APPROVAL",
+    "READY_TO_IMPLEMENT",
+    "IMPLEMENTING",
+    "TESTING",
+    "REVIEWING",
+    "CHANGES_REQUESTED",
+    "READY_FOR_HUMAN",
+}
+ACTIVE_SESSION_STATES = {"STARTING", "READY", "RUNNING"}
 
 
 class ProjectPolicyBody(BaseModel):
@@ -233,16 +257,159 @@ async def project_provenance(
     )
 
 
+async def _purge_project_history(session, project_id: int) -> None:
+    """Delete SceneWorks-owned records for a project, never repository files."""
+    task_ids = list(
+        (await session.execute(select(Task.id).where(Task.project_id == project_id))).scalars()
+    )
+    execution_ids: list[str] = []
+    if task_ids:
+        execution_ids = list(
+            (
+                await session.execute(
+                    select(Execution.id).where(Execution.task_id.in_(task_ids))
+                )
+            ).scalars()
+        )
+
+    initiative_ids = list(
+        (
+            await session.execute(
+                select(Initiative.id).where(Initiative.project_id == project_id)
+            )
+        ).scalars()
+    )
+    work_package_ids: list[int] = []
+    if initiative_ids:
+        work_package_ids = list(
+            (
+                await session.execute(
+                    select(WorkPackage.id).where(
+                        WorkPackage.initiative_id.in_(initiative_ids)
+                    )
+                )
+            ).scalars()
+        )
+
+    event_filters = []
+    if task_ids:
+        event_filters.append(Event.task_id.in_(task_ids))
+    if execution_ids:
+        event_filters.append(Event.execution_id.in_(execution_ids))
+    if event_filters:
+        await session.execute(sa_delete(Event).where(or_(*event_filters)))
+
+    await session.execute(
+        sa_delete(ProjectMemory).where(ProjectMemory.project_id == project_id)
+    )
+    await session.execute(sa_delete(Artifact).where(Artifact.project_id == project_id))
+    await session.execute(
+        sa_delete(AgentSession).where(AgentSession.project_id == project_id)
+    )
+    if execution_ids:
+        await session.execute(
+            sa_delete(Execution).where(Execution.id.in_(execution_ids))
+        )
+    if task_ids:
+        await session.execute(sa_delete(Task).where(Task.id.in_(task_ids)))
+    if work_package_ids:
+        await session.execute(
+            sa_delete(WorkPackage).where(WorkPackage.id.in_(work_package_ids))
+        )
+    if initiative_ids:
+        await session.execute(
+            sa_delete(Initiative).where(Initiative.id.in_(initiative_ids))
+        )
+    await session.execute(sa_delete(Project).where(Project.id == project_id))
+
+
 @router.delete("/{project_id}", status_code=204)
-async def delete_project(project_id: int, ctx: AppContext = Depends(get_context)) -> None:
+async def delete_project(
+    project_id: int,
+    purge_history: bool = False,
+    force: bool = False,
+    ctx: AppContext = Depends(get_context),
+) -> None:
+    """Unregister a project without ever touching its Git repository.
+
+    By default deletion is allowed only when no SceneWorks-owned history exists.
+    ``purge_history=true`` also deletes terminal project history. Active tasks or
+    agent sessions still block deletion unless ``force=true`` is explicitly
+    supplied; force is intended for deterministic test-artifact cleanup.
+    """
     async with ctx.engine_factory() as session:
         project = await session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "project not found")
-        task_count = (
-            await session.execute(select(func.count(Task.id)).where(Task.project_id == project_id))
+
+        active_task_count = (
+            await session.execute(
+                select(func.count(Task.id)).where(
+                    Task.project_id == project_id,
+                    Task.status.in_(ACTIVE_TASK_STATES),
+                )
+            )
         ).scalar() or 0
-        if task_count:
-            raise HTTPException(409, "cannot delete project with existing tasks")
-        await session.delete(project)
+        active_session_count = (
+            await session.execute(
+                select(func.count(AgentSession.id)).where(
+                    AgentSession.project_id == project_id,
+                    AgentSession.status.in_(ACTIVE_SESSION_STATES),
+                )
+            )
+        ).scalar() or 0
+        if not force and (active_task_count or active_session_count):
+            raise HTTPException(
+                409,
+                "cannot delete project while it has active tasks or agent sessions",
+            )
+
+        dependent_counts = [
+            (
+                await session.execute(
+                    select(func.count(Task.id)).where(Task.project_id == project_id)
+                )
+            ).scalar()
+            or 0,
+            (
+                await session.execute(
+                    select(func.count(Initiative.id)).where(
+                        Initiative.project_id == project_id
+                    )
+                )
+            ).scalar()
+            or 0,
+            (
+                await session.execute(
+                    select(func.count(ProjectMemory.id)).where(
+                        ProjectMemory.project_id == project_id
+                    )
+                )
+            ).scalar()
+            or 0,
+            (
+                await session.execute(
+                    select(func.count(Artifact.id)).where(Artifact.project_id == project_id)
+                )
+            ).scalar()
+            or 0,
+            (
+                await session.execute(
+                    select(func.count(AgentSession.id)).where(
+                        AgentSession.project_id == project_id
+                    )
+                )
+            ).scalar()
+            or 0,
+        ]
+        if any(dependent_counts) and not purge_history:
+            raise HTTPException(
+                409,
+                "project has SceneWorks history; retry with purge_history=true to delete it",
+            )
+
+        if purge_history:
+            await _purge_project_history(session, project_id)
+        else:
+            await session.delete(project)
         await session.commit()
