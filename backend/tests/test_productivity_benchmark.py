@@ -166,6 +166,27 @@ def test_repository_path_supports_environment_substitution(tmp_path, monkeypatch
     assert manifest.tasks[0].repository_path == tmp_path / "pcs"
 
 
+def test_disabled_manifest_gate_is_not_announced_during_validation(tmp_path, capsys):
+    payload = {
+        "schema_version": 1,
+        "name": "disabled-gate",
+        "adoption_gate": {"enabled": False},
+        "tasks": [
+            {
+                "key": "one",
+                "title": "One",
+                "description": "One task",
+                "repository_path": ".",
+                "verification_commands": ["python check.py"],
+            }
+        ],
+    }
+    path = tmp_path / "bench.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["--manifest", str(path), "--validate"]) == 0
+    assert "with adoption gate" not in capsys.readouterr().out
+
+
 def _gate_manifest(task_count=5, repeats=3, **policy_overrides):
     policy = AdoptionGatePolicy(**policy_overrides)
     return BenchmarkManifest(
@@ -179,18 +200,32 @@ def _gate_manifest(task_count=5, repeats=3, **policy_overrides):
     )
 
 
-def _ready_report(*, sw_rate=1.0, direct_rate=1.0, ratio=1.25, sw_failures=0):
-    comparisons = [
+def _pair_matrix(*, task_count=5, repeats=3, outcome="both_pass", ratio=1.25):
+    return [
         PairComparison(
-            task_key=f"task-{index}",
-            repeat=1,
-            outcome="both_pass",
+            task_key=f"task-{task_index}",
+            repeat=repeat,
+            outcome=outcome,
             sceneworks_seconds=12.5,
             direct_seconds=10.0,
-            elapsed_ratio_sceneworks_over_direct=ratio,
+            elapsed_ratio_sceneworks_over_direct=(
+                ratio if outcome == "both_pass" else None
+            ),
         )
-        for index in range(5)
+        for task_index in range(task_count)
+        for repeat in range(1, repeats + 1)
     ]
+
+
+def _ready_report(
+    *,
+    sw_rate=1.0,
+    direct_rate=1.0,
+    ratio=1.25,
+    sw_failures=0,
+    comparisons=None,
+):
+    comparisons = comparisons or _pair_matrix(ratio=ratio)
     return BenchmarkReport(
         manifest_name="PCS gate",
         backend="fake",
@@ -205,7 +240,7 @@ def _ready_report(*, sw_rate=1.0, direct_rate=1.0, ratio=1.25, sw_failures=0):
                 fail_count=15 - round(15 * sw_rate),
                 blocked_count=0,
                 success_rate=sw_rate,
-                median_success_seconds=12.5,
+                median_success_seconds=12.5 if sw_rate else None,
                 mean_human_interventions=1.0,
                 mean_agent_executions=3.0,
                 backend_failures=sw_failures,
@@ -218,7 +253,7 @@ def _ready_report(*, sw_rate=1.0, direct_rate=1.0, ratio=1.25, sw_failures=0):
                 fail_count=15 - round(15 * direct_rate),
                 blocked_count=0,
                 success_rate=direct_rate,
-                median_success_seconds=10.0,
+                median_success_seconds=10.0 if direct_rate else None,
                 mean_human_interventions=0.0,
                 mean_agent_executions=1.0,
                 backend_failures=0,
@@ -246,10 +281,37 @@ def test_adoption_gate_complete_benchmark_can_still_be_not_ready():
 
 def test_adoption_gate_incomplete_corpus_is_insufficient_evidence():
     manifest = _gate_manifest(task_count=2, repeats=1)
-    result = evaluate_adoption_gate(_ready_report(), manifest)
+    comparisons = _pair_matrix(task_count=2, repeats=1)
+    result = evaluate_adoption_gate(
+        _ready_report(comparisons=comparisons), manifest
+    )
     assert result.verdict is AdoptionVerdict.INSUFFICIENT_EVIDENCE
     assert any("historical task" in blocker for blocker in result.blockers)
     assert any("repeat" in blocker for blocker in result.blockers)
+
+
+def test_adoption_gate_missing_expected_pairs_is_insufficient_evidence():
+    manifest = _gate_manifest()
+    comparisons = _pair_matrix()[:-1]
+    result = evaluate_adoption_gate(
+        _ready_report(comparisons=comparisons), manifest
+    )
+    assert result.verdict is AdoptionVerdict.INSUFFICIENT_EVIDENCE
+    assert any("paired comparison" in blocker for blocker in result.blockers)
+
+
+def test_adoption_gate_zero_both_pass_pairs_is_not_ready_not_missing_evidence():
+    manifest = _gate_manifest()
+    comparisons = _pair_matrix(outcome="direct_only_pass")
+    result = evaluate_adoption_gate(
+        _ready_report(sw_rate=0.0, direct_rate=1.0, comparisons=comparisons),
+        manifest,
+    )
+    assert result.verdict is AdoptionVerdict.NOT_READY
+    failed = {check.key for check in result.checks if not check.passed}
+    assert "minimum_sceneworks_success_rate" in failed
+    assert "success_rate_vs_direct" in failed
+    assert "median_elapsed_overhead" in failed
 
 
 def test_adoption_gate_backend_failure_blocks_readiness():
