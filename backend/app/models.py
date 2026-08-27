@@ -84,7 +84,7 @@ class WorkPackage(Base):
     __tablename__ = "work_packages"
     __table_args__ = (UniqueConstraint("initiative_id", "key", name="uq_work_package_initiative_key"),)
 
-    id: Mapped[int] = mapped_column(primary_key_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     initiative_id: Mapped[int] = mapped_column(ForeignKey("initiatives.id"), index=True)
     key: Mapped[str] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(String(300))
