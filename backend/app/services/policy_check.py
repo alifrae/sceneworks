@@ -54,3 +54,10 @@ def render_violations(violations: list[ProtectedPathViolation]) -> str:
         for item in violations
     )
     return "\n".join(lines)
+
+
+def enforce_review_verdict(model_verdict: str, reviewer_prompt: str | None) -> str:
+    """Project-policy findings override a model approval deterministically."""
+    if POLICY_VIOLATION_MARKER in (reviewer_prompt or ""):
+        return "CHANGES_REQUESTED"
+    return model_verdict
