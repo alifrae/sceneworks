@@ -1,15 +1,16 @@
-"""CLI for SceneWorks productivity benchmarking.
+"""CLI for SceneWorks productivity benchmarking and PCS adoption gating.
 
 Examples:
 
     cd backend
     uv run python -m benchmarking --manifest ../benchmarks/pcs.json
+    uv run python -m benchmarking --manifest ../benchmarks/pcs.json --adoption-gate
     uv run python -m benchmarking --manifest bench.json --mode sceneworks
     uv run python -m benchmarking --manifest bench.json --json evidence.json
     uv run python -m benchmarking --manifest bench.json --validate
 
-Exit status describes whether benchmark evidence is complete, not whether an
-agent solved every engineering task. A FAIL trial is valid measured evidence.
+Exit status describes evidence/gate state, not merely whether every agent task
+passed: FAIL trials are valid measured evidence; BLOCKED trials are incomplete.
 """
 
 from __future__ import annotations
@@ -17,16 +18,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from benchmarking.models import BenchmarkManifest, BenchmarkStatus, TrialVerdict
+from benchmarking.models import (
+    AdoptionVerdict,
+    BenchmarkManifest,
+    BenchmarkStatus,
+    TrialVerdict,
+)
 from benchmarking.runner import run_manifest
+from benchmarking.scoring import evaluate_adoption_gate
 
 EXIT_COMPLETE = 0
 EXIT_INCOMPLETE = 2
+EXIT_GATE_NOT_MET = 3
 EXIT_USAGE = 4
 
 
@@ -46,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workdir", metavar="PATH", help="explicit benchmark work directory")
     parser.add_argument("--keep-workdir", action="store_true")
     parser.add_argument(
+        "--adoption-gate",
+        action="store_true",
+        help=(
+            "evaluate PCS pilot-readiness thresholds after the benchmark. "
+            "A manifest adoption_gate is also evaluated automatically."
+        ),
+    )
+    parser.add_argument(
         "--validate",
         action="store_true",
         help="validate the manifest schema only; do not run agents",
@@ -55,6 +72,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def load_manifest(path: Path) -> BenchmarkManifest:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    # Only repository_path supports environment substitution. Shell/test
+    # commands are intentionally left untouched so `$VAR` inside a command does
+    # not change during manifest parsing. This makes a checked-in PCS manifest
+    # portable without baking a developer-specific absolute path into Git.
+    for task in payload.get("tasks", []):
+        raw = task.get("repository_path")
+        if isinstance(raw, str):
+            task["repository_path"] = os.path.expandvars(os.path.expanduser(raw))
     return BenchmarkManifest.model_validate(payload)
 
 
@@ -92,6 +117,17 @@ def summary(report) -> str:
             "Paired outcomes: "
             + ", ".join(f"{key}={value}" for key, value in sorted(outcomes.items()))
         )
+    if report.adoption_gate is not None:
+        gate = report.adoption_gate
+        lines.append(f"Adoption gate: {gate.verdict.value}")
+        lines.append(f"  {gate.summary}")
+        for item in gate.checks:
+            state = "PASS" if item.passed else "FAIL"
+            lines.append(
+                f"  [{state}] {item.key}: observed={item.observed!r}, required={item.required!r}"
+            )
+        for blocker in gate.blockers:
+            lines.append(f"    blocker: {blocker}")
     for trial in report.trials:
         model = next(
             (target.get("model") for target in trial.execution_targets if target.get("model")),
@@ -119,9 +155,10 @@ async def _run(args) -> int:
         return EXIT_USAGE
 
     if args.validate:
+        gate = " with adoption gate" if manifest.adoption_gate else ""
         print(
             f"valid benchmark manifest: {manifest.name} "
-            f"({len(manifest.tasks)} task(s), {manifest.repeats} repeat(s))"
+            f"({len(manifest.tasks)} task(s), {manifest.repeats} repeat(s)){gate}"
         )
         return EXIT_COMPLETE
 
@@ -139,6 +176,9 @@ async def _run(args) -> int:
             f"-> {task.key} #{repeat} [{mode}]", flush=True
         ),
     )
+    if args.adoption_gate or manifest.adoption_gate is not None:
+        report.adoption_gate = evaluate_adoption_gate(report, manifest)
+
     print()
     print(summary(report))
 
@@ -152,7 +192,14 @@ async def _run(args) -> int:
             target.write_text(payload, encoding="utf-8")
             print(f"\nevidence: {target}")
 
-    return EXIT_COMPLETE if report.status is BenchmarkStatus.COMPLETE else EXIT_INCOMPLETE
+    if report.status is not BenchmarkStatus.COMPLETE:
+        return EXIT_INCOMPLETE
+    if (
+        report.adoption_gate is not None
+        and report.adoption_gate.verdict is not AdoptionVerdict.READY_FOR_PILOT
+    ):
+        return EXIT_GATE_NOT_MET
+    return EXIT_COMPLETE
 
 
 def main(argv: list[str] | None = None) -> int:
