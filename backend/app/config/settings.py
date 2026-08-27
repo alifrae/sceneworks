@@ -85,12 +85,30 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
 
-    # WP11 MCP reasoning interface. The endpoint is available by default on the
-    # same bind address as the API. Tools that create executions or mutate task
-    # state are separately gated and default OFF so merely connecting a client
-    # never grants operational authority.
+    # WP11 MCP reasoning interface.
+    #
+    # observe  -> semantic read tools only;
+    # standard -> governed SceneWorks action tools (tasks/roles/workflows);
+    # advanced -> standard tools plus persistent Gemini ACP execution sessions
+    #             supervised iteratively by the external MCP client.
     mcp_enabled: bool = True
+    mcp_mode: Literal["observe", "standard", "advanced"] = "observe"
+    # Backward-compatible flag used by the first WP11 prototype and existing
+    # deployments/tests. If true while mcp_mode is still observe, effective mode
+    # is standard. New configuration should use mcp_mode.
     mcp_allow_actions: bool = False
+    # Capabilities the operator is willing to grant an Advanced-mode session.
+    # Per-session requests can choose a subset, never exceed this allowlist.
+    advanced_session_permissions: list[str] = Field(
+        default_factory=lambda: [
+            "repository_read",
+            "repository_write",
+            "shell_execute",
+            "git_commit",
+            "network_access",
+            "subagents",
+        ]
+    )
     # Total text budget returned by one semantic MCP tool call. Large diffs and
     # artifacts are truncated with an explicit marker rather than overflowing
     # an external model's context window.
@@ -122,6 +140,12 @@ class Settings(BaseSettings):
 
     # When set to "fake", the default backend is the scripted FakeAgentBackend.
     default_backend: Literal["gemini_acp", "openhands", "fake"] = "gemini_acp"
+
+    @property
+    def effective_mcp_mode(self) -> Literal["observe", "standard", "advanced"]:
+        if self.mcp_mode == "observe" and self.mcp_allow_actions:
+            return "standard"
+        return self.mcp_mode
 
 
 def resolve_path(path: Path, base: Path | None = None) -> Path:
