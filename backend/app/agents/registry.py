@@ -129,6 +129,17 @@ class BackendRegistry:
     def keys(self) -> list[str]:
         return list(self._backends.keys())
 
+    async def shutdown(self) -> None:
+        """Cancel any stale-while-revalidate health work owned by this registry."""
+        task = self._refresh_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     def _cold_health(self) -> list[BackendHealth]:
         """Return truthful cheap state while provider probes run in background.
 
