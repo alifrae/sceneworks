@@ -16,6 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config.settings import ModelProfileRoute, Settings
 from app.models import AppSetting
 
+MCP_MODES = {"observe", "standard", "advanced"}
+ADVANCED_PERMISSIONS = {
+    "repository_read",
+    "repository_write",
+    "shell_execute",
+    "git_commit",
+    "network_access",
+    "subagents",
+}
+
 EDITABLE_KEYS = {
     "worktree_root": str,
     "gemini_executable": str,
@@ -23,6 +33,10 @@ EDITABLE_KEYS = {
     "model_profile_routes": dict,
     "execution_timeout_seconds": int,
     "default_backend": str,
+    "mcp_enabled": bool,
+    "mcp_mode": str,
+    "mcp_tool_max_chars": int,
+    "advanced_session_permissions": list,
 }
 
 
@@ -86,4 +100,24 @@ def apply_overrides(settings: Settings, overrides: SettingsOverrides) -> Setting
         settings.execution_timeout_seconds = int(values["execution_timeout_seconds"])
     if "default_backend" in values:
         settings.default_backend = str(values["default_backend"])
+    if "mcp_enabled" in values:
+        settings.mcp_enabled = bool(values["mcp_enabled"])
+    if "mcp_mode" in values:
+        mode = str(values["mcp_mode"])
+        if mode not in MCP_MODES:
+            raise ValueError(f"invalid mcp_mode: {mode!r}")
+        settings.mcp_mode = mode  # type: ignore[assignment]
+    if "mcp_tool_max_chars" in values:
+        settings.mcp_tool_max_chars = int(values["mcp_tool_max_chars"])
+    if "advanced_session_permissions" in values:
+        raw_permissions = values["advanced_session_permissions"]
+        if not isinstance(raw_permissions, list):
+            raise ValueError("advanced_session_permissions override must be an array")
+        permissions = [str(item) for item in raw_permissions]
+        unknown = set(permissions) - ADVANCED_PERMISSIONS
+        if unknown:
+            raise ValueError(
+                "unknown advanced_session_permissions: " + ", ".join(sorted(unknown))
+            )
+        settings.advanced_session_permissions = permissions
     return settings
