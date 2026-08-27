@@ -1,17 +1,30 @@
 {
   "schema_version": 1,
-  "name": "PCS historical engineering tasks",
+  "name": "PCS historical engineering adoption gate",
   "backend": "gemini_acp",
   "repeats": 3,
+  "adoption_gate": {
+    "enabled": true,
+    "min_tasks": 5,
+    "min_repeats": 3,
+    "require_complete_pairs": true,
+    "min_sceneworks_success_rate": 0.8,
+    "max_success_rate_regression": 0.0,
+    "max_median_time_ratio": 2.0,
+    "max_mean_human_interventions": 1.0,
+    "max_backend_failures": 0
+  },
   "tasks": [
     {
       "key": "pcs-historical-bug",
       "title": "Replace with a closed PCS bug",
-      "description": "Use the exact historical task description, without revealing the known patch.",
-      "repository_path": "/absolute/path/to/PCS",
+      "description": "Use the exact historical user/task description. Do not reveal the known implementation patch.",
+      "repository_path": "${PCS_REPO}",
       "base_ref": "<commit immediately before the historical fix>",
+      "historical_fix_ref": "<known fix commit; audit metadata only, never sent to the agent>",
+      "historical_source": "<issue/PR/release note or other provenance>",
       "verification_commands": [
-        "<command that fails before the fix and passes after it>"
+        "<executable command that fails at base_ref and passes after a correct fix>"
       ],
       "baseline_expectation": "must_fail",
       "architecture_context_paths": [],
@@ -21,7 +34,7 @@
         "required_behavior": [],
         "allowed_scope": [],
         "forbidden_changes": [
-          "Do not weaken or delete the benchmark acceptance test"
+          "Do not weaken, delete, bypass, or replace benchmark acceptance checks"
         ],
         "architecture_constraints": [],
         "required_tests": [],
