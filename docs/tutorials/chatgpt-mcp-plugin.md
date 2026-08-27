@@ -1,153 +1,118 @@
 # Connect SceneWorks to ChatGPT with the MCP plugin
 
-This tutorial connects ChatGPT to the WP11 SceneWorks MCP endpoint so ChatGPT
-can inspect SceneWorks state directly and, when you explicitly enable actions,
-use SceneWorks to invoke Gemini CLI roles and control engineering tasks.
+This tutorial connects ChatGPT to SceneWorks' WP11 MCP endpoint. Start in
+**Observe** mode, verify the semantic read tools, then opt into **Standard** or
+**Advanced** only when you need their additional authority.
 
-The names in ChatGPT may move as the Plugins/MCP UI evolves. The current setup
-screen contains the fields **Name**, **Description**, **Connection** with
-**Server URL / Tunnel**, **Authentication**, the custom-MCP risk acknowledgement,
-and **Create**.
+The exact ChatGPT labels may move as the Plugins/MCP UI evolves. The current
+custom setup exposes **Name**, **Description**, **Connection** (Server URL or
+Tunnel), **Authentication**, a custom-MCP risk acknowledgement and **Create**.
 
-## 1. Start SceneWorks locally
+## 1. Start SceneWorks and verify MCP locally
 
-From the repository, start the backend normally. The default address is:
+Default backend address:
 
 ```text
 http://127.0.0.1:8010
 ```
 
-Verify WP11 is reachable in a browser or with curl:
+Open or curl:
 
 ```bash
 curl http://127.0.0.1:8010/mcp
 ```
 
-Expected high-level response:
+Expected shape:
 
 ```json
 {
   "name": "SceneWorks",
   "endpoint": "/mcp",
   "transport": "streamable HTTP / JSON-RPC",
-  "action_tools_enabled": false
+  "mode": "observe",
+  "action_tools_enabled": false,
+  "advanced_agent_sessions_enabled": false
 }
 ```
 
-The actual MCP endpoint used by ChatGPT is:
+The protocol endpoint is:
 
 ```text
 http://127.0.0.1:8010/mcp
 ```
 
-`POST /mcp` is the protocol endpoint; `GET /mcp` above is only a setup check.
+`POST /mcp` is used by ChatGPT. `GET /mcp` is only a setup/health check.
 
-## 2. Start read-only first
+## 2. Leave SceneWorks in Observe mode first
 
-The safe default is already:
+The default is:
 
 ```env
 SCENEWORKS_MCP_ENABLED=true
-SCENEWORKS_MCP_ALLOW_ACTIONS=false
+SCENEWORKS_MCP_MODE=observe
 ```
 
-With this setting ChatGPT can use semantic read tools such as project/task,
-memory, artifact, diff and execution inspection, but SceneWorks refuses requests
-to create tasks, start Gemini roles or change task state.
+You can also select **Settings -> ChatGPT / MCP -> Observe** in the SceneWorks
+web UI.
 
-Do **not** enable actions until the MCP connection itself works and you have
-reviewed the discovered tool list.
+Observe exposes only semantic reads: projects, tasks, accepted memory, artifacts,
+diffs and execution evidence. It cannot launch Gemini or mutate SceneWorks.
 
-## 3. Open the custom plugin setup in ChatGPT
+## 3. Add the custom MCP plugin in ChatGPT
 
 In ChatGPT:
 
-1. Open **Plugins** (from the sidebar/plugin directory or Settings, depending on
-   the current UI).
-2. Choose the option to create/add a custom plugin/MCP connection.
-3. The **New Plugin** dialog should open.
-4. Set **Name** to `SceneWorks`.
-5. Suggested description:
+1. Open **Plugins** / the custom MCP integration area.
+2. Choose **New Plugin** / add custom plugin.
+3. Name it `SceneWorks`.
+4. Suggested description:
 
    ```text
-   SceneWorks engineering control plane: projects, tasks, evidence, memory and governed agent workflows.
+   SceneWorks engineering control plane: projects, tasks, evidence, memory, governed workflows and optional Gemini execution sessions.
    ```
 
-An icon is optional.
+5. Leave the plugin in the risk-review flow until the connection below works.
 
-## 4. Choose Tunnel for a local/private SceneWorks
+## 4. Use Tunnel for a local/private SceneWorks
 
-ChatGPT does not connect directly to a localhost MCP server. For SceneWorks
-running on your laptop or private network, select:
+For SceneWorks running on your laptop/private network, choose:
 
 ```text
 Connection -> Tunnel
 ```
 
-Use ChatGPT's **Secure MCP Tunnel** flow to make the local MCP target available
-to ChatGPT without publishing port `8010` to the public internet. When the
-tunnel asks for the local target, use:
+Use ChatGPT's Secure MCP Tunnel flow and point the local target at:
 
 ```text
 http://127.0.0.1:8010/mcp
 ```
 
-Follow the tunnel UI until it reports the connection as available, then return
-to the New Plugin dialog and continue the tool scan/creation flow.
+Do **not** solve localhost connectivity by exposing port `8010` publicly.
+SceneWorks is a single-user local control plane and the bare FastAPI service does
+not implement OAuth/user authentication.
 
-### Do not solve localhost connectivity by opening port 8010 publicly
+## 5. Use Server URL only behind authenticated infrastructure
 
-SceneWorks is deliberately a single-user local control plane. The FastAPI API
-and `/mcp` endpoint do not implement user authentication or OAuth. Publicly
-forwarding `8010` would expose the same task-control API the dashboard uses.
-
-## 5. Server URL is for a properly protected remote deployment
-
-Use **Server URL** only when SceneWorks is behind infrastructure you control,
-for example:
+For a remote deployment, the externally visible target can look like:
 
 ```text
 https://sceneworks.example.net/mcp
 ```
 
-The external endpoint must terminate HTTPS and enforce authentication before
-traffic reaches SceneWorks.
+Terminate HTTPS and enforce authentication before traffic reaches SceneWorks.
+If ChatGPT asks for OAuth, OAuth belongs in that trusted gateway; SceneWorks
+WP11 itself is not an OAuth provider.
 
-### Authentication field
+## 6. Acknowledge the MCP warning and scan tools
 
-SceneWorks WP11 itself is **not an OAuth provider**.
+Before accepting the custom MCP warning:
 
-Therefore:
+- verify the endpoint/tunnel is yours;
+- keep SceneWorks in Observe mode;
+- scan/review the tools;
+- confirm no generic host primitives appear.
 
-- with **Tunnel**, use the authentication/tunnel mechanism provided by the
-  ChatGPT tunnel flow;
-- with **Server URL + OAuth**, configure OAuth on the trusted reverse proxy or
-  identity-aware gateway in front of SceneWorks, not inside SceneWorks;
-- if the UI offers a no-authentication option, only use it for a connection that
-  is already private/protected by the tunnel or equivalent trusted boundary;
-- do not select OAuth and point it directly at bare `http://127.0.0.1:8010/mcp`;
-  SceneWorks has no OAuth discovery/token endpoints to satisfy that flow.
-
-## 6. Acknowledge the custom MCP warning
-
-The New Plugin dialog warns that an unreviewed MCP server may expose data or
-cause unintended actions.
-
-For your own SceneWorks server:
-
-1. verify the connection points to the SceneWorks instance you control;
-2. leave `SCENEWORKS_MCP_ALLOW_ACTIONS=false` for the first scan;
-3. review the tool list described below;
-4. tick **I understand and want to continue**;
-5. use **Scan Tools** if shown by the current UI, then choose **Create**.
-
-If ChatGPT shows a diff when tools change later, review it rather than blindly
-enabling newly discovered actions.
-
-## 7. Verify the discovered tools
-
-The plugin should discover tools with the `sceneworks.` prefix. The important
-read-only tools are:
+Expected Observe tools:
 
 ```text
 sceneworks.capabilities
@@ -161,22 +126,56 @@ sceneworks.search_memory
 sceneworks.list_artifacts
 ```
 
-It should **not** expose generic machine tools such as:
+It should **not** expose tools such as:
 
 ```text
 read_file
 write_file
-shell
-git_commit
+raw_shell
+git_command
 git_push
 sql
 ```
 
-If those generic tools appear, stop and inspect the server you connected to; that
-is not the intended WP11 interface.
+If generic host tools appear, stop: that is not the intended WP11 interface.
 
-The action tools may also appear in discovery but SceneWorks rejects them until
-its server-side action gate is enabled:
+## 7. Test Observe mode from ChatGPT
+
+Try:
+
+```text
+@SceneWorks list my projects and tell me which have active tasks.
+```
+
+Then:
+
+```text
+@SceneWorks inspect the project context for <project>. Separate accepted project memory from agent output and tell me what is authoritative.
+```
+
+Then:
+
+```text
+@SceneWorks review task <id> using its contract, architecture, implementation evidence, review result and Git provenance. Do not trust the implementation summary when evidence disagrees.
+```
+
+At this stage ChatGPT reasons over SceneWorks state but cannot launch agents.
+
+## 8. Move to Standard mode for governed engineering actions
+
+In SceneWorks:
+
+```text
+Settings -> ChatGPT / MCP -> Standard
+```
+
+or configure:
+
+```env
+SCENEWORKS_MCP_MODE=standard
+```
+
+Standard adds:
 
 ```text
 sceneworks.inspect_repository
@@ -185,204 +184,241 @@ sceneworks.create_task
 sceneworks.task_action
 ```
 
-## 8. Test read-only grounding from ChatGPT
+Refresh/rescan the plugin if ChatGPT does not immediately see the changed tool
+catalogue.
 
-In a new ChatGPT conversation, select/mention the SceneWorks plugin for the
-message. Depending on the current UI this can be done from the tool picker or by
-mentioning the plugin.
-
-Try:
-
-```text
-@SceneWorks list my SceneWorks projects and tell me which ones have active tasks.
-```
-
-Then:
-
-```text
-@SceneWorks inspect the project context for <project>. Separate accepted project memory from agent output and tell me what is currently authoritative.
-```
-
-Then:
-
-```text
-@SceneWorks review task <id>. Use the task contract, architecture, implementation evidence, review result and Git provenance. Do not assume the implementation summary is correct if the diff/evidence disagrees.
-```
-
-At this stage ChatGPT can reason over SceneWorks state but cannot start Gemini or
-change task state.
-
-## 9. Enable master-brain actions
-
-After the read-only connection works, edit `backend/.env`:
-
-```env
-SCENEWORKS_MCP_ALLOW_ACTIONS=true
-```
-
-Restart the SceneWorks backend.
-
-Refresh/rescan the custom plugin in ChatGPT if the UI requires it. The action
-tool definitions are the same, but the SceneWorks server-side policy now allows
-them to execute.
-
-This flag is the final authority gate. A ChatGPT-side approval prompt is useful,
-but SceneWorks does not rely on it for whether MCP actions are globally allowed.
-
-## 10. Test Gemini CLI as ChatGPT's repository eyes
+### Test Gemini as repository eyes
 
 Ask:
 
 ```text
-@SceneWorks inspect the repository for <project> and determine where task scheduling is implemented. I need file/symbol evidence and the current commit, but do not modify anything.
+@SceneWorks inspect the repository for <project> and find where task scheduling is implemented. Give file/symbol evidence and the current commit. Do not modify anything.
+```
+
+SceneWorks starts the Technical Expert through Gemini CLI/ACP on a detached,
+commit-pinned worktree. ChatGPT can poll `sceneworks.get_execution` and reason
+over the result.
+
+### Test a governed task
+
+Ask:
+
+```text
+@SceneWorks create a bounded task for project <project> to fix <bug>. Inspect first if needed. Put explicit allowed_scope, required_tests and acceptance_criteria in the engineering contract. Show me the contract before starting work.
+```
+
+Then:
+
+```text
+@SceneWorks start the workflow for that task.
+```
+
+SceneWorks remains the workflow authority. A tightly bounded non-high-priority
+bug can skip Architect deterministically, but Engineer -> Reviewer remains.
+Riskier work keeps architecture/approval.
+
+## 9. Use Advanced mode when ChatGPT should be the supervisor
+
+Advanced mode is different from Standard. It deliberately lets ChatGPT run an
+iterative loop in which Gemini CLI acts as an execution subagent.
+
+Before enabling it, open:
+
+```text
+Settings -> ChatGPT / MCP -> Advanced
+```
+
+Review the **Advanced-session capability ceiling**. Typical capabilities are:
+
+```text
+Repository read
+Repository write
+Shell / tests
+Git commit
+Web / network
+Gemini native subagents
+```
+
+Disable anything you do not need. The server allowlist is a ceiling: an
+individual Advanced session can request only a subset.
+
+### Important shell warning
+
+File reads/writes mediated by ACP are confined to the session's isolated
+worktree. Shell is different: SceneWorks constrains the terminal cwd, but the
+shell process still runs with the operating-system authority of the SceneWorks
+user. This is **not an OS/container sandbox**.
+
+Enable Advanced shell/network only under your own responsibility.
+
+## 10. Test a read-only Advanced Gemini session
+
+Ask ChatGPT:
+
+```text
+@SceneWorks create an Advanced Gemini session for <project> with repository_read only. Investigate the architecture around <problem> and report evidence. Do not modify anything.
 ```
 
 ChatGPT should use:
 
 ```text
-sceneworks.inspect_repository
+sceneworks.agent_session.create
+sceneworks.agent_session.prompt
+sceneworks.agent_session.get
 ```
 
-SceneWorks starts the **Technical Expert** role through the configured
-AgentBackend (normally Gemini CLI over ACP) on a detached commit-pinned worktree.
-The Technical Expert can inspect/read and use shell commands, but cannot modify
-repository source or create Git commits.
+The first session creation calls Gemini ACP `session/new`. Later prompts use a
+fresh Gemini process and `session/load` with the same provider conversation and
+same isolated worktree. This keeps Gemini context without keeping one process
+alive indefinitely.
 
-The tool returns an execution id. ChatGPT can poll:
+The MCP response does not expose the absolute worktree path or Gemini's raw
+provider session id.
+
+## 11. Test iterative Advanced implementation
+
+For a controlled example:
 
 ```text
-sceneworks.get_execution
+@SceneWorks create an Advanced session for <project> with repository_read, repository_write, shell_execute and git_commit. First investigate <bug>; do not edit until you have a root-cause hypothesis.
 ```
 
-until the inspection completes, then reason over the returned evidence.
-
-## 11. Test task creation and implementation
-
-A useful high-level request is:
+After Gemini reports back, continue in the same ChatGPT conversation:
 
 ```text
-@SceneWorks create a bounded task for project <project> to fix <bug>.
-First inspect the relevant repository area if needed. Put concrete allowed_scope,
-required_tests and acceptance_criteria in the engineering contract. Do not start
-implementation until you show me the task contract.
+Test that hypothesis. If confirmed, implement the smallest compatible fix and run the targeted tests.
 ```
 
-After reviewing it, tell ChatGPT:
+Then:
 
 ```text
-@SceneWorks start the architecture/workflow for that task.
+Show me the actual session diff and remaining worktree status. Do not rely on Gemini's prose summary.
 ```
 
-SceneWorks, not ChatGPT, owns the workflow state.
-
-For a bounded non-high-priority bug with an explicit scope, required tests and
-acceptance criteria, WP11 may deterministically skip a redundant Architect and
-run:
+ChatGPT should call:
 
 ```text
-Triage -> optional advisers -> Engineer -> Reviewer -> human
+sceneworks.agent_session.diff
 ```
 
-For unbounded, high-risk or cross-cutting work, SceneWorks retains the normal
-architecture and approval path.
+You can continue prompting the same persistent session for additional evidence,
+tests or corrections.
 
-The Engineer remains the coding **hands**:
+When finished:
 
 ```text
-SceneWorks -> AgentBackend -> Gemini CLI / ACP -> isolated branch worktree
+@SceneWorks close that Advanced session, but preserve its branch/worktree if it contains work I still need to review.
 ```
 
-ChatGPT never receives raw shell or file-write MCP tools.
+## 12. Web search/fetch and Gemini subagents
 
-## 12. Independent review loop
+When `network_access`/`subagents` are allowed, Gemini may use its native tools
+such as web search/fetch and native subagents (for example a codebase
+investigator, depending on installed Gemini CLI version).
 
-After Gemini finishes, ask:
+These are provider-native capabilities rather than separate raw MCP tools.
+SceneWorks records the capabilities Gemini advertises at session creation and
+gates visible ACP permission requests, but it does not claim a complete network
+sandbox around every provider-internal tool implementation.
+
+If a task does not need external research or subagents, leave those permissions
+off.
+
+## 13. Independent review after Advanced execution
+
+Advanced mode intentionally gives ChatGPT more direct supervision, but it does
+not make Gemini's result authoritative.
+
+A useful finishing loop is:
+
+1. inspect `agent_session.diff`;
+2. create/use a normal SceneWorks review task or Reviewer when independent
+   verification is valuable;
+3. compare tests/evidence against project policy and accepted memory;
+4. integrate only after human review.
+
+## Dashboard behavior
+
+Installing MCP does not redirect dashboard requests to ChatGPT.
 
 ```text
-@SceneWorks independently review task <id> for me. Compare the original contract,
-accepted project memory, architecture if present, actual Git diff/result commit,
-test/reviewer evidence and execution history. Identify unsupported claims or
-remaining risks before I accept it.
+Dashboard request -> SceneWorks workflow -> configured AgentBackend
 ```
 
-This is the main WP11 value: no manual copying of Gemini's completion report back
-into ChatGPT. Both the dashboard and ChatGPT read the same persisted task and
-execution state.
-
-## Dashboard behavior after MCP is installed
-
-Nothing is automatically redirected to ChatGPT.
-
-A request made only in the SceneWorks dashboard follows the SceneWorks workflow
-and configured AgentBackend. ChatGPT intervenes only when you invoke the
-SceneWorks plugin from a ChatGPT message.
-
-This is deliberate: SceneWorks stays usable if ChatGPT is unavailable, and
-trivial/background workflows do not pay an extra remote reasoning round-trip.
+ChatGPT intervenes only when you invoke SceneWorks from ChatGPT. This keeps
+SceneWorks autonomous and avoids paying an extra reasoning round-trip for every
+operation.
 
 ## Troubleshooting
 
 ### `GET /mcp` returns 404
 
-Check:
+Enable MCP in Settings or:
 
 ```env
 SCENEWORKS_MCP_ENABLED=true
 ```
 
-Restart the backend.
+### ChatGPT cannot reach localhost
 
-### ChatGPT cannot reach `127.0.0.1`
-
-That is expected without a tunnel. Select **Tunnel / Secure MCP Tunnel** rather
-than **Server URL** for a local machine.
+Use **Tunnel / Secure MCP Tunnel** for a local/private SceneWorks instead of a
+public Server URL.
 
 ### OAuth discovery fails
 
-You pointed the OAuth flow at SceneWorks directly. SceneWorks does not implement
-OAuth. Use the tunnel flow or put an OAuth-capable authenticated gateway in front
-of a remote SceneWorks deployment.
+SceneWorks is not an OAuth provider. Use the tunnel flow or put an OAuth-capable
+authenticated gateway in front of a remote deployment.
 
-### Read tools work but create/inspect/actions return an error
+### I only see read tools
 
-Check:
+SceneWorks is in Observe mode. Select Standard or Advanced and refresh/rescan the
+plugin tool catalogue.
+
+### Advanced tools return a mode error
+
+Set:
 
 ```env
-SCENEWORKS_MCP_ALLOW_ACTIONS=true
+SCENEWORKS_MCP_MODE=advanced
 ```
 
-and restart SceneWorks.
+or choose Advanced in the SceneWorks Settings page.
 
-### A large diff/artifact is truncated
+### Advanced session fails with `loadSession`
 
-Raise cautiously:
+The installed Gemini CLI did not advertise/support ACP persistent-session
+loading. Upgrade/verify Gemini CLI. WP11 fails closed instead of silently
+starting a context-less replacement conversation.
+
+### A permission is rejected when creating an Advanced session
+
+It is not present in the configured Advanced-session capability ceiling. Review
+**Settings -> ChatGPT / MCP** rather than widening it automatically.
+
+### A large result is truncated
+
+Adjust cautiously:
 
 ```env
 SCENEWORKS_MCP_TOOL_MAX_CHARS=200000
 ```
 
-The default response bound exists to prevent one MCP call from flooding the
-reasoning context.
-
 ### Tool list changed after a SceneWorks update
 
-Use ChatGPT's refresh/rescan control, review the changed action definitions, then
-enable them deliberately. Do not assume a previously reviewed plugin remains
-identical after its MCP server changes.
+Refresh/rescan the plugin and review newly added action definitions before
+raising SceneWorks' operating mode.
 
 ## Security checklist
 
-Before leaving MCP actions enabled:
+Before leaving Standard/Advanced enabled:
 
-- SceneWorks still binds to `127.0.0.1` unless you deliberately changed it.
-- Local/private access uses Secure MCP Tunnel rather than public port forwarding.
-- A remote URL is HTTPS + authenticated before reaching FastAPI.
+- SceneWorks is still local/private or protected by authenticated TLS.
 - The plugin points to the expected SceneWorks endpoint.
-- No generic shell/filesystem/Git MCP tools are present.
-- The action list contains only semantic SceneWorks operations.
-- Human acceptance remains required before integrating agent work.
-- You understand that ACP workspace confinement is not an OS/container sandbox;
-  consult `docs/gemini-capability-matrix.md` for the exact Gemini boundary.
+- No generic host primitive MCP tools are present.
+- Observe was tested before raising authority.
+- Advanced capability ceiling is no broader than needed.
+- You understand shell is not an OS sandbox.
+- Human integration/acceptance remains explicit.
 
-For the architecture and tool contract, see
-`docs/wp11-mcp-reasoning-interface.md`.
+See `docs/wp11-mcp-reasoning-interface.md` and
+`docs/gemini-capability-matrix.md` for the architectural/security boundary.
