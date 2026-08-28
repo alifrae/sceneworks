@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # observe  -> semantic read tools only;
     # standard -> governed SceneWorks actions (tasks/roles/workflows);
     # advanced -> standard plus provider-neutral EngineeringSessions exposing
-    #             SceneWorks-owned workspace/command/process/Git/PCS/GUI evidence.
+    #             SceneWorks-owned workspace/command/process/Git/PCS/GUI tools.
     mcp_enabled: bool = True
     mcp_mode: Literal["observe", "standard", "advanced"] = "observe"
     mcp_allow_actions: bool = False
@@ -105,6 +105,7 @@ class Settings(BaseSettings):
             "agent_delegate",
             "external_asset_read",
             "gui_observe",
+            "gui_automate",
             "subagents",
         ]
     )
