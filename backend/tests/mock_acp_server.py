@@ -1,20 +1,19 @@
-"""Mock ACP v1 server (agent side) for testing GeminiACPBackend without Gemini.
+"""Mock ACP v1 server for GeminiACPBackend/Advanced-session tests.
 
-Speaks the same protocol subset as Gemini CLI 0.53.x:
-- agent methods: initialize, session/new, session/prompt, session/cancel, session/close
-- client methods used: fs/read_text_file, fs/write_text_file, terminal/create,
-  session/request_permission, and an unknown method for fail-closed testing
-- notifications: session/update (agent_message_chunk, tool_call, agent_thought_chunk)
+Speaks the protocol subset SceneWorks uses:
+- initialize, session/new, session/load, session/prompt, session/cancel, session/close
+- client fs/terminal/permission requests used by policy tests
+- session/update streaming notifications
 
 Behavior is driven by environment variables:
-- MOCK_ACP_WRITE_MODE=1: issue an fs/write_text_file client request for file "mock.txt"
-- MOCK_ACP_READ_MODE=1: issue an fs/read_text_file client request
-- MOCK_ACP_TERMINAL_MODE=1: issue a terminal/create client request
-- MOCK_ACP_EXECUTE_MODE=1: issue a session/request_permission with kind="execute"
+- MOCK_ACP_WRITE_MODE=1: request fs/write_text_file for ``mock.txt``
+- MOCK_ACP_READ_MODE=1: request fs/read_text_file
+- MOCK_ACP_TERMINAL_MODE=1: request terminal/create
+- MOCK_ACP_EXECUTE_MODE=1: request execute permission
 - MOCK_ACP_UNKNOWN_METHOD=1: issue an unknown client method
-- MOCK_ACP_DENY_MODE=1: issue a session/request_permission with only reject options
-- MOCK_ACP_HOLD_PROMPT=1: acknowledge prompt arrival with an update but do not
-  complete it; used to test cancellation without a timing race
+- MOCK_ACP_DENY_MODE=1: request permission with only reject options
+- MOCK_ACP_HOLD_PROMPT=1: keep prompt pending until cancellation
+- MOCK_ACP_NO_LOAD_SESSION=1: initialize advertises loadSession=false
 - MOCK_ACP_STOP=refusal|max_tokens|end_turn: stopReason returned
 """
 
@@ -34,10 +33,27 @@ def send_request(method: str, params: dict, request_id: int) -> None:
     send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
 
 
+def _session_metadata() -> dict:
+    return {
+        "modes": {
+            "availableModes": [
+                {"id": "default", "name": "Default"},
+                {"id": "plan", "name": "Plan"},
+            ],
+            "currentModeId": "default",
+        },
+        "models": {
+            "availableModels": [{"modelId": "mock-model", "name": "Mock model"}],
+            "currentModelId": "mock-model",
+        },
+    }
+
+
 def main() -> int:
     if "--version" in sys.argv:
         print("0.53.1 (mock)")
         return 0
+
     write_mode = os.environ.get("MOCK_ACP_WRITE_MODE") == "1"
     read_mode = os.environ.get("MOCK_ACP_READ_MODE") == "1"
     terminal_mode = os.environ.get("MOCK_ACP_TERMINAL_MODE") == "1"
@@ -45,7 +61,9 @@ def main() -> int:
     unknown_mode = os.environ.get("MOCK_ACP_UNKNOWN_METHOD") == "1"
     deny_mode = os.environ.get("MOCK_ACP_DENY_MODE") == "1"
     hold_prompt = os.environ.get("MOCK_ACP_HOLD_PROMPT") == "1"
+    load_session = os.environ.get("MOCK_ACP_NO_LOAD_SESSION") != "1"
     stop = os.environ.get("MOCK_ACP_STOP", "end_turn")
+
     request_id = 9000
     session_id = "mock-session-1"
     pending_client_requests: dict[int, str] = {}
@@ -53,7 +71,6 @@ def main() -> int:
     sent_chunks = False
 
     def send_completion() -> None:
-        """Send the remaining chunks and the prompt response (end of turn)."""
         if not sent_chunks:
             send(
                 {
@@ -128,7 +145,10 @@ def main() -> int:
             {
                 "jsonrpc": "2.0",
                 "id": prompt_request_id,
-                "result": {"stopReason": stop, "usage": {"inputTokens": 10, "outputTokens": 5}},
+                "result": {
+                    "stopReason": stop,
+                    "usage": {"inputTokens": 10, "outputTokens": 5},
+                },
             }
         )
 
@@ -144,7 +164,6 @@ def main() -> int:
         params = message.get("params") or {}
 
         if message_id in pending_client_requests:
-            # Response to one of our client requests: finish the turn.
             pending = pending_client_requests.pop(message_id)
             if pending in ("write", "read", "terminal", "permission", "unknown"):
                 if "error" in message:
@@ -156,43 +175,31 @@ def main() -> int:
                                 "sessionId": session_id,
                                 "update": {
                                     "sessionUpdate": "agent_thought_chunk",
-                                    "content": {"type": "text", "text": f"Client denied {pending} request."},
+                                    "content": {
+                                        "type": "text",
+                                        "text": f"Client denied {pending} request.",
+                                    },
                                 },
                             },
                         }
                     )
-            if pending == "terminal":
-                send(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "session/update",
-                        "params": {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": "tool_call",
-                                "title": "run_command",
-                                "kind": "execute",
-                                "status": "in_progress",
-                            },
+            title = "run_command" if pending == "terminal" else "mock_tool"
+            kind = "execute" if pending == "terminal" else pending
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "title": title,
+                            "kind": kind,
+                            "status": "in_progress",
                         },
-                    }
-                )
-            else:
-                send(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "session/update",
-                        "params": {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": "tool_call",
-                                "title": "mock_tool",
-                                "kind": pending,
-                                "status": "in_progress",
-                            },
-                        },
-                    }
-                )
+                    },
+                }
+            )
             send_completion()
             continue
 
@@ -203,13 +210,47 @@ def main() -> int:
                     "id": message_id,
                     "result": {
                         "protocolVersion": 1,
-                        "agentInfo": {"name": "gemini-cli", "title": "Gemini CLI (mock)", "version": "0.53.1"},
-                        "agentCapabilities": {"loadSession": True, "promptCapabilities": {"text": True}},
+                        "agentInfo": {
+                            "name": "gemini-cli",
+                            "title": "Gemini CLI (mock)",
+                            "version": "0.53.1",
+                        },
+                        "agentCapabilities": {
+                            "loadSession": load_session,
+                            "promptCapabilities": {"text": True},
+                            "mcpCapabilities": {"http": True, "sse": True},
+                        },
                     },
                 }
             )
         elif method == "session/new":
-            send({"jsonrpc": "2.0", "id": message_id, "result": {"sessionId": session_id}})
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message_id,
+                    "result": {"sessionId": session_id, **_session_metadata()},
+                }
+            )
+        elif method == "session/load":
+            if not load_session:
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message_id,
+                        "error": {"code": -32601, "message": "loadSession unavailable"},
+                    }
+                )
+            else:
+                # A fresh mock process deliberately accepts the stable session id.
+                # This models Gemini CLI restoring provider-owned conversation state.
+                session_id = str(params.get("sessionId") or session_id)
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message_id,
+                        "result": _session_metadata(),
+                    }
+                )
         elif method == "session/prompt":
             prompt_request_id = message_id
             if stop == "refusal":
@@ -217,15 +258,14 @@ def main() -> int:
                     {
                         "jsonrpc": "2.0",
                         "id": message_id,
-                        "result": {"stopReason": "refusal", "usage": {"inputTokens": 1, "outputTokens": 1}},
+                        "result": {
+                            "stopReason": "refusal",
+                            "usage": {"inputTokens": 1, "outputTokens": 1},
+                        },
                     }
                 )
                 continue
             if hold_prompt:
-                # Signal that the request has definitely reached the server,
-                # then leave it pending until SceneWorks sends session/cancel.
-                # This gives the cancellation test a deterministic in-flight
-                # synchronization point instead of relying on sleep timing.
                 send(
                     {
                         "jsonrpc": "2.0",
@@ -234,7 +274,10 @@ def main() -> int:
                             "sessionId": session_id,
                             "update": {
                                 "sessionUpdate": "agent_thought_chunk",
-                                "content": {"type": "text", "text": "MOCK_PROMPT_HELD"},
+                                "content": {
+                                    "type": "text",
+                                    "text": "MOCK_PROMPT_HELD",
+                                },
                             },
                         },
                     }
@@ -245,7 +288,11 @@ def main() -> int:
                 pending_client_requests[request_id] = "write"
                 send_request(
                     "fs/write_text_file",
-                    {"sessionId": session_id, "path": "mock.txt", "content": "created by mock agent\n"},
+                    {
+                        "sessionId": session_id,
+                        "path": "mock.txt",
+                        "content": "created by mock agent\n",
+                    },
                     request_id,
                 )
             elif read_mode:
@@ -261,7 +308,11 @@ def main() -> int:
                 pending_client_requests[request_id] = "terminal"
                 send_request(
                     "terminal/create",
-                    {"sessionId": session_id, "command": "echo", "args": ["hello"]},
+                    {
+                        "sessionId": session_id,
+                        "command": "echo",
+                        "args": ["hello"],
+                    },
                     request_id,
                 )
             elif execute_mode:
@@ -286,7 +337,10 @@ def main() -> int:
                     "session/request_permission",
                     {
                         "sessionId": session_id,
-                        "toolCall": {"kind": "execute", "title": "dangerous command"},
+                        "toolCall": {
+                            "kind": "execute",
+                            "title": "dangerous command",
+                        },
                         "options": [{"optionId": "reject-1", "name": "reject"}],
                     },
                     request_id,
@@ -307,7 +361,10 @@ def main() -> int:
                 {
                     "jsonrpc": "2.0",
                     "id": message_id,
-                    "error": {"code": -32601, "message": f'"Method not found": {method}'},
+                    "error": {
+                        "code": -32601,
+                        "message": f'"Method not found": {method}',
+                    },
                 }
             )
     return 0

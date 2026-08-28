@@ -2,7 +2,8 @@
 
 Builds every service once at startup, wires the execution engine's
 continuation hook to the LangGraph WorkflowManager, and reconciles
-interrupted executions. API handlers access services through this context.
+interrupted executions and advanced MCP-supervised agent sessions.
+API handlers access services through this context.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app.execution.engine import ExecutionEngine
 from app.git.workspace import GitWorktreeService
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
+from app.services.agent_sessions import AgentSessionService
 from app.services.company import CompanyService
 from app.services.memory import MemoryService
 from app.services.provenance import ProvenanceService
@@ -51,6 +53,7 @@ class AppContext:
     company: CompanyService
     memory: MemoryService
     provenance: ProvenanceService
+    agent_sessions: AgentSessionService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -58,6 +61,9 @@ class AppContext:
     async def shutdown(self) -> None:
         if self.health_warmup is not None and not self.health_warmup.done():
             self.health_warmup.cancel()
+        # Advanced sessions can own live Gemini ACP processes. Stop them before
+        # closing the database they use for status/audit persistence.
+        await self.agent_sessions.shutdown()
         await self.execution_engine.shutdown()
         await self.workflow_manager.shutdown()
         await close_db(self.db_engine)
@@ -109,6 +115,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     )
     memory = MemoryService(session_factory, event_store, bus)
     provenance = ProvenanceService(session_factory, git)
+    agent_sessions = AgentSessionService(session_factory, git, event_store, settings)
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -145,6 +152,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         company=company,
         memory=memory,
         provenance=provenance,
+        agent_sessions=agent_sessions,
         settings_store=settings_store,
         settings_overrides=overrides,
     )
@@ -154,6 +162,12 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     interrupted = await execution_engine.recover_interrupted()
     if interrupted:
         logger.warning("reconciled %d interrupted executions from previous run", len(interrupted))
+    advanced_interrupted = await agent_sessions.recover_interrupted()
+    if advanced_interrupted:
+        logger.warning(
+            "reconciled %d interrupted advanced agent sessions from previous run",
+            len(advanced_interrupted),
+        )
     recovered = await workflow_manager.recover_workflows()
     if recovered:
         logger.info("recovered %d workflows after restart", len(recovered))

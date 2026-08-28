@@ -1,4 +1,4 @@
-// SceneWorks backend types (mirror of backend/app/schemas.py).
+// SceneWorks backend types (mirror of backend/app/schemas.py plus focused operational endpoints).
 
 export interface RoleCapabilityOverlay {
   skills: string[];
@@ -200,6 +200,21 @@ export interface Settings {
   context_max_bytes: number;
   database_url: string;
   backends: Backend[];
+}
+
+export type McpMode = "observe" | "standard" | "advanced";
+
+export interface McpSettings {
+  enabled: boolean;
+  mode: McpMode;
+  effective_mode: McpMode;
+  endpoint: string;
+  tool_max_chars: number;
+  advanced_session_permissions: string[];
+  available_advanced_permissions: string[];
+  action_tools_enabled: boolean;
+  advanced_agent_sessions_enabled: boolean;
+  advanced_warning: string;
 }
 
 export interface Dashboard {

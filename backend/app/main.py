@@ -8,6 +8,8 @@ Trust assumptions:
   approve tasks. Do not expose it beyond localhost.
 - Repositories registered by the user are trusted inputs; agent output is
   always reviewable before integration (SceneWorks never merges).
+- The MCP endpoint shares this trust boundary. Use a trusted tunnel or an
+  authenticated reverse proxy; do not publish the bare FastAPI service.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from app.api import (
     events_router,
     executions_router,
     initiatives_router,
+    mcp_router,
     memory_router,
     projects_router,
     roles_router,
@@ -116,6 +119,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.include_router(events_router)
     app.include_router(dashboard_router)
     app.include_router(memory_router)
+    app.include_router(mcp_router)
 
     @app.get("/api/health")
     async def health() -> dict:

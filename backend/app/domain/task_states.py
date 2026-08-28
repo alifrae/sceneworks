@@ -36,6 +36,7 @@ class TaskStateMachine:
     ACTIONS = {
         "start_architecture",
         "architecture_completed",
+        "skip_architecture",
         "approve_architecture",
         "reject_architecture",
         "request_architecture_revision",
@@ -60,6 +61,12 @@ class TaskStateMachine:
         (TaskStatus.NEW, "start_architecture"): TaskStatus.ARCHITECTURE_ANALYSIS,
         (TaskStatus.ARCHITECTURE_ANALYSIS, "architecture_completed"): (
             TaskStatus.AWAITING_ARCHITECTURE_APPROVAL
+        ),
+        # WP11 adaptive routing: only the workflow policy may choose this path.
+        # It exists explicitly so skipping an unnecessary Architect remains an
+        # auditable state transition rather than a direct status assignment.
+        (TaskStatus.ARCHITECTURE_ANALYSIS, "skip_architecture"): (
+            TaskStatus.READY_TO_IMPLEMENT
         ),
         (TaskStatus.ARCHITECTURE_ANALYSIS, "architecture_failed"): TaskStatus.FAILED,
         (TaskStatus.ARCHITECTURE_ANALYSIS, "cancel"): TaskStatus.CANCELLED,
