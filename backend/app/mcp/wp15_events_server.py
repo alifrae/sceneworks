@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.engineering_models import EngineeringSession, EngineeringTurn
-from app.models import Event
+from app.models import Event, Execution
 from app.mcp.server import MCPToolError, _bounded
 from app.mcp.wp15_server import EvidenceMCPServer
 from app.services.engineering_evidence import EngineeringEvidenceError
@@ -26,9 +26,29 @@ class CompleteEvidenceMCPServer(EvidenceMCPServer):
         self, name: str, arguments: dict[str, Any] | None
     ) -> dict[str, Any]:
         result = await super().call_tool(name, arguments)
+        args = arguments or {}
+
+        if name == "sceneworks.get_execution":
+            execution_id = str(args.get("execution_id") or "").strip()
+            if execution_id:
+                async with self.ctx.engine_factory() as session:
+                    execution = await session.get(Execution, execution_id)
+                if execution is not None:
+                    workspace = dict(execution.workspace or {})
+                    safe_workspace = dict(result.get("execution", {}).get("workspace") or {})
+                    for key in (
+                        "engineering_session_id",
+                        "engineering_turn_id",
+                        "engineering_evidence_action_id",
+                    ):
+                        if workspace.get(key) is not None:
+                            safe_workspace[key] = workspace[key]
+                    result["execution"]["workspace"] = safe_workspace
+            return _bounded(result, int(self.ctx.settings.mcp_tool_max_chars))
+
         if name != "sceneworks.get_task":
             return result
-        args = arguments or {}
+
         task_id = int(args.get("task_id"))
         async with self.ctx.engine_factory() as session:
             sessions = list(
