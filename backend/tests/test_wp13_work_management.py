@@ -172,3 +172,44 @@ async def test_explicit_change_cannot_be_downgraded_by_triage(client, context, g
         json={"requested_mode": "investigate"},
     )
     assert blocked.status_code == 409
+
+
+async def test_auto_ask_preserves_triage_selected_product_advisor(client, context, git_repo):
+    """Auto classification is descriptive; it must not gain explicit-Ask authority."""
+    project = await _register_project(client, git_repo)
+    response = await client.post(
+        "/api/tasks",
+        json={"project_id": project["id"], "title": "Clarify the ambiguous requirement"},
+    )
+    task_id = response.json()["id"]
+
+    backend = FakeAgentBackend(
+        role_scripts={
+            "triage": [
+                ScriptStep(
+                    kind="summary",
+                    summary=triage_summary(
+                        request_type="product_question",
+                        requires_implementation=False,
+                        use_product=True,
+                        use_architect=False,
+                    ),
+                )
+            ],
+            "product": [ScriptStep(kind="summary", summary="Product clarification")],
+        }
+    )
+    context.backends._backends["fake"] = backend
+
+    started = await client.post(f"/api/tasks/{task_id}/actions/start-architecture")
+    assert started.status_code == 200, started.text
+    task = await _wait_task(client, task_id, "READY_FOR_HUMAN")
+
+    assert task["requested_mode"] == "auto"
+    assert task["resolved_mode"] == "ask"
+    assert backend.invocations.get("product", 0) == 1
+    assert backend.invocations.get("architect", 0) == 0
+
+    events = (await client.get(f"/api/tasks/{task_id}/events")).json()
+    routing = [event for event in events if event["type"] == "workflow.routing.policy"]
+    assert routing[-1]["payload"]["mode_source"] == "inferred"
