@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     mcp_attachment_max_bytes: int = 5_000_000
 
     # Provider-neutral role intent -> concrete backend/model mapping (WP8).
-    # Example environment value:
-    # SCENEWORKS_MODEL_PROFILE_ROUTES='{"strongest":{"backend":"gemini_acp","model":"<model>"}}'
     model_profile_routes: dict[str, ModelProfileRoute] = Field(default_factory=dict)
 
     # Gemini CLI (ACP backend). None -> discover "gemini" on PATH.
@@ -75,30 +73,22 @@ class Settings(BaseSettings):
     opencode_extra_args: list[str] = Field(default_factory=list)
     opencode_environment: dict[str, str] = Field(default_factory=dict)
 
-    # Timeout for a single git command (seconds).
     git_timeout_seconds: int = 300
-
-    # Hard limit for a single agent execution (seconds).
     execution_timeout_seconds: int = 5400
     cancel_grace_seconds: int = 15
 
-    # Prompt/context limits.
     context_max_bytes: int = 200_000
     context_file_max_bytes: int = 60_000
-
-    # Number of events replayed to SSE clients on connect.
     sse_replay_events: int = 500
 
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
 
     # MCP reasoning/control interface.
-    #
     # observe  -> semantic read tools only;
     # standard -> governed SceneWorks actions (tasks/roles/workflows);
     # advanced -> standard plus provider-neutral EngineeringSessions exposing
-    #             SceneWorks-owned workspace/command/process/Git capabilities.
-    #             Legacy Gemini ACP provider sessions remain for compatibility.
+    #             SceneWorks-owned workspace/command/process/Git/PCS capabilities.
     mcp_enabled: bool = True
     mcp_mode: Literal["observe", "standard", "advanced"] = "observe"
     mcp_allow_actions: bool = False
@@ -111,7 +101,7 @@ class Settings(BaseSettings):
             "git_commit",
             "network_access",
             "agent_delegate",
-            # Legacy WP11 Gemini-session permission kept for compatibility.
+            "external_asset_read",
             "subagents",
         ]
     )
@@ -132,8 +122,6 @@ class Settings(BaseSettings):
     openhands_max_iterations: int = 40
     openhands_environment: dict[str, str] = Field(default_factory=dict)
 
-    # Gemini remains the validated/default worker. OpenCode is the independent
-    # non-ACP backup; OpenHands remains optional/experimental.
     default_backend: Literal["gemini_acp", "opencode", "openhands", "fake"] = "gemini_acp"
 
     @property
