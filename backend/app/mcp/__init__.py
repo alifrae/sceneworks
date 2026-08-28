@@ -11,10 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.mcp.server import MCPToolError
-from app.mcp.wp15_server import EvidenceMCPServer
+from app.mcp.wp15_events_server import CompleteEvidenceMCPServer
 
 
-class SceneWorksMCPServer(EvidenceMCPServer):
+class SceneWorksMCPServer(CompleteEvidenceMCPServer):
     """Canonical WP15 server with provider-neutral discovery/error guidance."""
 
     def _wp15_instructions(self) -> str:
