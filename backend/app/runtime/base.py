@@ -1,4 +1,4 @@
-"""Provider-neutral execution runtime contract (WP14)."""
+"""Provider-neutral execution runtime contract (WP14/WP15)."""
 
 from __future__ import annotations
 
@@ -21,8 +21,11 @@ class CommandResult:
 @dataclass(frozen=True)
 class ProcessSnapshot:
     process_id: str
+    pid: int | None
     command: list[str]
     cwd: str
+    started_at: str
+    finished_at: str | None
     running: bool
     returncode: int | None
     next_cursor: int
