@@ -319,6 +319,9 @@ class SettingsOut(BaseModel):
     gemini_executable: str | None
     gemini_model: str | None
     gemini_extra_args: list[str]
+    opencode_executable: str | None = None
+    opencode_model: str | None = None
+    opencode_agent: str | None = None
     model_profile_routes: dict[str, dict[str, str | None]]
     execution_timeout_seconds: int
     cancel_grace_seconds: int
@@ -333,7 +336,11 @@ class SettingsUpdate(BaseModel):
     worktree_root: str | None = None
     gemini_executable: str | None = None
     gemini_model: str | None = None
+    opencode_executable: str | None = None
+    opencode_model: str | None = None
+    opencode_agent: str | None = None
     model_profile_routes: dict[str, dict[str, str | None]] | None = None
+    default_backend: Literal["gemini_acp", "opencode", "openhands", "fake"] | None = None
     execution_timeout_seconds: int | None = Field(default=None, ge=60, le=86400)
 
 
