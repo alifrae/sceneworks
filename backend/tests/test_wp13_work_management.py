@@ -192,11 +192,12 @@ async def test_auto_ask_preserves_triage_selected_product_advisor(client, contex
                         request_type="product_question",
                         requires_implementation=False,
                         use_product=True,
-                        use_architect=False,
+                        use_architect=True,
                     ),
                 )
             ],
             "product": [ScriptStep(kind="summary", summary="Product clarification")],
+            "architect": [ScriptStep(kind="summary", summary="Read-only answer after Product clarification")],
         }
     )
     context.backends._backends["fake"] = backend
@@ -208,7 +209,7 @@ async def test_auto_ask_preserves_triage_selected_product_advisor(client, contex
     assert task["requested_mode"] == "auto"
     assert task["resolved_mode"] == "ask"
     assert backend.invocations.get("product", 0) == 1
-    assert backend.invocations.get("architect", 0) == 0
+    assert backend.invocations.get("architect", 0) == 1
 
     events = (await client.get(f"/api/tasks/{task_id}/events")).json()
     routing = [event for event in events if event["type"] == "workflow.routing.policy"]
