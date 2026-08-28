@@ -1,9 +1,9 @@
 """Native SceneWorks execution runtime (WP14).
 
-This runtime intentionally contains no model or agent logic. It exposes a
-worktree-confined filesystem surface plus command/process/Git primitives. Shell
-and child processes still run with the SceneWorks OS user's authority; cwd/path
-confinement is not an OS sandbox.
+No model or agent logic lives here. Filesystem operations are confined to the
+EngineeringSession worktree. Commands and child processes use that worktree as
+cwd but still run with the SceneWorks OS user's authority; this is not an OS
+sandbox.
 """
 
 from __future__ import annotations
@@ -41,8 +41,6 @@ class NativeRuntime:
     def __init__(self) -> None:
         self._processes: dict[str, _ProcessRecord] = {}
         self._lock = asyncio.Lock()
-
-    # --------------------------------------------------------------- paths/files
 
     def _root(self, root: Path) -> Path:
         resolved = root.resolve()
@@ -159,26 +157,35 @@ class NativeRuntime:
         for candidate in candidates:
             if len(matches) >= max_results:
                 break
-            if not candidate.is_file() or ".git" in candidate.parts:
+            if ".git" in candidate.parts:
                 continue
             try:
-                if candidate.stat().st_size > _MAX_FILE_BYTES:
+                resolved = candidate.resolve()
+                # rglob can yield symlinked files. Resolve before stat/read so a
+                # symlink cannot turn search into a host-filesystem read primitive.
+                if not resolved.is_relative_to(workspace) or not resolved.is_file():
                     continue
-                text = candidate.read_text(encoding="utf-8")
+                if resolved.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+                text = resolved.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             for number, line in enumerate(text.splitlines(), 1):
                 if needle.lower() in line.lower():
                     matches.append(
                         {
-                            "path": candidate.resolve().relative_to(workspace).as_posix(),
+                            "path": resolved.relative_to(workspace).as_posix(),
                             "line": number,
                             "text": line[:1000],
                         }
                     )
                     if len(matches) >= max_results:
                         break
-        return {"query": needle, "matches": matches, "truncated": len(matches) >= max_results}
+        return {
+            "query": needle,
+            "matches": matches,
+            "truncated": len(matches) >= max_results,
+        }
 
     async def write_text(
         self,
@@ -191,15 +198,14 @@ class NativeRuntime:
     ) -> dict:
         target = self._path(root, path)
         existed = target.exists()
-        if target.exists() and not target.is_file():
+        if existed and not target.is_file():
             raise RuntimeErrorBase("target exists and is not a file")
         if create_only and existed:
             raise RuntimeErrorBase("target already exists")
         if expected_sha256 is not None:
             if not existed:
                 raise RuntimeErrorBase("expected_sha256 supplied for a missing file")
-            current = target.read_bytes()
-            actual = hashlib.sha256(current).hexdigest()
+            actual = hashlib.sha256(target.read_bytes()).hexdigest()
             if actual != expected_sha256:
                 raise RuntimeErrorBase(
                     "file changed since it was read; expected_sha256 does not match"
@@ -215,8 +221,6 @@ class NativeRuntime:
             "bytes": len(content.encode("utf-8")),
             "sha256": digest,
         }
-
-    # ---------------------------------------------------------- command/process
 
     def _cwd(self, root: Path, cwd: str) -> Path:
         path = self._path(root, cwd, allow_root=True)
@@ -247,7 +251,9 @@ class NativeRuntime:
         except OSError as exc:
             raise RuntimeErrorBase(f"could not start command: {exc}") from exc
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=max(1, timeout))
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=max(1, timeout)
+            )
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.wait()
@@ -330,14 +336,13 @@ class NativeRuntime:
     ) -> ProcessSnapshot:
         start = max(0, cursor)
         events = record.output[start : start + max(0, max_events)] if max_events else []
-        next_cursor = start + len(events)
         return ProcessSnapshot(
             process_id=record.process_id,
             command=list(record.command),
             cwd=str(record.cwd),
             running=record.process.returncode is None,
             returncode=record.process.returncode,
-            next_cursor=next_cursor,
+            next_cursor=start + len(events),
             output=events,
         )
 
@@ -360,8 +365,6 @@ class NativeRuntime:
                 await record.process.wait()
         await asyncio.gather(*record.readers, return_exceptions=True)
         return self._snapshot(record, cursor=0, max_events=len(record.output))
-
-    # --------------------------------------------------------------------- git
 
     async def git_status(self, root: Path) -> dict:
         workspace = self._root(root)
