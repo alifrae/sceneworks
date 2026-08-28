@@ -21,6 +21,7 @@ from app.schemas import (
     TaskOut,
     TaskProvenanceOut,
 )
+from app.services.attachments import delete_task_tree
 from app.services.workflow import WorkflowError
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -195,6 +196,7 @@ async def task_provenance(
 
 @router.delete("/{task_id}", status_code=204)
 async def delete_task(task_id: int, ctx: AppContext = Depends(get_context)) -> None:
+    project_id: int | None = None
     async with ctx.engine_factory() as session:
         task = await session.get(Task, task_id)
         if task is None:
@@ -208,8 +210,11 @@ async def delete_task(task_id: int, ctx: AppContext = Depends(get_context)) -> N
         ).scalar() or 0
         if execution_count:
             raise HTTPException(409, "task has execution history; cannot delete")
+        project_id = task.project_id
         await session.delete(task)
         await session.commit()
+    if project_id is not None:
+        delete_task_tree(ctx.settings, project_id, task_id)
 
 
 @router.get("/{task_id}/events")
