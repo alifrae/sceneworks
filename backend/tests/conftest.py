@@ -41,6 +41,7 @@ def settings(tmp_path) -> Settings:
     return Settings(
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
         worktree_root=tmp_path / "worktrees",
+        attachment_root=tmp_path / "attachments",
         roles_dir=BACKEND_DIR / "app" / "roles" / "prompts",
         default_backend="fake",
         log_level="WARNING",
