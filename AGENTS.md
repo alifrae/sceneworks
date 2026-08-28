@@ -61,7 +61,7 @@ These rules apply to every coding agent working in SceneWorks.
 14. **PCS lifecycle control is semantic and SceneWorks-owned.**
     `pcs.start/stop/restart/status`, log capture, health checks and verification runbooks must use SceneWorks runtime primitives directly. Do not route those operations through Gemini/OpenCode/OpenHands simply to gain terminal access.
 
-15. **Prefer deterministic PCS APIs over GUI automation.**
+15. **Prefer deterministic PCS APIs over GUI automation or visual inference.**
     If PCS exposes runtime state or a deterministic operation through its hardened API, use that source. GUI screenshots/automation are fallback observation/control mechanisms and must not become the primary API for behavior that PCS can expose semantically.
 
 16. **PCS runtime observations are evidence.**
@@ -75,6 +75,15 @@ These rules apply to every coding agent working in SceneWorks.
 
 19. **Managed PCS processes must not be orphaned.**
     An EngineeringSession/project cannot be closed/deleted while it still owns a live managed PCS run. SceneWorks restart recovery must mark unrecoverable native handles LOST and preserve that fact as evidence.
+
+20. **GUI observation is scoped to the SceneWorks-managed PCS process.**
+    `gui_observe` may enumerate/capture only windows belonging to the current managed PCS PID. MCP must not accept an arbitrary PID or expose a generic desktop/window screenshot primitive. Opaque window identifiers are valid only inside that managed-PID relationship.
+
+21. **Screenshot bytes are artifacts; visual interpretation is inference.**
+    Persist screenshot/diff bytes outside Git worktrees and record hashes, dimensions, capture semantics and causal references in the evidence ledger. Do not duplicate image bytes in evidence JSON or expose internal storage paths. Pixel/hash comparisons are evidence; semantic claims about what an image means are interpretation.
+
+22. **WP17 GUI support is observation-only.**
+    Do not add focus, click, pointer movement, keyboard/text injection, UIA invocation, coordinate automation or OCR to the WP17 surface. Controlled GUI automation requires a separately governed design/permission boundary.
 
 ## Backend additions
 
@@ -102,6 +111,15 @@ These rules apply to every coding agent working in SceneWorks.
 - Record non-zero unmanaged exits as crash evidence and preserve bounded final stdout/stderr before finalizing the run.
 - Verification runbooks are deterministic procedures, not prompts. Every step must have objective pass/fail output and evidence correlation.
 - Do not delete configured external asset files during project/session cleanup.
+
+## GUI evidence additions
+
+- Put platform-specific window/capture code behind the GUI observation provider boundary; keep MCP/session/evidence semantics platform-neutral.
+- Fresh observation must derive the PID from the EngineeringSession's live managed `PcsRun`; never accept arbitrary PID input from MCP.
+- Record whether capture is occlusion-safe. Do not claim independent window rendering when the implementation captures a visible screen region.
+- Persist GUI artifacts under SceneWorks-owned project storage so normal project purge removes them, but never place them in Git worktrees.
+- Stored screenshots/diffs must remain retrievable and comparable after the observed PCS run ends.
+- Add deterministic provider fakes for CI; do not make the normal regression suite depend on a desktop session or live PCS installation.
 
 ## Documentation policy
 

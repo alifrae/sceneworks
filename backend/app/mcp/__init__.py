@@ -1,9 +1,10 @@
-"""SceneWorks MCP reasoning, engineering-control and PCS evidence interface.
+"""SceneWorks MCP reasoning, engineering-control, PCS and GUI evidence interface.
 
 Observe and Standard modes expose semantic SceneWorks concepts. Advanced mode
-adds provider-neutral EngineeringSessions, durable WP15 evidence correlation and
-WP16 PCS runtime semantics. Agent providers are optional workers; SceneWorks-
-captured runtime/process/log/Git/PCS observations remain the evidence authority.
+adds provider-neutral EngineeringSessions, durable WP15 evidence correlation,
+WP16 PCS runtime semantics and WP17 observation-only GUI evidence. Agent
+providers are optional workers; SceneWorks-captured runtime/process/log/Git/PCS
+and screenshot observations remain the evidence authority.
 """
 
 from __future__ import annotations
@@ -11,17 +12,17 @@ from __future__ import annotations
 from typing import Any
 
 from app.mcp.server import MCPToolError
-from app.mcp.wp16_server import PcsRuntimeMCPServer
+from app.mcp.wp17_server import GuiEvidenceMCPServer
 
 
-class SceneWorksMCPServer(PcsRuntimeMCPServer):
-    """Canonical WP16 server with provider-neutral PCS-control guidance."""
+class SceneWorksMCPServer(GuiEvidenceMCPServer):
+    """Canonical WP17 server with provider-neutral PCS/GUI evidence guidance."""
 
-    def _wp16_instructions(self) -> str:
+    def _wp17_instructions(self) -> str:
         if self.mode == "observe":
             mode_text = (
                 "Observe mode: read-only semantic tools; PCS runtime configuration may be "
-                "inspected but processes/actions are unavailable."
+                "inspected but processes/actions/GUI capture are unavailable."
             )
         elif self.mode == "standard":
             mode_text = (
@@ -31,15 +32,17 @@ class SceneWorksMCPServer(PcsRuntimeMCPServer):
         else:
             mode_text = (
                 "Advanced mode: Standard tools plus task-bindable EngineeringSessions, "
-                "durable evidence, direct workspace/command/process/Git control, and semantic "
-                "PCS start/stop/restart/log/health/runtime-state/asset/runbook operations."
+                "durable evidence, direct workspace/command/process/Git control, semantic "
+                "PCS control, and managed-PCS window/dialog/screenshot/visual-diff evidence."
             )
         return (
             "SceneWorks is the engineering control plane and evidence authority. Ground "
             "reasoning in project state, accepted memory, task contracts, captured evidence, "
-            "PCS runtime observations and Git truth. Provider/agent conclusions are inference, "
-            "not authoritative evidence. Prefer PCS semantic/API control over GUI automation "
-            "whenever deterministic PCS APIs are available. "
+            "PCS runtime observations, GUI artifacts and Git truth. Provider/agent conclusions "
+            "and visual interpretation are inference, not authoritative evidence. Prefer PCS "
+            "semantic/API control over GUI observation whenever deterministic PCS APIs are "
+            "available. WP17 GUI support is observation-only and restricted to the managed PCS "
+            "process; it does not expose focus, click, keyboard or arbitrary desktop capture. "
             + mode_text
         )
 
@@ -47,8 +50,8 @@ class SceneWorksMCPServer(PcsRuntimeMCPServer):
         if self.mode != "advanced":
             raise MCPToolError(
                 "This tool requires explicit Advanced MCP mode. Advanced mode gives the MCP "
-                "client SceneWorks-owned engineering and PCS runtime control with durable "
-                "evidence; Gemini/OpenCode/OpenHands are optional workers."
+                "client SceneWorks-owned engineering, PCS runtime and managed GUI evidence "
+                "capabilities; Gemini/OpenCode/OpenHands are optional workers."
             )
 
     async def _engineering_session_close(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +72,7 @@ class SceneWorksMCPServer(PcsRuntimeMCPServer):
             if isinstance(body, dict):
                 result = body.get("result")
                 if isinstance(result, dict):
-                    result["instructions"] = self._wp16_instructions()
+                    result["instructions"] = self._wp17_instructions()
         return body, status
 
 
