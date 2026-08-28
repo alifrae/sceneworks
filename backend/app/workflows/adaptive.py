@@ -113,16 +113,15 @@ class WorkflowManager(BaseWorkflowManager):
             )
             mode_source = "inferred" if requested_mode == "auto" else "user"
 
-            # Explicit modes are an authority boundary: the model can still
-            # select useful advisory roles, but cannot silently turn a read-only
-            # investigation/plan/answer into source modification or suppress a
-            # requested change.
-            if resolved_mode == "change":
+            # Only an explicit user mode constrains triage. Auto deliberately
+            # preserves the model's advisory-role choices; resolved_mode is then
+            # descriptive/provenance metadata, not a second source of authority.
+            if requested_mode == "change":
                 triage["requires_implementation"] = True
-            elif resolved_mode in {"investigate", "plan"}:
+            elif requested_mode in {"investigate", "plan"}:
                 triage["requires_implementation"] = False
                 triage["use_architect"] = True
-            elif resolved_mode == "ask":
+            elif requested_mode == "ask":
                 triage.update(
                     {
                         "requires_implementation": False,
