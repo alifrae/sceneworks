@@ -58,6 +58,24 @@ These rules apply to every coding agent working in SceneWorks.
 13. **Settings changes must reach live consumers.**
     When rebuilding a backend registry, router, Git service or runtime dependency, update every long-lived service that holds that dependency. A setting that appears saved but requires an undocumented restart is a defect.
 
+14. **PCS lifecycle control is semantic and SceneWorks-owned.**
+    `pcs.start/stop/restart/status`, log capture, health checks and verification runbooks must use SceneWorks runtime primitives directly. Do not route those operations through Gemini/OpenCode/OpenHands simply to gain terminal access.
+
+15. **Prefer deterministic PCS APIs over GUI automation.**
+    If PCS exposes runtime state or a deterministic operation through its hardened API, use that source. GUI screenshots/automation are fallback observation/control mechanisms and must not become the primary API for behavior that PCS can expose semantically.
+
+16. **PCS runtime observations are evidence.**
+    Managed-process state, stdout/stderr, configured health probes, crash/exit state, runtime API responses and verification-runbook results belong in SceneWorks evidence. Agent interpretations of those observations remain inference.
+
+17. **External PCS assets require explicit read-only aliases.**
+    Recordings/corpora outside the worktree are available only through project-scoped configured roots plus `external_asset_read`. MCP must expose the alias and relative metadata, never the configured absolute root. WP16 external roots are read-only; do not widen them into general filesystem access.
+
+18. **PCS configuration is not a secret store or network scanner.**
+    Persisted run profiles/runbooks must not contain credentials or secret-bearing environment values. Health/runtime API probes are loopback-only unless a future isolated/network-governance design explicitly widens the boundary.
+
+19. **Managed PCS processes must not be orphaned.**
+    An EngineeringSession/project cannot be closed/deleted while it still owns a live managed PCS run. SceneWorks restart recovery must mark unrecoverable native handles LOST and preserve that fact as evidence.
+
 ## Backend additions
 
 - Implement `AgentBackend.run()`, `cancel()`, and `health()` in `backend/app/agents/<backend>.py`.
@@ -75,6 +93,15 @@ These rules apply to every coding agent working in SceneWorks.
 - Keep command execution argument-based; do not introduce shell-string evaluation without an explicit requirement and security review.
 - Persistent process output must be bounded and attributable to its EngineeringSession.
 - When a runtime primitive becomes part of Advanced control, add or update its evidence mapping in the same change.
+
+## PCS control additions
+
+- Keep PCS-specific profiles/runbooks/assets under the PCS control domain rather than adding product-specific fields to the generic `Project` model.
+- Keep launch working directories and configured log/crash paths worktree-relative.
+- Treat `{{asset:<alias>:<relative-path>}}` as a governed server-side resolution mechanism; never persist or echo the resolved absolute path to MCP evidence/results.
+- Record non-zero unmanaged exits as crash evidence and preserve bounded final stdout/stderr before finalizing the run.
+- Verification runbooks are deterministic procedures, not prompts. Every step must have objective pass/fail output and evidence correlation.
+- Do not delete configured external asset files during project/session cleanup.
 
 ## Documentation policy
 
