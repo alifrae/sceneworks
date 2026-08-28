@@ -2,17 +2,23 @@
 param(
     [switch]$Dev,
     [switch]$Rebuild,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$NoTunnel,
+    [string]$TunnelClientPath,
+    [string]$McpServerUrl
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Root = Split-Path -Parent $ScriptDir
 $BackendDir = Join-Path $Root "backend"
 $WebDir = Join-Path $Root "web"
+$ToolsDir = Join-Path $Root "tools"
 $ApiUrl = "http://127.0.0.1:8010/api/health"
 $WebUrl = "http://127.0.0.1:3000"
+$TunnelReadyUrl = "http://127.0.0.1:8080/readyz"
 
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -77,12 +83,92 @@ function Test-FrontendBuildFresh {
     return $null -ne $latestSource -and $latestSource.LastWriteTimeUtc -le $buildTime
 }
 
+function Resolve-RepoPath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $Root $Path))
+}
+
+function Resolve-TunnelClientPath {
+    if (-not [string]::IsNullOrWhiteSpace($TunnelClientPath)) {
+        return (Resolve-RepoPath $TunnelClientPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:SCENEWORKS_TUNNEL_CLIENT_PATH)) {
+        return (Resolve-RepoPath $env:SCENEWORKS_TUNNEL_CLIENT_PATH)
+    }
+    return (Join-Path $ToolsDir "tunnel-client-runtime-cloudflared.exe")
+}
+
+function Start-SecureMcpTunnel {
+    if ($NoTunnel) {
+        Write-Host "Secure MCP tunnel disabled (-NoTunnel)."
+        return
+    }
+
+    if (Test-Http $TunnelReadyUrl 1) {
+        Write-Host "Secure MCP tunnel already ready at $TunnelReadyUrl."
+        return
+    }
+
+    $clientPath = Resolve-TunnelClientPath
+    $missing = @()
+    if ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_TUNNEL_ID)) {
+        $missing += "CONTROL_PLANE_TUNNEL_ID"
+    }
+    if ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_API_KEY)) {
+        $missing += "CONTROL_PLANE_API_KEY"
+    }
+
+    if ($missing.Count -gt 0) {
+        Write-Warning "Secure MCP tunnel not started. Missing environment variable(s): $($missing -join ', ')."
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) {
+        Write-Warning "Secure MCP tunnel not started. Tunnel client not found at '$clientPath'. Put tunnel-client-runtime-cloudflared.exe under tools\ or pass -TunnelClientPath / set SCENEWORKS_TUNNEL_CLIENT_PATH."
+        return
+    }
+
+    if (-not (Test-Http $McpServerUrl 3)) {
+        Write-Warning "Secure MCP tunnel not started because SceneWorks MCP is not reachable at $McpServerUrl."
+        return
+    }
+
+    $env:MCP_SERVER_URL = $McpServerUrl
+    $quotedClient = Quote-PowerShellPath $clientPath
+
+    Write-Host "Starting Secure MCP tunnel..."
+    Start-Terminal "SceneWorks MCP Tunnel" $Root "& $quotedClient run"
+
+    try {
+        Wait-Http $TunnelReadyUrl 20 "Secure MCP tunnel"
+    }
+    catch {
+        Write-Warning $_.Exception.Message
+        Write-Warning "SceneWorks is running, but the MCP tunnel did not become ready. Check the 'SceneWorks MCP Tunnel' terminal."
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($McpServerUrl)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:MCP_SERVER_URL)) {
+        $McpServerUrl = $env:MCP_SERVER_URL
+    }
+    else {
+        $McpServerUrl = "http://127.0.0.1:8010/mcp"
+    }
+}
+
 Require-Command "uv"
 Require-Command "npm"
 
 Write-Host "SceneWorks launcher" -ForegroundColor Cyan
 Write-Host "  root: $Root"
 Write-Host "  frontend: $(if ($Dev) { 'development' } else { 'production' })"
+Write-Host "  MCP: $McpServerUrl"
 
 if (-not (Test-Path (Join-Path $WebDir "node_modules"))) {
     Write-Host "Installing frontend dependencies..."
@@ -126,6 +212,8 @@ else {
     }
     Wait-Http $WebUrl 60 "Frontend"
 }
+
+Start-SecureMcpTunnel
 
 if (-not $NoBrowser) {
     Start-Process $WebUrl | Out-Null

@@ -15,25 +15,125 @@ require a functioning Gemini model session.
 
 ## 1. Start SceneWorks and verify MCP locally
 
-Default endpoint:
+On Windows, the normal launcher is:
+
+```powershell
+.\scripts\start-sceneworks.cmd
+```
+
+The launcher starts/reuses the backend and frontend and, when configured, the
+Secure MCP Tunnel. The backend MCP endpoint is:
 
 ```text
 http://127.0.0.1:8010/mcp
 ```
 
-`GET /mcp` is discovery only. ChatGPT uses `POST /mcp` JSON-RPC.
+Verify it independently before involving the tunnel:
 
-## 2. Connect ChatGPT through Tunnel
+```powershell
+Invoke-RestMethod http://127.0.0.1:8010/mcp
+```
 
-For SceneWorks running on your laptop/private workstation:
+`GET /mcp` is discovery/setup health only. ChatGPT uses `POST /mcp` JSON-RPC.
 
-1. Add a custom MCP plugin/integration named `SceneWorks`.
-2. Choose the trusted **Tunnel** connection.
-3. Target `http://127.0.0.1:8010/mcp`.
-4. Review the tool catalogue before raising SceneWorks above Observe mode.
+## 2. Connect ChatGPT through the Secure MCP Tunnel
 
-Do not expose port `8010` directly to the public internet. The bare SceneWorks
-service has no user login/OAuth boundary.
+For SceneWorks running on your laptop/private workstation, create a custom MCP
+plugin/integration named `SceneWorks` and choose the trusted **Tunnel**
+connection. Do not expose port `8010` directly to the public internet; the bare
+SceneWorks service has no user login/OAuth boundary.
+
+There are two separate pieces:
+
+```text
+ChatGPT tunnel object
+        |
+        | secure outbound tunnel
+        v
+local tunnel-client process
+        |
+        v
+http://127.0.0.1:8010/mcp
+```
+
+Creating the tunnel in ChatGPT does **not** configure the local MCP destination.
+The local destination is configured by the tunnel-client process.
+
+### First-time tunnel setup
+
+1. In ChatGPT, create/select a tunnel such as `SceneWorks Tunnel`.
+2. Copy its `tunnel_...` ID.
+3. Create a restricted OpenAI runtime API key with only the permissions needed
+   to use that tunnel.
+4. Put `tunnel-client-runtime-cloudflared.exe` at:
+
+   ```text
+   <repo>\tools\tunnel-client-runtime-cloudflared.exe
+   ```
+
+   The executable is intentionally Git-ignored. To keep it elsewhere, set:
+
+   ```powershell
+   $env:SCENEWORKS_TUNNEL_CLIENT_PATH = "C:\path\to\tunnel-client-runtime-cloudflared.exe"
+   ```
+
+   or pass `-TunnelClientPath` to the launcher.
+
+5. Persist the non-secret tunnel ID for your Windows user if desired:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable(
+       "CONTROL_PLANE_TUNNEL_ID",
+       "tunnel_...",
+       "User"
+   )
+   ```
+
+6. Make `CONTROL_PLANE_API_KEY` available to the launcher process. Treat it as a
+   secret; never commit it or store it in repository files.
+
+The local MCP target defaults to:
+
+```text
+http://127.0.0.1:8010/mcp
+```
+
+Override only when necessary with `MCP_SERVER_URL` or `-McpServerUrl`.
+
+### Normal startup
+
+After first-time setup, one command starts SceneWorks and the tunnel:
+
+```powershell
+.\scripts\start-sceneworks.cmd
+```
+
+The launcher:
+
+1. starts/reuses the backend;
+2. waits for `/api/health`;
+3. starts/reuses the frontend;
+4. verifies the MCP endpoint;
+5. starts the tunnel client in a separate PowerShell window;
+6. waits for `http://127.0.0.1:8080/readyz`.
+
+If the tunnel credentials or executable are missing, SceneWorks itself still
+starts and the launcher prints a warning. Use `-NoTunnel` when you intentionally
+do not want ChatGPT connectivity.
+
+A tunnel log containing both of these is a healthy sign:
+
+```text
+mcp session initialized ... server_name=SceneWorks
+...
+tunnel metadata fetched ...
+```
+
+The tunnel client may emit an OAuth discovery warning. SceneWorks is not an OAuth
+provider, so that warning is expected for the local tunnel setup.
+
+After the tunnel is running, select it in the ChatGPT plugin configuration and
+review the tool catalogue before raising SceneWorks above Observe mode.
 
 ## 3. Observe mode
 
@@ -513,8 +613,28 @@ Before enabling Advanced:
 
 ### ChatGPT cannot reach SceneWorks
 
-Confirm SceneWorks is running, `GET http://127.0.0.1:8010/mcp` works locally and
-the ChatGPT tunnel is connected.
+Confirm SceneWorks is running, `GET http://127.0.0.1:8010/mcp` works locally,
+`http://127.0.0.1:8080/readyz` reports the tunnel ready, and the ChatGPT plugin
+selects the intended SceneWorks tunnel.
+
+### Launcher says tunnel client is missing
+
+Put the executable at:
+
+```text
+tools\tunnel-client-runtime-cloudflared.exe
+```
+
+or configure `SCENEWORKS_TUNNEL_CLIENT_PATH` / `-TunnelClientPath`.
+
+### Launcher says tunnel credentials are missing
+
+Set `CONTROL_PLANE_TUNNEL_ID` and make `CONTROL_PLANE_API_KEY` available to the
+launcher process. Do not store the API key in Git.
+
+### OAuth discovery warning
+
+Expected for the local tunnel path. SceneWorks itself is not an OAuth provider.
 
 ### New WP16 tools do not appear
 

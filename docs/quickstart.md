@@ -10,7 +10,46 @@ First 10 minutes guide from zero to running SceneWorks.
 
 ## Start SceneWorks
 
-### Terminal 1 — Backend
+### Windows launcher (recommended)
+
+From the repository root:
+
+```powershell
+.\scripts\start-sceneworks.cmd
+```
+
+The launcher starts the backend, waits for it to become healthy, starts the
+frontend, optionally starts the Secure MCP tunnel, and opens the web UI. It is
+idempotent: already-running services are reused instead of duplicated.
+
+Useful options:
+
+```powershell
+.\scripts\start-sceneworks.cmd -Dev
+.\scripts\start-sceneworks.cmd -Rebuild
+.\scripts\start-sceneworks.cmd -NoBrowser
+.\scripts\start-sceneworks.cmd -NoTunnel
+.\scripts\start-sceneworks.cmd -TunnelClientPath C:\path\to\tunnel-client-runtime-cloudflared.exe
+```
+
+For the ChatGPT MCP tunnel, the launcher expects the tunnel client at:
+
+```text
+tools\tunnel-client-runtime-cloudflared.exe
+```
+
+Override that location with `-TunnelClientPath` or the
+`SCENEWORKS_TUNNEL_CLIENT_PATH` environment variable. The tunnel starts only
+when `CONTROL_PLANE_TUNNEL_ID` and `CONTROL_PLANE_API_KEY` are present. The
+local MCP target defaults to `http://127.0.0.1:8010/mcp` and can be overridden
+with `MCP_SERVER_URL` or `-McpServerUrl`.
+
+Do not commit tunnel credentials or the tunnel executable. The executable is
+ignored by Git and is intentionally a local tool.
+
+### Manual startup
+
+Terminal 1 — backend:
 
 ```bash
 cd backend
@@ -20,7 +59,7 @@ uv run uvicorn app.main:app --reload
 
 The API is at **http://127.0.0.1:8010** (docs at `/docs`).
 
-### Terminal 2 — Frontend
+Terminal 2 — frontend:
 
 ```bash
 cd web
@@ -28,7 +67,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**
+Open **http://localhost:3000**.
 
 ## First example
 
@@ -49,9 +88,9 @@ Open **http://localhost:3000**
    > SceneWorks resolves the head of the project's default branch and pins the
    > whole workflow to that commit; every role reads a worktree checked out at
    > it. Uncommitted or staged edits in your checkout are invisible to the
-   > agents, and nothing they do can modify your checkout. **Commit (or at
-   > least stage and commit) work you want the analysis to consider.** The
-   > pinned commit is shown as the task's base commit.
+   > agents, and nothing they do can modify your checkout. **Commit work you
+   > want the analysis to consider.** The pinned commit is shown as the task's
+   > base commit.
 
 5. **Review the architecture proposal** — read the analysis on the task page.
 
@@ -81,7 +120,7 @@ commit-pinned snapshot of that repository — never your working tree — and th
 stored decision records the commit that was analyzed. Asks with no project
 attached are conversational and read no repository at all.
 
-## Inspect Project Memory (V2.4)
+## Inspect Project Memory
 
 Projects page -> click a project -> Memory tab.
 Create architecture decisions, technology choices, product decisions,
@@ -101,6 +140,7 @@ Check Settings page to verify backend health.
 
 ## Next steps
 
+- [ChatGPT MCP Plugin](tutorials/chatgpt-mcp-plugin.md) — connect ChatGPT to SceneWorks
 - [Web UI Tutorial](tutorials/web-ui.md) — detailed step-by-step
 - [Architecture](architecture.md) — component responsibilities
 - [Development](development.md) — developer setup
