@@ -82,8 +82,17 @@ These rules apply to every coding agent working in SceneWorks.
 21. **Screenshot bytes are artifacts; visual interpretation is inference.**
     Persist screenshot/diff bytes outside Git worktrees and record hashes, dimensions, capture semantics and causal references in the evidence ledger. Do not duplicate image bytes in evidence JSON or expose internal storage paths. Pixel/hash comparisons are evidence; semantic claims about what an image means are interpretation.
 
-22. **WP17 GUI support is observation-only.**
-    Do not add focus, click, pointer movement, keyboard/text injection, UIA invocation, coordinate automation or OCR to the WP17 surface. Controlled GUI automation requires a separately governed design/permission boundary.
+22. **WP17 observation remains a separate, read-only capability boundary.**
+    `gui_observe` alone never grants UI mutation. Window/dialog discovery, screenshots and deterministic visual comparison remain usable without `gui_automate`. Do not silently make observation permission imply automation.
+
+23. **WP18 GUI mutation requires an explicit automation permission.**
+    `gui_automate` is independent from `gui_observe`, and WP18 mutation requires both. Automation targets must be opaque accessibility control ids discovered under a current visible SceneWorks-managed PCS window. Do not accept arbitrary PIDs, HWNDs, desktop coordinates, pointer movement or keyboard injection as WP18 MCP inputs.
+
+24. **GUI actions are evidence-first and must fail closed when verification is incomplete.**
+    Capture durable pre-action visual evidence before mutation. After mutation, capture durable post-action evidence and run deterministic visual comparison. If the action may have executed but after-action evidence or comparison fails, record the action as partial/unverified and surface an error; never report it as successfully verified.
+
+25. **GUI text/value evidence must not become a secret echo channel.**
+    Do not persist user-provided values typed through GUI automation. Record bounded metadata such as character count and SHA-256 when correlation is needed. Accessibility names/automation ids may be evidence; control values are not automatically evidence.
 
 ## Backend additions
 
@@ -120,6 +129,15 @@ These rules apply to every coding agent working in SceneWorks.
 - Persist GUI artifacts under SceneWorks-owned project storage so normal project purge removes them, but never place them in Git worktrees.
 - Stored screenshots/diffs must remain retrievable and comparable after the observed PCS run ends.
 - Add deterministic provider fakes for CI; do not make the normal regression suite depend on a desktop session or live PCS installation.
+
+## GUI automation additions
+
+- Put platform-specific accessibility automation behind `GuiAutomationProvider`; MCP/session/evidence policy remains provider-neutral.
+- Prefer accessibility/UI Automation patterns (`Invoke`, `Value`, `SelectionItem`, `Toggle`) over simulated pointer/keyboard input.
+- Bind every control id to one managed PCS window and re-resolve it under that window at action time. Stale or forged ids must fail rather than retargeting another application.
+- The Windows provider may use a fixed internal PowerShell/.NET UI Automation adapter, but caller-controlled script text must never cross that boundary.
+- Before/after screenshots and visual comparison are part of the action contract, not optional diagnostics.
+- Add deterministic fake automation providers for CI; Windows/UIA live qualification is a separate host-level validation and must not be fabricated on Linux CI.
 
 ## Documentation policy
 
