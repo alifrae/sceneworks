@@ -51,6 +51,7 @@ async def init_db(engine: AsyncEngine, settings: Settings | None = None) -> None
         EngineeringSession,
         EngineeringTurn,
     )
+    from app.pcs_models import PcsProjectControl, PcsRun  # noqa: F401
     from app.db.migrations import ensure_schema
 
     if str(engine.url).startswith("sqlite") and engine.url.database not in (None, ":memory:"):
