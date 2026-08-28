@@ -1,8 +1,9 @@
 """WP17 GUI observation and visual-evidence service.
 
 The service is deliberately scoped to the OS PID of a SceneWorks-managed PCS
-run. It persists screenshot bytes outside Git worktrees while the WP15 evidence
-ledger stores hashes, dimensions, causal ids and storage references.
+run for new observations. Persisted screenshots remain retrievable/comparable
+after PCS stops or the EngineeringSession closes. Screenshot bytes live outside
+Git worktrees while the WP15 ledger stores hashes, dimensions and causal ids.
 """
 
 from __future__ import annotations
@@ -46,9 +47,11 @@ class GuiEvidenceService:
         self._settings = settings
         self._provider: GuiObservationProvider = provider or SystemGuiObservationProvider()
 
-    async def _session(self, session_id: int) -> EngineeringSession:
+    async def _session(
+        self, session_id: int, *, require_active: bool = True
+    ) -> EngineeringSession:
         row = await self._engineering_sessions.get(session_id)
-        if row.status != "ACTIVE":
+        if require_active and row.status != "ACTIVE":
             raise GuiEvidenceError(
                 f"engineering session {session_id} is {row.status.lower()}, not active"
             )
@@ -180,7 +183,7 @@ class GuiEvidenceService:
     async def _persist_capture(
         self,
         engineering: EngineeringSession,
-        run_id: int,
+        run_id: int | None,
         window: GuiWindow | None,
         capture: GuiCapture,
         *,
@@ -261,7 +264,7 @@ class GuiEvidenceService:
         }
 
     async def _artifact_row(self, session_id: int, artifact_id: int) -> EngineeringEvidence:
-        await self._session(session_id)
+        await self._session(session_id, require_active=False)
         async with self._session_factory() as session:
             row = await session.get(EngineeringEvidence, artifact_id)
             if (
@@ -290,7 +293,7 @@ class GuiEvidenceService:
         }
 
     async def artifacts(self, session_id: int, limit: int = 50) -> dict[str, Any]:
-        await self._session(session_id)
+        await self._session(session_id, require_active=False)
         rows = await self._evidence.list_evidence(
             session_id, category="gui", limit=max(1, min(limit, 200))
         )
@@ -310,11 +313,15 @@ class GuiEvidenceService:
         turn_id: str | None = None,
         action_id: str | None = None,
     ) -> dict[str, Any]:
-        engineering, _pid, run_id = await self._managed_pid(session_id)
+        engineering = await self._session(session_id, require_active=False)
         before_row = await self._artifact_row(session_id, before_artifact_id)
         after_row = await self._artifact_row(session_id, after_artifact_id)
-        before_bytes = read_bytes(self._settings, str((before_row.payload or {})["storage_key"]))
-        after_bytes = read_bytes(self._settings, str((after_row.payload or {})["storage_key"]))
+        before_payload = dict(before_row.payload or {})
+        after_payload = dict(after_row.payload or {})
+        before_run_id = int(before_payload.get("run_id") or 0) or None
+        after_run_id = int(after_payload.get("run_id") or 0) or None
+        before_bytes = read_bytes(self._settings, str(before_payload["storage_key"]))
+        after_bytes = read_bytes(self._settings, str(after_payload["storage_key"]))
         try:
             before_width, before_height, before_rgb = decode_rgb(before_bytes)
             after_width, after_height, after_rgb = decode_rgb(after_bytes)
@@ -360,7 +367,7 @@ class GuiEvidenceService:
                 )
                 diff_result = await self._persist_capture(
                     engineering,
-                    run_id,
+                    after_run_id or before_run_id,
                     None,
                     diff_capture,
                     operation="pcs.visual_diff",
@@ -370,14 +377,17 @@ class GuiEvidenceService:
                     extra_payload={
                         "before_artifact_id": before_artifact_id,
                         "after_artifact_id": after_artifact_id,
+                        "before_run_id": before_run_id,
+                        "after_run_id": after_run_id,
                     },
                 )
 
         result = {
             "session_id": session_id,
-            "run_id": run_id,
             "before_artifact_id": before_artifact_id,
             "after_artifact_id": after_artifact_id,
+            "before_run_id": before_run_id,
+            "after_run_id": after_run_id,
             "same_dimensions": same_dimensions,
             "before_dimensions": [before_width, before_height],
             "after_dimensions": [after_width, after_height],
