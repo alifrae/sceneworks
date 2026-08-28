@@ -26,6 +26,7 @@ ADVANCED_PERMISSIONS = {
     "network_access",
     "agent_delegate",
     "external_asset_read",
+    "gui_observe",
     "subagents",
 }
 
