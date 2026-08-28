@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from app.agents.base import AgentEventSink, AgentRequest, Workspace
@@ -26,9 +27,11 @@ async def test_opencode_health_is_unavailable_when_executable_missing(tmp_path):
 
 
 async def test_opencode_refuses_read_only_execution_before_launch(tmp_path):
+    # sys.executable is intentionally used as a known executable. The policy
+    # rejection must happen before it is invoked as though it were OpenCode.
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}",
-        opencode_executable=str(tmp_path / "also-missing"),
+        opencode_executable=sys.executable,
     )
     backend = OpenCodeBackend(settings)
     root = tmp_path / "worktree"
@@ -48,7 +51,5 @@ async def test_opencode_refuses_read_only_execution_before_launch(tmp_path):
         ),
         sink,
     )
-    # Missing executable is reported before policy because there is nothing to
-    # execute; either way no subprocess can be launched or mutate the worktree.
     assert result.status == "failed"
-    assert "OpenCode executable not found" in (result.error or "")
+    assert "restricted to write-capable" in (result.error or "")
