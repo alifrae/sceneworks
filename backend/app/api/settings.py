@@ -101,12 +101,14 @@ async def get_mcp_settings(ctx: AppContext = Depends(get_context)) -> dict:
         "action_tools_enabled": mode in {"standard", "advanced"},
         "advanced_agent_sessions_enabled": mode == "advanced",
         "direct_engineering_sessions_enabled": mode == "advanced",
+        "semantic_pcs_control_enabled": mode == "advanced",
         "advanced_warning": (
-            "Advanced mode gives the MCP client direct SceneWorks-owned filesystem, "
-            "command, process and Git capabilities inside isolated worktrees. Paths "
-            "are worktree-confined, but command/process execution is not an OS sandbox "
-            "and runs with the SceneWorks user's OS authority; shell-capable processes "
-            "may also access the network unless the host is sandboxed separately."
+            "Advanced mode gives the MCP client SceneWorks-owned repository, command, "
+            "process, Git and semantic PCS capabilities. Worktree paths are confined; "
+            "external PCS assets require an explicit project alias plus external_asset_read. "
+            "Command/process execution is not an OS sandbox and runs with the SceneWorks "
+            "user's OS authority; shell-capable processes may also access the network unless "
+            "the host is sandboxed separately."
         ),
     }
 
@@ -182,8 +184,9 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
     """Apply persisted operational settings to every live consumer.
 
     WP13 rebuilt ``ctx.backends`` but left ExecutionEngine and workflow services
-    pointing at the old registry/router. WP14 rewires the dependency graph so a
-    settings change is real immediately rather than only after process restart.
+    pointing at the old registry/router. WP14 rewires the dependency graph and
+    WP16 keeps the PCS semantic adapter attached to the rebuilt EngineeringSession
+    service as well.
     """
     overrides = await ctx.settings_store.update(patch)
     ctx.settings_overrides = overrides
@@ -198,8 +201,6 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
     ctx.backends = new_backends
     ctx.model_router = new_router
 
-    # Existing long-lived services were deliberately constructed once. Rewire
-    # their runtime dependencies rather than silently leaving stale providers.
     ctx.execution_engine._backends = new_backends
     ctx.execution_engine._settings = ctx.settings
     ctx.workflow._git = new_git
@@ -216,6 +217,7 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
     ctx.engineering_sessions = EngineeringSessionService(
         ctx.engine_factory, new_git, ctx.runtimes, ctx.settings
     )
+    ctx.pcs_control._engineering_sessions = ctx.engineering_sessions
 
     ctx.roles.set_default_backend(
         ctx.settings.default_backend
