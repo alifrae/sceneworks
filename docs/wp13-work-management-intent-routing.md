@@ -39,17 +39,17 @@ It also supports text, project, type, mode and priority filters. Counts are show
 
 The existing LangGraph workflow remains canonical. WP13 does not add graph topology or task states.
 
-Triage still classifies the request and selects useful advisory roles. The requested mode then constrains that result deterministically:
+Triage still classifies the request and selects useful advisory roles. **Only an explicit user-selected mode constrains triage.** When `requested_mode=auto`, SceneWorks preserves the triage routing choices and records a resolved mode for classification/provenance; an inferred label never gains the authority of an explicit user instruction.
 
-| Mode | Routing contract |
+| Requested mode | Routing contract |
 | --- | --- |
-| `auto` | Resolve from triage. Implementation → `change`; architecture/technology decision → `plan`; product question → `ask`; other non-implementation → `investigate`. |
-| `change` | `requires_implementation=true`. Triage cannot downgrade it to advisory-only work. Existing architecture/approval and bounded-bug skip policies still apply. |
-| `investigate` | Read-only Architect analysis; no Engineer execution. |
-| `plan` | Read-only architecture/design output; no Engineer execution. |
-| `ask` | Direct read-only answer through the Architect execution path; advisory fan-out is disabled. |
+| `auto` | Preserve triage-selected roles and implementation decision. Record the resolved label: implementation → `change`; architecture/technology decision → `plan`; product question → `ask`; other non-implementation → `investigate`. |
+| `change` | Force `requires_implementation=true`. Triage cannot downgrade it to advisory-only work. Existing architecture/approval and bounded-bug skip policies still apply. |
+| `investigate` | Force read-only Architect analysis; no Engineer execution. |
+| `plan` | Force read-only architecture/design output; no Engineer execution. |
+| `ask` | Force a direct read-only answer through the Architect execution path; advisory fan-out is disabled. |
 
-For read-only modes, the Architect prompt receives explicit intent guidance so it returns the requested artifact instead of treating every request as a code-change plan.
+For explicit read-only modes, the Architect prompt receives intent guidance so it returns the requested artifact instead of treating every request as a code-change plan. An Auto request that resolves to `ask` may still run Product (or another triage-selected advisor); that is intentional because Auto delegates routing authority to triage.
 
 Every routing decision emits `workflow.routing.policy` with:
 
@@ -104,6 +104,7 @@ Targeted tests cover:
 - editing metadata only while `NEW`
 - type/mode/priority/text filtering
 - deterministic Auto resolution
+- Auto preserving triage-selected advisors even when its resolved label is `ask`
 - explicit `investigate` resisting a triage attempt to promote it to implementation
 - explicit `change` resisting a triage attempt to downgrade it to non-implementation
 - persisted routing provenance
