@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 
 import pytest
-from sqlalchemy import select
 
 from app.agents.base import AgentAttachment, AgentRequest
 from app.agents.gemini_acp import AcpError
@@ -83,6 +82,13 @@ async def test_attachment_rest_round_trip_is_immutable_task_context(
     assert response.content == payload
     assert response.headers["content-type"].startswith("text/plain")
 
+    events = (await client.get(f"/api/tasks/{task['id']}/events")).json()
+    added = [event for event in events if event["type"] == "task.attachment_added"]
+    assert len(added) == 1
+    assert added[0]["payload"]["attachment_id"] == attachment["id"]
+    assert added[0]["payload"]["sha256"] == attachment["sha256"]
+    assert added[0]["payload"]["authority"] == "untrusted_user_context"
+
     # The stored bytes are SceneWorks-owned and never copied into the managed repo.
     assert not (git_repo / "renderer.log.txt").exists()
     async with context.engine_factory() as session:
@@ -104,6 +110,12 @@ async def test_attachment_rest_round_trip_is_immutable_task_context(
     )
     assert removed.status_code == 204
     assert (await client.get(f"/api/tasks/{task['id']}/attachments")).json() == []
+    events = (await client.get(f"/api/tasks/{task['id']}/events")).json()
+    removed_events = [
+        event for event in events if event["type"] == "task.attachment_removed"
+    ]
+    assert len(removed_events) == 1
+    assert removed_events[0]["payload"]["attachment_id"] == attachment["id"]
 
 
 async def test_attachment_validation_and_freeze_after_task_start(
@@ -172,7 +184,6 @@ async def test_mcp_attachment_tools_return_rich_content(client, context, git_rep
     project = await _project(client, git_repo)
     task = await _task(client, project["id"])
 
-    # Observe mode exposes read tools but not attachment mutation.
     catalog = (
         await client.post(
             "/mcp",
@@ -199,6 +210,13 @@ async def test_mcp_attachment_tools_return_rich_content(client, context, git_rep
     attachment = added["structuredContent"]["attachment"]
     assert attachment["source"] == "mcp"
     assert attachment["authority"] == "untrusted_user_context"
+
+    events = (await client.get(f"/api/tasks/{task['id']}/events")).json()
+    attachment_events = [
+        event for event in events if event["type"] == "task.attachment_added"
+    ]
+    assert len(attachment_events) == 1
+    assert attachment_events[0]["payload"]["source"] == "mcp"
 
     listed = await _rpc(
         client,
