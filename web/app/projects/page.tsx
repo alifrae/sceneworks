@@ -75,9 +75,8 @@ export default function ProjectsPage() {
 
   useEffect(() => refresh(), [refresh]);
 
-  // A local frontend can come up slightly before the API. The previous page
-  // turned that one startup race into a persistent red banner. Retry only while
-  // the page remains failed and clear the state as soon as a request succeeds.
+  // A local frontend can come up slightly before the API. Retry only while the
+  // page remains failed and clear the state as soon as a request succeeds.
   useEffect(() => {
     if (!error) return;
     const timer = window.setTimeout(() => {
@@ -121,9 +120,11 @@ export default function ProjectsPage() {
     }
   }
 
-  function restoreHistory(index: number) {
+  function restoreHistory(index: number, openForm = false) {
     const item = history[index];
-    if (item) setForm(historyEntryToForm(item));
+    if (!item) return;
+    setForm(historyEntryToForm(item));
+    if (openForm) setShowForm(true);
   }
 
   async function submit() {
@@ -154,7 +155,7 @@ export default function ProjectsPage() {
 
   async function removeProject(project: Project) {
     const confirmed = window.confirm(
-      `Delete “${project.name}” from SceneWorks?\n\n` +
+      `Unregister “${project.name}” from SceneWorks?\n\n` +
         "This removes its SceneWorks task/history records but never deletes or modifies the Git repository."
     );
     if (!confirmed) return;
@@ -203,7 +204,10 @@ export default function ProjectsPage() {
   return (
     <div>
       <div className="row space-between">
-        <h1>Projects</h1>
+        <div>
+          <h1>Projects</h1>
+          <p className="muted">Registered repositories and reusable registration settings.</p>
+        </div>
         <div className="row">
           {e2eProjects.length > 0 && (
             <button className="btn danger" onClick={removeE2ETestData} disabled={cleaningTests}>
@@ -220,6 +224,29 @@ export default function ProjectsPage() {
         <div className="notice error row space-between">
           <span>{error}</span>
           <button className="btn small" onClick={refresh}>Retry now</button>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="registration-history">
+          <div className="row space-between">
+            <div>
+              <strong>Registration history</strong>
+              <div className="small muted">Last {history.length} successful registrations are stored in this browser.</div>
+            </div>
+            <button className="btn small" onClick={() => restoreHistory(0, true)}>Reuse latest</button>
+          </div>
+          <div className="registration-history-list">
+            {history.slice(0, 3).map((item, index) => (
+              <div className="registration-history-item" key={`${item.repository_path}-${item.saved_at}`}>
+                <div style={{ minWidth: 0 }}>
+                  <div><strong>{item.name}</strong></div>
+                  <div className="mono small muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.repository_path}</div>
+                </div>
+                <button className="btn small" onClick={() => restoreHistory(index, true)}>Reuse</button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -314,7 +341,7 @@ export default function ProjectsPage() {
                       disabled={deleting.has(project.id)}
                       onClick={() => removeProject(project)}
                     >
-                      {deleting.has(project.id) ? "Deleting…" : "Delete"}
+                      {deleting.has(project.id) ? "Unregistering…" : "Unregister"}
                     </button>
                   </td>
                 </tr>
