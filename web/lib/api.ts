@@ -40,6 +40,31 @@ export class ApiError extends Error {
   }
 }
 
+export type ApiHealth = {
+  status: string;
+  app: string;
+  active_executions: number;
+};
+
+export type RequestDiagnostic = {
+  timestamp: string;
+  method: string;
+  path: string;
+  status: number;
+  requestId: string;
+  durationMs: number;
+  serverDurationMs: number | null;
+  responseSize: string | null;
+  cause: string;
+};
+
+const REQUEST_DIAGNOSTICS: RequestDiagnostic[] = [];
+const MAX_REQUEST_DIAGNOSTICS = 60;
+
+export function getRequestDiagnostics(): RequestDiagnostic[] {
+  return [...REQUEST_DIAGNOSTICS].reverse();
+}
+
 function unreachableMessage(cause?: unknown): string {
   const detail = cause instanceof Error && cause.message ? ` (${cause.name}: ${cause.message})` : "";
   return `the SceneWorks API at ${API_URL} did not respond${detail}. Is the backend running?`;
@@ -95,17 +120,12 @@ function invalidateAfterMutation(path: string): void {
   }
 }
 
-function diagnostics(meta: {
-  method: string;
-  path: string;
-  requestId: string;
-  durationMs: number;
-  serverDurationMs: string | null;
-  responseSize: string | null;
-  cause: string;
-}): void {
-  if (process.env.NODE_ENV !== "development") return;
-  console.debug("[SceneWorks request]", meta);
+function diagnostics(meta: RequestDiagnostic): void {
+  REQUEST_DIAGNOSTICS.push(meta);
+  if (REQUEST_DIAGNOSTICS.length > MAX_REQUEST_DIAGNOSTICS) {
+    REQUEST_DIAGNOSTICS.splice(0, REQUEST_DIAGNOSTICS.length - MAX_REQUEST_DIAGNOSTICS);
+  }
+  if (process.env.NODE_ENV === "development") console.debug("[SceneWorks request]", meta);
 }
 
 async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
@@ -114,7 +134,20 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   if (get && !options.bypassCache) {
     const cached = GET_CACHE.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+    if (cached && cached.expiresAt > Date.now()) {
+      diagnostics({
+        timestamp: new Date().toISOString(),
+        method: "GET",
+        path,
+        status: 200,
+        requestId: "cache",
+        durationMs: 0,
+        serverDurationMs: null,
+        responseSize: null,
+        cause: "cache-hit",
+      });
+      return cached.value as T;
+    }
     const inFlight = GET_INFLIGHT.get(cacheKey);
     if (inFlight) return inFlight as Promise<T>;
   }
@@ -148,16 +181,31 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     }
 
     if (!response) {
-      throw new ApiError(0, unreachableMessage(lastCause), id, Math.round(now() - started));
+      const durationMs = Math.round(now() - started);
+      diagnostics({
+        timestamp: new Date().toISOString(),
+        method,
+        path,
+        status: 0,
+        requestId: id,
+        durationMs,
+        serverDurationMs: null,
+        responseSize: null,
+        cause: options.diagnosticCause ?? "transport-failure",
+      });
+      throw new ApiError(0, unreachableMessage(lastCause), id, durationMs);
     }
 
     const durationMs = Math.round(now() - started);
+    const serverDurationHeader = response.headers.get("x-process-time-ms");
     diagnostics({
+      timestamp: new Date().toISOString(),
       method,
       path,
+      status: response.status,
       requestId: response.headers.get("x-request-id") || id,
       durationMs,
-      serverDurationMs: response.headers.get("x-process-time-ms"),
+      serverDurationMs: serverDurationHeader ? Number(serverDurationHeader) : null,
       responseSize: response.headers.get("content-length"),
       cause: options.diagnosticCause ?? (get ? "cache-miss" : "mutation"),
     });
@@ -187,6 +235,11 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
 }
 
 export const api = {
+  health: () => request<ApiHealth>("/api/health", undefined, {
+    cacheTtlMs: 0,
+    bypassCache: true,
+    diagnosticCause: "diagnostics-health",
+  }),
   dashboard: () => request<Dashboard>("/api/dashboard", undefined, { diagnosticCause: "dashboard-load" }),
 
   projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load", cacheTtlMs: 5_000 }),
