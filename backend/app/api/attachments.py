@@ -1,7 +1,7 @@
 """Task attachment routes.
 
 Attachments are immutable task context. They can be added or removed only
-while a task is NEW, before any workflow execution can consume them.  The
+while a task is NEW, before any workflow execution can consume them. The
 transport uses bounded base64 JSON rather than multipart so the local API keeps
 its dependency surface small and MCP/browser callers can share the same model.
 """
@@ -78,8 +78,6 @@ async def _quota(session, task_id: int) -> tuple[int, int]:
 
 def decode_attachment_payload(value: str, max_bytes: int) -> bytes:
     """Decode strict base64 while bounding both encoded and decoded input."""
-    # Base64 expands bytes by ~4/3. A small allowance covers padding/newline-free
-    # encoding without letting a hostile JSON body allocate unbounded memory.
     max_encoded = ((max_bytes + 2) // 3) * 4 + 8
     if len(value) > max_encoded:
         raise HTTPException(413, f"attachment exceeds {max_bytes} byte limit")
@@ -158,6 +156,22 @@ async def upload_task_attachment(
         )
         session.add(row)
         try:
+            await session.flush()
+            await ctx.event_store.append(
+                execution_id=None,
+                task_id=task_id,
+                type="task.attachment_added",
+                payload={
+                    "attachment_id": row.id,
+                    "filename": row.filename,
+                    "mime_type": row.mime_type,
+                    "size_bytes": row.size_bytes,
+                    "sha256": row.sha256,
+                    "source": row.source,
+                    "authority": "untrusted_user_context",
+                },
+                session=session,
+            )
             await session.commit()
             await session.refresh(row)
         except IntegrityError as exc:
@@ -186,7 +200,6 @@ async def task_attachment_content(
             raise HTTPException(404, "attachment not found")
     try:
         path = resolve_storage_key(ctx.settings, row.storage_key)
-        # Read once to detect missing content before FileResponse starts headers.
         read_bytes(ctx.settings, row.storage_key)
     except AttachmentError as exc:
         raise HTTPException(410, str(exc)) from exc
@@ -212,7 +225,21 @@ async def delete_task_attachment(
         if row is None or row.task_id != task_id:
             raise HTTPException(404, "attachment not found")
         storage_key = row.storage_key
+        payload = {
+            "attachment_id": row.id,
+            "filename": row.filename,
+            "mime_type": row.mime_type,
+            "size_bytes": row.size_bytes,
+            "sha256": row.sha256,
+        }
         await session.delete(row)
+        await ctx.event_store.append(
+            execution_id=None,
+            task_id=task_id,
+            type="task.attachment_removed",
+            payload=payload,
+            session=session,
+        )
         await session.commit()
     if storage_key:
         delete_file(ctx.settings, storage_key)
