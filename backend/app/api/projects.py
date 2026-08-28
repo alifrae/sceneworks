@@ -20,6 +20,7 @@ from app.models import (
     Project,
     ProjectMemory,
     Task,
+    TaskAttachment,
     WorkPackage,
 )
 from app.schemas import (
@@ -30,6 +31,7 @@ from app.schemas import (
     RepoStatusOut,
     TaskProvenanceOut,
 )
+from app.services.attachments import delete_project_tree
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -311,6 +313,9 @@ async def _purge_project_history(session, project_id: int) -> None:
             sa_delete(Execution).where(Execution.id.in_(execution_ids))
         )
     if task_ids:
+        await session.execute(
+            sa_delete(TaskAttachment).where(TaskAttachment.task_id.in_(task_ids))
+        )
         await session.execute(sa_delete(Task).where(Task.id.in_(task_ids)))
     if work_package_ids:
         await session.execute(
@@ -337,6 +342,7 @@ async def delete_project(
     agent sessions still block deletion unless ``force=true`` is explicitly
     supplied; force is intended for deterministic test-artifact cleanup.
     """
+    purged = False
     async with ctx.engine_factory() as session:
         project = await session.get(Project, project_id)
         if project is None:
@@ -410,6 +416,9 @@ async def delete_project(
 
         if purge_history:
             await _purge_project_history(session, project_id)
+            purged = True
         else:
             await session.delete(project)
         await session.commit()
+    if purged:
+        delete_project_tree(ctx.settings, project_id)
