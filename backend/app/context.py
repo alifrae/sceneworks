@@ -29,6 +29,7 @@ from app.services.agent_sessions import AgentSessionService
 from app.services.company import CompanyService
 from app.services.engineering_evidence import EngineeringEvidenceService
 from app.services.engineering_sessions import EngineeringSessionService
+from app.services.gui_evidence import GuiEvidenceService
 from app.services.memory import MemoryService
 from app.services.pcs_control import PcsControlService
 from app.services.provenance import ProvenanceService
@@ -62,6 +63,7 @@ class AppContext:
     engineering_sessions: EngineeringSessionService
     engineering_evidence: EngineeringEvidenceService
     pcs_control: PcsControlService
+    gui_evidence: GuiEvidenceService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -81,7 +83,8 @@ class AppContext:
         # completed merely because another subsystem took time to close.
         await self.execution_engine.shutdown()
         # PCS control must drain/finalize managed runs before the native runtime
-        # destroys its process handles.
+        # destroys its process handles. GUI evidence has no independent process
+        # lifecycle and therefore needs no shutdown hook.
         await self.pcs_control.shutdown()
         await self.runtimes.shutdown()
         await self.workflow_manager.shutdown()
@@ -143,6 +146,13 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     pcs_control = PcsControlService(
         session_factory, engineering_sessions, engineering_evidence
     )
+    gui_evidence = GuiEvidenceService(
+        session_factory,
+        engineering_sessions,
+        engineering_evidence,
+        pcs_control,
+        settings,
+    )
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -184,6 +194,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         engineering_sessions=engineering_sessions,
         engineering_evidence=engineering_evidence,
         pcs_control=pcs_control,
+        gui_evidence=gui_evidence,
         settings_store=settings_store,
         settings_overrides=overrides,
     )
