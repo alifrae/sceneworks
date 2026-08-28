@@ -184,49 +184,80 @@ class GuiEvidenceMCPServer(PcsRuntimeMCPServer):
             action_id=uuid.uuid4().hex,
         )
 
+    async def _handle_rich_call(self, request: dict[str, Any]) -> dict[str, Any]:
+        request_id = request.get("id")
+        params = request.get("params") or {}
+        if not isinstance(params, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": "params must be an object"},
+            }
+        name = str(params.get("name") or "")
+        arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": "tool arguments must be an object"},
+            }
+        try:
+            structured = await self.call_tool(name, arguments)
+            image_data = structured.pop("image_base64", None)
+            content: list[dict[str, Any]] = [
+                {
+                    "type": "text",
+                    "text": json.dumps(structured, ensure_ascii=False, default=str, indent=2),
+                }
+            ]
+            if image_data:
+                content.append(
+                    {
+                        "type": "image",
+                        "data": image_data,
+                        "mimeType": "image/png",
+                    }
+                )
+            result = {
+                "resultType": "complete",
+                "content": content,
+                "structuredContent": structured,
+                "isError": False,
+            }
+        except MCPToolError as exc:
+            result = {
+                "resultType": "complete",
+                "content": [{"type": "text", "text": str(exc)}],
+                "structuredContent": {"error": str(exc), "tool": name},
+                "isError": True,
+            }
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
     async def handle(self, payload: Any) -> tuple[Any | None, int]:
-        """Return screenshot/diff bytes as MCP image content, not giant JSON text."""
+        """Return screenshot/diff bytes as MCP image content, including batches."""
+        if isinstance(payload, list):
+            if not payload:
+                return await super().handle(payload)
+            replies: list[dict[str, Any]] = []
+            for item in payload:
+                if (
+                    isinstance(item, dict)
+                    and item.get("method") == "tools/call"
+                    and isinstance(item.get("params") or {}, dict)
+                    and str((item.get("params") or {}).get("name") or "") in _RICH_IMAGE_TOOLS
+                ):
+                    replies.append(await self._handle_rich_call(item))
+                    continue
+                body, _status = await super().handle(item)
+                if body is not None:
+                    replies.append(body)
+            return (replies if replies else None), (200 if replies else 202)
+
         if isinstance(payload, dict) and payload.get("method") == "tools/call":
             params = payload.get("params") or {}
-            if isinstance(params, dict) and str(params.get("name") or "") in _RICH_IMAGE_TOOLS:
-                request_id = payload.get("id")
-                name = str(params.get("name") or "")
-                arguments = params.get("arguments") or {}
-                if not isinstance(arguments, dict):
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32602, "message": "tool arguments must be an object"},
-                    }, 200
-                try:
-                    structured = await self.call_tool(name, arguments)
-                    image_data = structured.pop("image_base64", None)
-                    content: list[dict[str, Any]] = [
-                        {
-                            "type": "text",
-                            "text": json.dumps(structured, ensure_ascii=False, default=str, indent=2),
-                        }
-                    ]
-                    if image_data:
-                        content.append(
-                            {
-                                "type": "image",
-                                "data": image_data,
-                                "mimeType": "image/png",
-                            }
-                        )
-                    result = {
-                        "resultType": "complete",
-                        "content": content,
-                        "structuredContent": structured,
-                        "isError": False,
-                    }
-                except MCPToolError as exc:
-                    result = {
-                        "resultType": "complete",
-                        "content": [{"type": "text", "text": str(exc)}],
-                        "structuredContent": {"error": str(exc), "tool": name},
-                        "isError": True,
-                    }
-                return {"jsonrpc": "2.0", "id": request_id, "result": result}, 200
+            if (
+                isinstance(params, dict)
+                and str(params.get("name") or "") in _RICH_IMAGE_TOOLS
+            ):
+                return await self._handle_rich_call(payload), 200
         return await super().handle(payload)
