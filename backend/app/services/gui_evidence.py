@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import uuid
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config.settings import Settings, resolve_path
 from app.engineering_models import EngineeringEvidence, EngineeringSession
 from app.gui import GuiCapture, GuiObservationError, GuiObservationProvider, GuiWindow, SystemGuiObservationProvider
+from app.gui.png import PngError, decode_rgb, encode_rgb
 from app.services.attachments import read_bytes
 from app.services.engineering_evidence import EngineeringEvidenceService
 from app.services.engineering_sessions import EngineeringSessionService
@@ -279,7 +278,7 @@ class GuiEvidenceService:
         storage_key = str((row.payload or {}).get("storage_key") or "")
         try:
             data = read_bytes(self._settings, storage_key)
-        except Exception as exc:  # storage boundary normalizes missing/corrupt files
+        except Exception as exc:
             raise GuiEvidenceError(f"GUI artifact content is unavailable: {exc}") from exc
         expected = str((row.payload or {}).get("sha256") or "")
         actual = hashlib.sha256(data).hexdigest()
@@ -316,31 +315,46 @@ class GuiEvidenceService:
         after_row = await self._artifact_row(session_id, after_artifact_id)
         before_bytes = read_bytes(self._settings, str((before_row.payload or {})["storage_key"]))
         after_bytes = read_bytes(self._settings, str((after_row.payload or {})["storage_key"]))
-        before = Image.open(io.BytesIO(before_bytes)).convert("RGB")
-        after = Image.open(io.BytesIO(after_bytes)).convert("RGB")
-        same_dimensions = before.size == after.size
+        try:
+            before_width, before_height, before_rgb = decode_rgb(before_bytes)
+            after_width, after_height, after_rgb = decode_rgb(after_bytes)
+        except PngError as exc:
+            raise GuiEvidenceError(f"GUI artifact cannot be compared: {exc}") from exc
+
+        same_dimensions = (before_width, before_height) == (after_width, after_height)
         changed_ratio: float | None = None
         changed_bbox: list[int] | None = None
         diff_result: dict[str, Any] | None = None
 
         if same_dimensions:
-            diff = ImageChops.difference(before, after)
-            bbox = diff.getbbox()
-            if bbox is None:
-                changed_ratio = 0.0
-            else:
-                gray = diff.convert("L")
-                histogram = gray.histogram()
-                changed_pixels = sum(histogram[1:])
-                changed_ratio = changed_pixels / float(before.width * before.height)
-                changed_bbox = [int(value) for value in bbox]
-                buffer = io.BytesIO()
-                diff.save(buffer, format="PNG")
+            changed_pixels = 0
+            min_x, min_y = before_width, before_height
+            max_x = max_y = -1
+            diff_rgb = bytearray(len(before_rgb))
+            pixel_count = before_width * before_height
+            for pixel_index in range(pixel_count):
+                offset = pixel_index * 3
+                dr = abs(before_rgb[offset] - after_rgb[offset])
+                dg = abs(before_rgb[offset + 1] - after_rgb[offset + 1])
+                db = abs(before_rgb[offset + 2] - after_rgb[offset + 2])
+                diff_rgb[offset : offset + 3] = bytes((dr, dg, db))
+                if dr or dg or db:
+                    changed_pixels += 1
+                    x = pixel_index % before_width
+                    y = pixel_index // before_width
+                    min_x = min(min_x, x)
+                    min_y = min(min_y, y)
+                    max_x = max(max_x, x)
+                    max_y = max(max_y, y)
+            changed_ratio = changed_pixels / float(pixel_count)
+            if changed_pixels:
+                changed_bbox = [min_x, min_y, max_x + 1, max_y + 1]
+                diff_png = encode_rgb(before_width, before_height, bytes(diff_rgb))
                 diff_capture = GuiCapture(
-                    data=buffer.getvalue(),
+                    data=diff_png,
                     mime_type="image/png",
-                    width=diff.width,
-                    height=diff.height,
+                    width=before_width,
+                    height=before_height,
                     capture_method="pixel_difference",
                     occlusion_safe=True,
                 )
@@ -365,8 +379,8 @@ class GuiEvidenceService:
             "before_artifact_id": before_artifact_id,
             "after_artifact_id": after_artifact_id,
             "same_dimensions": same_dimensions,
-            "before_dimensions": [before.width, before.height],
-            "after_dimensions": [after.width, after.height],
+            "before_dimensions": [before_width, before_height],
+            "after_dimensions": [after_width, after_height],
             "changed_pixel_ratio": changed_ratio,
             "changed_bbox": changed_bbox,
             "identical": bool(same_dimensions and changed_ratio == 0.0),
