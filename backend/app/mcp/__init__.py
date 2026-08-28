@@ -6,6 +6,6 @@ repository execution remains mediated by the configured AgentBackend (normally
 Gemini CLI over ACP) and SceneWorks worktree/permission policy.
 """
 
-from app.mcp.server import SceneWorksMCPServer
+from app.mcp.attachments_server import AttachmentMCPServer as SceneWorksMCPServer
 
 __all__ = ["SceneWorksMCPServer"]
