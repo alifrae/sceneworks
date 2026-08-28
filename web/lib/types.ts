@@ -76,6 +76,10 @@ export interface EngineeringContract {
   acceptance_criteria: string[];
 }
 
+export type WorkItemType = "task" | "bug" | "feature" | "idea";
+export type ExecutionMode = "auto" | "change" | "investigate" | "plan" | "ask";
+export type ResolvedExecutionMode = Exclude<ExecutionMode, "auto">;
+
 export interface Task {
   id: number;
   project_id: number;
@@ -84,6 +88,9 @@ export interface Task {
   description: string;
   status: string;
   priority: string;
+  work_item_type: WorkItemType;
+  requested_mode: ExecutionMode;
+  resolved_mode: ResolvedExecutionMode | null;
   current_role: string | null;
   current_execution_id: string | null;
   base_commit: string | null;

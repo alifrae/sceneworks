@@ -47,6 +47,14 @@ ACTIVE_TASK_STATES = {
     "CHANGES_REQUESTED",
     "READY_FOR_HUMAN",
 }
+COUNTED_ACTIVE_TASK_STATES = {
+    "ARCHITECTURE_ANALYSIS",
+    "READY_TO_IMPLEMENT",
+    "IMPLEMENTING",
+    "TESTING",
+    "REVIEWING",
+    "CHANGES_REQUESTED",
+}
 ACTIVE_SESSION_STATES = {"STARTING", "READY", "RUNNING"}
 
 
@@ -70,7 +78,7 @@ async def _to_out(ctx: AppContext, project: Project) -> ProjectOut:
             await session.execute(
                 select(func.count(Task.id)).where(
                     Task.project_id == project.id,
-                    Task.status.in_(["NEW", "ARCHITECTURE_ANALYSIS", "READY_TO_IMPLEMENT", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED"]),
+                    Task.status.in_(COUNTED_ACTIVE_TASK_STATES),
                 )
             )
         ).scalar() or 0
@@ -95,7 +103,7 @@ async def list_projects(limit: int = 200, ctx: AppContext = Depends(get_context)
                     select(Task.project_id, func.count(Task.id))
                     .where(
                         Task.project_id.in_(project_ids),
-                        Task.status.in_(["NEW", "ARCHITECTURE_ANALYSIS", "READY_TO_IMPLEMENT", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED"]),
+                        Task.status.in_(COUNTED_ACTIVE_TASK_STATES),
                     )
                     .group_by(Task.project_id)
                 )

@@ -130,6 +130,7 @@ class WorkflowRoleRuntime:
                 project=project,
                 task=task,
                 workspace=workspace,
+                extra={"Execution intent": _architect_intent_instruction(task)},
                 upstream_contexts=upstream or None,
                 context_worktree_path=str(worktree.worktree_path),
             )
@@ -451,17 +452,10 @@ class WorkflowRoleRuntime:
             task.current_role = None
             task.current_execution_id = None
 
-            # Persist original advisory evidence independently. architecture_result
-            # is later replaced by the Architect's final analysis, so using it as
-            # the sole carrier silently discarded Product/CTO/Technical Expert
-            # evidence before Engineer/Reviewer execution.
             advisory = dict(task.advisory_results or {})
             advisory[role_key] = content[:20_000]
             task.advisory_results = advisory
 
-            # Keep the legacy pre-architecture combined view for compatibility
-            # with existing UI/workflow behavior. The durable source is now
-            # advisory_results and survives finish_architect().
             prefix = task.architecture_result or ""
             if role_key == "product":
                 heading = "Product Assessment"
@@ -562,3 +556,15 @@ class WorkflowRoleRuntime:
                     "architect worktree cleanup failed for task %s",
                     task_id,
                 )
+
+
+def _architect_intent_instruction(task: Task) -> str:
+    mode = task.resolved_mode or task.requested_mode or "auto"
+    prefix = f"Work item type: {task.work_item_type}. Requested mode: {task.requested_mode}. Resolved mode: {mode}."
+    if mode == "ask":
+        return prefix + " Answer the user's question directly from repository evidence. Do not turn it into an implementation plan and do not modify source."
+    if mode == "investigate":
+        return prefix + " Perform a read-only investigation. Focus on evidence, root cause or hypotheses, uncertainty, and recommended next steps. Do not implement changes."
+    if mode == "plan":
+        return prefix + " Produce a concrete architecture/design/implementation plan only. Do not modify source or behave as if implementation has been requested."
+    return prefix + " Produce architecture guidance appropriate for a governed code change."

@@ -27,6 +27,8 @@ def utcnow() -> datetime:
 
 
 _EMPTY_JSON = text("'{}'")
+_TASK_TYPE_DEFAULT = text("'task'")
+_TASK_MODE_DEFAULT = text("'auto'")
 
 
 class Project(Base):
@@ -41,17 +43,9 @@ class Project(Base):
     architecture_context_paths: Mapped[list] = mapped_column(JSON, default=list)
     test_commands: Mapped[list] = mapped_column(JSON, default=list)
     build_commands: Mapped[list] = mapped_column(JSON, default=list)
-    # Long-lived, project-wide engineering invariants and guardrails. This is
-    # deliberately separate from Task.engineering_contract: policy constrains
-    # every task in a project, while a task contract defines one task's scope
-    # and acceptance criteria.
     engineering_policy: Mapped[dict] = mapped_column(
         JSON, default=dict, server_default=_EMPTY_JSON
     )
-    # Provider/model-neutral professional capability overlays. These describe
-    # relevant skills/domains/methods, never project facts. A server default is
-    # deliberate: older/raw insert paths must remain compatible with a
-    # create_all-produced database, matching migration 0006 behavior.
     capability_profile: Mapped[dict] = mapped_column(
         JSON, default=dict, server_default=_EMPTY_JSON
     )
@@ -113,6 +107,15 @@ class Task(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(50), default="NEW")
     priority: Mapped[str] = mapped_column(String(20), default="medium")
+    # WP13 separates backlog classification from execution intent. Existing
+    # rows migrate to task/auto; resolved_mode is populated when work starts.
+    work_item_type: Mapped[str] = mapped_column(
+        String(20), default="task", server_default=_TASK_TYPE_DEFAULT
+    )
+    requested_mode: Mapped[str] = mapped_column(
+        String(20), default="auto", server_default=_TASK_MODE_DEFAULT
+    )
+    resolved_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     current_role: Mapped[str | None] = mapped_column(String(50), nullable=True)
     current_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     base_commit: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -125,12 +128,9 @@ class Task(Base):
     implementation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     engineering_contract: Mapped[dict] = mapped_column(JSON, default=dict)
-    # More-specific overlays layered on top of the project's capability profile.
     capability_requirements: Mapped[dict] = mapped_column(
         JSON, default=dict, server_default=_EMPTY_JSON
     )
-    # Advisory role outputs survive the Architect phase independently instead of
-    # being flattened into/replaced by architecture_result.
     advisory_results: Mapped[dict] = mapped_column(
         JSON, default=dict, server_default=_EMPTY_JSON
     )
@@ -180,8 +180,6 @@ class Execution(Base):
     role: Mapped[str] = mapped_column(String(50))
     backend: Mapped[str] = mapped_column(String(100))
     model_profile: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    # Concrete model selected from the profile when this execution was created.
-    # Persisted so queued/restarted work cannot drift with later setting changes.
     model_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="QUEUED")
     workspace: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -199,12 +197,7 @@ class Execution(Base):
 
 
 class AgentSession(Base):
-    """Persistent external-supervisor session over a provider agent.
-
-    WP11 Advanced mode stores only SceneWorks-owned control/provenance metadata
-    here. Conversation history remains owned by the provider (Gemini CLI) and
-    is restored with ACP session/load using ``provider_session_id``.
-    """
+    """Persistent external-supervisor session over a provider agent."""
 
     __tablename__ = "agent_sessions"
 
