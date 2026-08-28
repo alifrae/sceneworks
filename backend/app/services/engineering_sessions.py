@@ -1,9 +1,10 @@
-"""Provider-neutral direct engineering sessions (WP14-WP16).
+"""Provider-neutral direct engineering sessions (WP14-WP17).
 
 An EngineeringSession owns a SceneWorks-created Git worktree plus a runtime and
 permission ceiling. WP15 optionally binds it to one governed Task so every turn
 and evidence record can be correlated with the work item being verified. WP16
 adds explicit read-only external-asset authority for PCS recordings/corpora.
+WP17 adds observation-only GUI evidence as an independent permission.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ ENGINEERING_PERMISSION_NAMES = frozenset(
         "network_access",
         "agent_delegate",
         "external_asset_read",
+        "gui_observe",
     }
 )
 
