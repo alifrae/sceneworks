@@ -51,6 +51,15 @@ class SceneWorksMCPServer(PcsRuntimeMCPServer):
                 "evidence; Gemini/OpenCode/OpenHands are optional workers."
             )
 
+    async def _engineering_session_close(self, args: dict[str, Any]) -> dict[str, Any]:
+        session_id = int(args.get("session_id"))
+        if await self.ctx.pcs_control.has_active_run(session_id):
+            raise MCPToolError(
+                f"engineering session {session_id} still owns an active managed PCS run; "
+                "call sceneworks.pcs.stop before closing the session"
+            )
+        return await super()._engineering_session_close(args)
+
     async def handle(self, payload: Any) -> tuple[Any | None, int]:
         body, status = await super().handle(payload)
         if isinstance(payload, dict) and payload.get("method") in {
