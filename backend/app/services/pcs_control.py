@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 from sqlalchemy import select
@@ -23,12 +23,20 @@ from app.runtime.base import CommandRuntimeError, ProcessSnapshot, RuntimeErrorB
 from app.services.engineering_evidence import EngineeringEvidenceService
 from app.services.engineering_sessions import EngineeringSessionError, EngineeringSessionService
 
-
 _ACTIVE_RUN_STATUSES = {"STARTING", "RUNNING", "STOPPING"}
 _FINAL_RUN_STATUSES = {"EXITED", "CRASHED", "FAILED", "LOST", "STOPPED"}
 _ASSET_PATTERN = re.compile(r"\{\{asset:([A-Za-z0-9._-]+):([^{}]+)\}\}")
-_LEVEL_PATTERN = re.compile(r"\b(DEBUG|INFO|WARN(?:ING)?|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE)
-_SENSITIVE_ENV_MARKERS = ("PASSWORD", "PASSWD", "TOKEN", "SECRET", "API_KEY", "PRIVATE_KEY")
+_LEVEL_PATTERN = re.compile(
+    r"\b(DEBUG|INFO|WARN(?:ING)?|ERROR|CRITICAL|FATAL)\b", re.IGNORECASE
+)
+_SENSITIVE_ENV_MARKERS = (
+    "PASSWORD",
+    "PASSWD",
+    "TOKEN",
+    "SECRET",
+    "API_KEY",
+    "PRIVATE_KEY",
+)
 _MAX_LOG_EVENTS_PER_EVIDENCE = 200
 _MAX_CAPTURE_HASH_BYTES = 64 * 1024 * 1024
 
@@ -61,6 +69,7 @@ def _public_run(row: PcsRun) -> dict[str, Any]:
         "args": list(metadata.get("args") or []),
         "cwd": metadata.get("cwd", ""),
         "asset_refs": list(metadata.get("asset_refs") or []),
+        "lost_reason": metadata.get("lost_reason"),
     }
 
 
@@ -68,9 +77,7 @@ def _severity(stream: str, text: str) -> str:
     match = _LEVEL_PATTERN.search(text)
     if match:
         level = match.group(1).upper()
-        if level == "WARNING":
-            return "warning"
-        if level == "WARN":
+        if level in {"WARN", "WARNING"}:
             return "warning"
         if level in {"CRITICAL", "FATAL"}:
             return "critical"
@@ -79,7 +86,7 @@ def _severity(stream: str, text: str) -> str:
 
 
 class PcsControlService:
-    """PCS-specific semantics layered on EngineeringSession + NativeRuntime."""
+    """PCS semantics layered on EngineeringSession + ExecutionRuntime + evidence."""
 
     def __init__(
         self,
@@ -105,7 +112,9 @@ class PcsControlService:
         try:
             return PcsRuntimeControlConfig.model_validate(row.config or {})
         except Exception as exc:  # noqa: BLE001
-            raise PcsControlError(f"stored PCS runtime configuration is invalid: {exc}") from exc
+            raise PcsControlError(
+                f"stored PCS runtime configuration is invalid: {exc}"
+            ) from exc
 
     async def set_config(
         self, project_id: int, config: PcsRuntimeControlConfig | dict[str, Any]
@@ -121,7 +130,9 @@ class PcsControlService:
                 raise PcsControlError(f"project {project_id} not found")
             row = await session.get(PcsProjectControl, project_id)
             if row is None:
-                row = PcsProjectControl(project_id=project_id, config=validated.model_dump())
+                row = PcsProjectControl(
+                    project_id=project_id, config=validated.model_dump()
+                )
                 session.add(row)
             else:
                 row.config = validated.model_dump()
@@ -130,7 +141,7 @@ class PcsControlService:
         return validated
 
     def public_config(self, config: PcsRuntimeControlConfig) -> dict[str, Any]:
-        """MCP-safe config view: aliases and semantics, never external host roots."""
+        """MCP-safe config view: aliases/semantics, never external host roots/secrets."""
         return {
             "default_profile": config.default_profile,
             "profiles": {
@@ -139,7 +150,9 @@ class PcsControlService:
                     "args": list(profile.args),
                     "cwd": profile.cwd,
                     "environment_keys": sorted(profile.environment),
-                    "expected_ports": [item.model_dump() for item in profile.expected_ports],
+                    "expected_ports": [
+                        item.model_dump() for item in profile.expected_ports
+                    ],
                     "log_paths": list(profile.log_paths),
                     "crash_paths": list(profile.crash_paths),
                     "api_base_url": profile.api_base_url,
@@ -173,16 +186,6 @@ class PcsControlService:
                         f"profile {name!r} environment key {key!r} looks secret-bearing; "
                         "PCS runtime configuration is persisted and must not contain secrets"
                     )
-            if profile.api_base_url:
-                parsed = urlparse(profile.api_base_url)
-                if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
-                    "localhost",
-                    "127.0.0.1",
-                    "::1",
-                }:
-                    raise PcsControlError(
-                        f"profile {name!r} api_base_url must target localhost/loopback"
-                    )
 
     # ----------------------------------------------------------- permissions
 
@@ -200,6 +203,9 @@ class PcsControlService:
             )
         return row
 
+    async def has_active_run(self, session_id: int) -> bool:
+        return await self._latest_run(session_id, active_only=True) is not None
+
     async def _profile(
         self, engineering: EngineeringSession, profile_name: str | None
     ) -> tuple[PcsRuntimeControlConfig, str, PcsRunProfile]:
@@ -210,7 +216,9 @@ class PcsControlService:
         try:
             profile = config.profiles[selected]
         except KeyError as exc:
-            raise PcsControlError(f"PCS run profile {selected!r} is not configured") from exc
+            raise PcsControlError(
+                f"PCS run profile {selected!r} is not configured"
+            ) from exc
         return config, selected, profile
 
     # --------------------------------------------------------------- assets
@@ -230,7 +238,9 @@ class PcsControlService:
         root = Path(root_config.path).expanduser().resolve()
         candidate = Path(relative or ".")
         if candidate.is_absolute():
-            raise PcsControlError("asset paths must be relative to their configured root")
+            raise PcsControlError(
+                "asset paths must be relative to their configured root"
+            )
         target = (root / candidate).resolve()
         if not target.is_relative_to(root):
             raise PcsControlError("asset path escapes its configured root")
@@ -238,7 +248,8 @@ class PcsControlService:
             raise PcsControlError(f"PCS asset not found: {alias}:{relative}")
         return root, target
 
-    def _asset_descriptor(self, root: Path, target: Path) -> dict[str, Any]:
+    @staticmethod
+    def _asset_descriptor(root: Path, target: Path) -> dict[str, Any]:
         stat = target.stat()
         return {
             "path": target.relative_to(root).as_posix(),
@@ -287,7 +298,11 @@ class PcsControlService:
                 }
             )
         rows.sort(key=lambda item: item["path"])
-        return {"asset_root": alias, "entries": rows, "truncated": len(rows) >= bounded}
+        return {
+            "asset_root": alias,
+            "entries": rows,
+            "truncated": len(rows) >= bounded,
+        }
 
     async def asset_info(
         self,
@@ -342,14 +357,12 @@ class PcsControlService:
         self, session_id: int, *, active_only: bool = False
     ) -> PcsRun | None:
         async with self._session_factory() as session:
-            query = (
-                select(PcsRun)
-                .where(PcsRun.engineering_session_id == session_id)
-                .order_by(PcsRun.id.desc())
-                .limit(1)
+            query = select(PcsRun).where(
+                PcsRun.engineering_session_id == session_id
             )
             if active_only:
                 query = query.where(PcsRun.status.in_(_ACTIVE_RUN_STATUSES))
+            query = query.order_by(PcsRun.id.desc()).limit(1)
             return (await session.execute(query)).scalar_one_or_none()
 
     async def start(
@@ -364,7 +377,7 @@ class PcsControlService:
         engineering, runtime, worktree = await self._engineering_sessions.runtime_for(
             session_id, "process_control"
         )
-        if await self._latest_run(session_id, active_only=True) is not None:
+        if await self.has_active_run(session_id):
             raise PcsControlError(
                 "PCS is already managed as running for this EngineeringSession; use pcs.restart or pcs.stop"
             )
@@ -456,11 +469,18 @@ class PcsControlService:
         self._ensure_monitor(run_id)
 
         health = None
-        if wait_for_health and (profile.expected_ports or (profile.api_base_url and profile.health_path)):
+        if wait_for_health and (
+            profile.expected_ports
+            or (profile.api_base_url and profile.health_path)
+        ):
             health = await self._wait_for_health(
-                session_id, run_id, profile, profile.startup_timeout_seconds
+                session_id, run_id, profile.startup_timeout_seconds
             )
-        return {"run": await self.get_run(run_id), "health": health, "evidence_action_id": action_id}
+        return {
+            "run": await self.get_run(run_id),
+            "health": health,
+            "evidence_action_id": action_id,
+        }
 
     async def stop(
         self,
@@ -469,7 +489,7 @@ class PcsControlService:
         turn_id: str | None = None,
         action_id: str | None = None,
     ) -> dict[str, Any]:
-        engineering, runtime, _ = await self._engineering_sessions.runtime_for(
+        _, runtime, _ = await self._engineering_sessions.runtime_for(
             session_id, "process_control"
         )
         if turn_id:
@@ -487,19 +507,29 @@ class PcsControlService:
         try:
             snapshot = await runtime.stop_process(row.process_id)
         except RuntimeErrorBase as exc:
-            await self._mark_lost(row.id, str(exc), turn_id=turn_id, action_id=action_id)
+            await self._mark_lost(
+                row.id, str(exc), turn_id=turn_id, action_id=action_id
+            )
             raise PcsControlError(str(exc)) from exc
+        await self._persist_snapshot_tail(row, snapshot)
         await self._finalize_snapshot(row.id, snapshot, stopped=True)
         await self._evidence.record(
             session_id,
             category="pcs",
             operation="pcs.stop",
             status="COMPLETED",
-            payload={"run_id": row.id, "pid": row.pid, "exit_code": snapshot.returncode},
+            payload={
+                "run_id": row.id,
+                "pid": snapshot.pid,
+                "exit_code": snapshot.returncode,
+            },
             turn_id=turn_id,
             action_id=action_id,
         )
-        return {"run": await self.get_run(row.id), "evidence_action_id": action_id}
+        return {
+            "run": await self.get_run(row.id),
+            "evidence_action_id": action_id,
+        }
 
     async def restart(
         self,
@@ -523,31 +553,43 @@ class PcsControlService:
         result["restarted_from_run_id"] = previous.id if previous else None
         return result
 
-    async def get_run(self, run_id: int) -> dict[str, Any]:
+    async def _run_model(self, run_id: int) -> PcsRun:
         async with self._session_factory() as session:
             row = await session.get(PcsRun, run_id)
             if row is None:
                 raise PcsControlError(f"PCS run {run_id} not found")
-            return _public_run(row)
+            return row
+
+    async def get_run(self, run_id: int) -> dict[str, Any]:
+        return _public_run(await self._run_model(run_id))
+
+    async def _refresh_run(self, row: PcsRun) -> PcsRun:
+        if row.status not in _ACTIVE_RUN_STATUSES:
+            return row
+        try:
+            _, runtime, _ = await self._engineering_sessions.runtime_for(
+                row.engineering_session_id, "process_control"
+            )
+            snapshot = await runtime.process_output(
+                row.process_id,
+                cursor=row.output_cursor,
+                max_events=_MAX_LOG_EVENTS_PER_EVIDENCE,
+            )
+            if snapshot.output:
+                await self._persist_log_batch(row, snapshot.output, snapshot.next_cursor)
+            if not snapshot.running and len(snapshot.output) < _MAX_LOG_EVENTS_PER_EVIDENCE:
+                await self._finalize_snapshot(row.id, snapshot)
+        except (EngineeringSessionError, RuntimeErrorBase) as exc:
+            await self._mark_lost(row.id, str(exc))
+        return await self._run_model(row.id)
 
     async def status(self, session_id: int) -> dict[str, Any]:
         await self._session(session_id, "process_control")
         row = await self._latest_run(session_id)
         if row is None:
             return {"managed": False, "run": None}
-        if row.status in _ACTIVE_RUN_STATUSES:
-            try:
-                _, runtime, _ = await self._engineering_sessions.runtime_for(
-                    session_id, "process_control"
-                )
-                snapshot = await runtime.process_output(
-                    row.process_id, cursor=row.output_cursor, max_events=0
-                )
-                if not snapshot.running:
-                    await self._finalize_snapshot(row.id, snapshot)
-            except (EngineeringSessionError, RuntimeErrorBase) as exc:
-                await self._mark_lost(row.id, str(exc))
-        return {"managed": True, "run": await self.get_run(row.id)}
+        row = await self._refresh_run(row)
+        return {"managed": True, "run": _public_run(row)}
 
     # --------------------------------------------------------------- monitor
 
@@ -559,50 +601,31 @@ class PcsControlService:
     async def _monitor(self, run_id: int) -> None:
         try:
             while True:
-                async with self._session_factory() as session:
-                    row = await session.get(PcsRun, run_id)
-                    if row is None or row.status not in _ACTIVE_RUN_STATUSES:
-                        return
-                    session_id = row.engineering_session_id
-                    process_id = row.process_id
-                    cursor = row.output_cursor
-                    turn_id = row.turn_id
-                    action_id = row.start_action_id
+                row = await self._run_model(run_id)
+                if row.status not in _ACTIVE_RUN_STATUSES:
+                    return
                 try:
                     _, runtime, _ = await self._engineering_sessions.runtime_for(
-                        session_id, "process_control"
+                        row.engineering_session_id, "process_control"
                     )
                     snapshot = await runtime.process_output(
-                        process_id, cursor=cursor, max_events=_MAX_LOG_EVENTS_PER_EVIDENCE
+                        row.process_id,
+                        cursor=row.output_cursor,
+                        max_events=_MAX_LOG_EVENTS_PER_EVIDENCE,
                     )
                 except (EngineeringSessionError, RuntimeErrorBase) as exc:
-                    await self._mark_lost(
-                        run_id, str(exc), turn_id=turn_id, action_id=action_id
-                    )
+                    await self._mark_lost(run_id, str(exc))
                     return
 
                 if snapshot.output:
-                    structured = [self._log_event(item) for item in snapshot.output]
-                    await self._evidence.record(
-                        session_id,
-                        category="pcs_log",
-                        operation="pcs.log",
-                        status="RUNNING" if snapshot.running else "COMPLETED",
-                        payload={
-                            "run_id": run_id,
-                            "pid": snapshot.pid,
-                            "events": structured,
-                        },
-                        turn_id=turn_id,
-                        action_id=action_id,
+                    await self._persist_log_batch(
+                        row, snapshot.output, snapshot.next_cursor
                     )
-                    async with self._session_factory() as session:
-                        current = await session.get(PcsRun, run_id)
-                        if current:
-                            current.output_cursor = snapshot.next_cursor
-                            current.updated_at = _now()
-                            await session.commit()
                 if not snapshot.running:
+                    # Drain another batch when the final read filled the bound;
+                    # otherwise a burst immediately before exit could be lost.
+                    if len(snapshot.output) >= _MAX_LOG_EVENTS_PER_EVIDENCE:
+                        continue
                     await self._finalize_snapshot(run_id, snapshot)
                     return
                 await asyncio.sleep(0.2)
@@ -611,7 +634,8 @@ class PcsControlService:
         finally:
             self._monitors.pop(run_id, None)
 
-    def _log_event(self, item: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _log_event(item: dict[str, Any]) -> dict[str, Any]:
         stream = str(item.get("stream") or "stdout")
         text = str(item.get("text") or "")
         return {
@@ -622,6 +646,49 @@ class PcsControlService:
             "text": text,
         }
 
+    async def _persist_log_batch(
+        self, row: PcsRun, events: list[dict[str, Any]], next_cursor: int
+    ) -> None:
+        if not events:
+            return
+        await self._evidence.record(
+            row.engineering_session_id,
+            category="pcs_log",
+            operation="pcs.log",
+            status="RUNNING" if row.status in _ACTIVE_RUN_STATUSES else "COMPLETED",
+            payload={
+                "run_id": row.id,
+                "pid": row.pid,
+                "events": [self._log_event(item) for item in events],
+            },
+            turn_id=row.turn_id,
+            action_id=row.start_action_id,
+        )
+        async with self._session_factory() as session:
+            current = await session.get(PcsRun, row.id)
+            if current:
+                current.output_cursor = max(current.output_cursor, next_cursor)
+                current.updated_at = _now()
+                await session.commit()
+
+    async def _persist_snapshot_tail(
+        self, row: PcsRun, snapshot: ProcessSnapshot
+    ) -> None:
+        # stop_process returns the complete bounded native output buffer. Persist
+        # only events the background monitor has not already committed.
+        pending = [
+            item
+            for item in snapshot.output
+            if int(item.get("seq", -1)) >= int(row.output_cursor)
+        ]
+        if not pending:
+            return
+        for offset in range(0, len(pending), _MAX_LOG_EVENTS_PER_EVIDENCE):
+            chunk = pending[offset : offset + _MAX_LOG_EVENTS_PER_EVIDENCE]
+            next_cursor = int(chunk[-1].get("seq", row.output_cursor)) + 1
+            await self._persist_log_batch(row, chunk, next_cursor)
+            row.output_cursor = next_cursor
+
     async def _finalize_snapshot(
         self, run_id: int, snapshot: ProcessSnapshot, *, stopped: bool = False
     ) -> None:
@@ -630,8 +697,10 @@ class PcsControlService:
                 row = await session.get(PcsRun, run_id)
                 if row is None or row.status in _FINAL_RUN_STATUSES:
                     return
-                status = "STOPPED" if stopped else (
-                    "EXITED" if snapshot.returncode in {None, 0} else "CRASHED"
+                status = (
+                    "STOPPED"
+                    if stopped
+                    else ("EXITED" if snapshot.returncode in {None, 0} else "CRASHED")
                 )
                 row.status = status
                 row.exit_code = snapshot.returncode
@@ -664,7 +733,7 @@ class PcsControlService:
             await self._evidence.record(
                 session_id,
                 category="pcs",
-                operation="pcs.exit" if not stopped else "pcs.stopped",
+                operation="pcs.stopped" if stopped else "pcs.exit",
                 status="FAILED" if status == "CRASHED" else "COMPLETED",
                 payload={
                     "run_id": run_id,
@@ -677,7 +746,8 @@ class PcsControlService:
                 action_id=action_id,
             )
 
-    def _capture_paths(self, worktree: Path, paths: list[str]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _capture_paths(worktree: Path, paths: list[str]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         root = worktree.resolve()
         for relative in paths:
@@ -717,7 +787,10 @@ class PcsControlService:
             row.status = "LOST"
             row.finished_at = _now()
             row.updated_at = _now()
-            row.metadata_json = {**dict(row.metadata_json or {}), "lost_reason": reason}
+            row.metadata_json = {
+                **dict(row.metadata_json or {}),
+                "lost_reason": reason,
+            }
             session_id = row.engineering_session_id
             turn_id = turn_id or row.turn_id
             action_id = action_id or row.start_action_id
@@ -773,14 +846,20 @@ class PcsControlService:
                     continue
                 if source and str(event.get("source")) != source:
                     continue
-                if contains and contains.lower() not in str(event.get("text") or "").lower():
+                if contains and contains.lower() not in str(
+                    event.get("text") or ""
+                ).lower():
                     continue
                 events.append({"evidence_id": row.id, **dict(event)})
                 if len(events) >= bounded:
                     break
             if len(events) >= bounded:
                 break
-        return {"events": events, "next_after_id": latest_id, "truncated": len(events) >= bounded}
+        return {
+            "events": events,
+            "next_after_id": latest_id,
+            "truncated": len(events) >= bounded,
+        }
 
     # --------------------------------------------------------------- health
 
@@ -788,15 +867,25 @@ class PcsControlService:
         self, session_id: int, *, run_id: int | None = None
     ) -> dict[str, Any]:
         engineering = await self._session(session_id, "process_control")
-        row = await self._latest_run(session_id) if run_id is None else await self._run_model(run_id)
+        row = (
+            await self._latest_run(session_id)
+            if run_id is None
+            else await self._run_model(run_id)
+        )
         if row is None:
-            return {"ready": False, "process": {"state": "not_started"}, "checks": []}
+            return {
+                "ready": False,
+                "process": {"state": "not_started"},
+                "checks": [],
+            }
         if row.engineering_session_id != session_id:
-            raise PcsControlError("PCS run does not belong to this EngineeringSession")
-        config, _, profile = await self._profile(engineering, row.profile_name)
-        status = await self.status(session_id)
-        public_run = status.get("run") if status.get("run", {}).get("id") == row.id else await self.get_run(row.id)
-        process_running = public_run["status"] in _ACTIVE_RUN_STATUSES
+            raise PcsControlError(
+                "PCS run does not belong to this EngineeringSession"
+            )
+        _, _, profile = await self._profile(engineering, row.profile_name)
+        row = await self._refresh_run(row)
+        public_run = _public_run(row)
+        process_running = row.status in _ACTIVE_RUN_STATUSES
         checks: list[dict[str, Any]] = []
         for check in profile.expected_ports:
             reachable = await self._port_open(check.host, check.port)
@@ -811,7 +900,9 @@ class PcsControlService:
             )
         if profile.api_base_url and profile.health_path:
             api = await self._api_get(profile, profile.health_path)
-            checks.append({"type": "pcs_api", "name": "PCS API health", **api})
+            checks.append(
+                {"type": "pcs_api", "name": "PCS API health", **api}
+            )
         ready = process_running and all(bool(item.get("ok")) for item in checks)
         if not checks:
             ready = process_running
@@ -821,7 +912,6 @@ class PcsControlService:
         self,
         session_id: int,
         run_id: int,
-        profile: PcsRunProfile,
         timeout_seconds: int,
     ) -> dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -836,9 +926,10 @@ class PcsControlService:
             await asyncio.sleep(0.25)
         return {**last, "ready": False, "startup_timeout": True}
 
-    async def _port_open(self, host: str, port: int) -> bool:
+    @staticmethod
+    async def _port_open(host: str, port: int) -> bool:
         try:
-            reader, writer = await asyncio.wait_for(
+            _reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port), timeout=1.0
             )
             writer.close()
@@ -847,11 +938,16 @@ class PcsControlService:
         except (OSError, asyncio.TimeoutError):
             return False
 
-    async def _api_get(self, profile: PcsRunProfile, path: str) -> dict[str, Any]:
+    @staticmethod
+    async def _api_get(profile: PcsRunProfile, path: str) -> dict[str, Any]:
         assert profile.api_base_url is not None
-        url = urljoin(profile.api_base_url.rstrip("/") + "/", path.lstrip("/"))
+        url = urljoin(
+            profile.api_base_url.rstrip("/") + "/", path.lstrip("/")
+        )
         try:
-            async with httpx.AsyncClient(timeout=2.0, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=2.0, follow_redirects=False
+            ) as client:
                 response = await client.get(url)
             content_type = response.headers.get("content-type", "")
             body: Any
@@ -873,7 +969,11 @@ class PcsControlService:
         self, session_id: int, *, run_id: int | None = None
     ) -> dict[str, Any]:
         engineering = await self._session(session_id, "process_control")
-        row = await self._latest_run(session_id) if run_id is None else await self._run_model(run_id)
+        row = (
+            await self._latest_run(session_id)
+            if run_id is None
+            else await self._run_model(run_id)
+        )
         if row is None:
             return {
                 "source": "sceneworks_process",
@@ -882,9 +982,12 @@ class PcsControlService:
                 "state": {},
             }
         if row.engineering_session_id != session_id:
-            raise PcsControlError("PCS run does not belong to this EngineeringSession")
+            raise PcsControlError(
+                "PCS run does not belong to this EngineeringSession"
+            )
         _, _, profile = await self._profile(engineering, row.profile_name)
-        process = (await self.status(session_id)).get("run")
+        row = await self._refresh_run(row)
+        process = _public_run(row)
         if profile.api_base_url and profile.runtime_state_path:
             api = await self._api_get(profile, profile.runtime_state_path)
             return {
@@ -907,7 +1010,10 @@ class PcsControlService:
                 "errors": None,
                 "warnings": None,
             },
-            "limitations": "PCS semantic runtime state requires a configured PCS API runtime_state_path",
+            "limitations": (
+                "PCS semantic runtime state requires a configured PCS API "
+                "runtime_state_path"
+            ),
         }
 
     # -------------------------------------------------------------- runbooks
@@ -927,7 +1033,9 @@ class PcsControlService:
         try:
             runbook = config.runbooks[runbook_name]
         except KeyError as exc:
-            raise PcsControlError(f"PCS verification runbook {runbook_name!r} is not configured") from exc
+            raise PcsControlError(
+                f"PCS verification runbook {runbook_name!r} is not configured"
+            ) from exc
         action_id = action_id or uuid.uuid4().hex
         results: list[dict[str, Any]] = []
         overall = True
@@ -981,39 +1089,58 @@ class PcsControlService:
         action_id: str,
     ) -> dict[str, Any]:
         action = step["action"]
-        if action == "start":
-            result = await self.start(
-                session_id,
-                profile_name=step.get("profile"),
-                turn_id=turn_id,
-                action_id=action_id,
+        if action in {"start", "restart"}:
+            result = (
+                await self.start(
+                    session_id,
+                    profile_name=step.get("profile"),
+                    turn_id=turn_id,
+                    action_id=action_id,
+                )
+                if action == "start"
+                else await self.restart(
+                    session_id,
+                    profile_name=step.get("profile"),
+                    turn_id=turn_id,
+                    action_id=action_id,
+                )
             )
-            return {"ok": True, "run": result.get("run"), "health": result.get("health")}
+            health = result.get("health")
+            ok = health is None or bool(health.get("ready"))
+            return {
+                "ok": ok,
+                "run": result.get("run"),
+                "health": health,
+            }
         if action == "stop":
-            result = await self.stop(session_id, turn_id=turn_id, action_id=action_id)
-            return {"ok": True, "run": result.get("run")}
-        if action == "restart":
-            result = await self.restart(
-                session_id,
-                profile_name=step.get("profile"),
-                turn_id=turn_id,
-                action_id=action_id,
+            result = await self.stop(
+                session_id, turn_id=turn_id, action_id=action_id
             )
-            return {"ok": True, "run": result.get("run"), "health": result.get("health")}
+            return {"ok": True, "run": result.get("run")}
         if action == "health":
             result = await self.health(session_id)
             return {"ok": bool(result.get("ready")), "health": result}
         if action == "runtime_state":
-            return {"ok": True, "runtime_state": await self.runtime_state(session_id)}
+            return {
+                "ok": True,
+                "runtime_state": await self.runtime_state(session_id),
+            }
         if action == "command":
-            engineering, runtime, worktree = await self._engineering_sessions.runtime_for(
-                session_id, "shell_execute"
+            engineering, runtime, worktree = (
+                await self._engineering_sessions.runtime_for(
+                    session_id, "shell_execute"
+                )
             )
             profile = config.profiles.get(step.get("profile") or "")
             environment = profile.environment if profile else None
-            allow_assets = "external_asset_read" in set(engineering.permissions or [])
+            cwd = str(step.get("cwd") or (profile.cwd if profile else ""))
+            allow_assets = "external_asset_read" in set(
+                engineering.permissions or []
+            )
             args, asset_refs = self._expand_asset_args(
-                config, list(step.get("args") or []), allow_assets=allow_assets
+                config,
+                list(step.get("args") or []),
+                allow_assets=allow_assets,
             )
             started = _now()
             try:
@@ -1021,7 +1148,7 @@ class PcsControlService:
                     worktree,
                     str(step.get("command") or ""),
                     args,
-                    cwd=str(step.get("cwd") or ""),
+                    cwd=cwd,
                     timeout=int(step.get("timeout_seconds") or 300),
                     environment=environment,
                 )
@@ -1031,7 +1158,7 @@ class PcsControlService:
                     "step": index,
                     "command": step.get("command"),
                     "args": list(step.get("args") or []),
-                    "cwd": step.get("cwd") or "",
+                    "cwd": cwd,
                     "exit_code": result.returncode,
                     "stdout": result.stdout,
                     "stderr": result.stderr,
@@ -1055,7 +1182,7 @@ class PcsControlService:
                     "step": index,
                     "command": step.get("command"),
                     "args": list(step.get("args") or []),
-                    "cwd": step.get("cwd") or "",
+                    "cwd": cwd,
                     **dict(exc.evidence or {}),
                     "error": str(exc),
                     "asset_refs": asset_refs,
@@ -1076,20 +1203,15 @@ class PcsControlService:
 
     # -------------------------------------------------------------- recovery
 
-    async def _run_model(self, run_id: int) -> PcsRun:
-        async with self._session_factory() as session:
-            row = await session.get(PcsRun, run_id)
-            if row is None:
-                raise PcsControlError(f"PCS run {run_id} not found")
-            return row
-
     async def recover_interrupted(self) -> list[int]:
-        recovered: list[int] = []
+        recovered: list[tuple[int, int, str | None, str | None]] = []
         async with self._session_factory() as session:
             rows = list(
                 (
                     await session.execute(
-                        select(PcsRun).where(PcsRun.status.in_(_ACTIVE_RUN_STATUSES))
+                        select(PcsRun).where(
+                            PcsRun.status.in_(_ACTIVE_RUN_STATUSES)
+                        )
                     )
                 ).scalars().all()
             )
@@ -1099,20 +1221,50 @@ class PcsControlService:
                 row.updated_at = _now()
                 row.metadata_json = {
                     **dict(row.metadata_json or {}),
-                    "lost_reason": "SceneWorks restarted; native process handles are not recoverable",
+                    "lost_reason": (
+                        "SceneWorks restarted; native process handles are not recoverable"
+                    ),
                 }
-                recovered.append(row.id)
+                recovered.append(
+                    (
+                        row.id,
+                        row.engineering_session_id,
+                        row.turn_id,
+                        row.start_action_id,
+                    )
+                )
             if rows:
                 await session.commit()
-        return recovered
+        for run_id, session_id, turn_id, action_id in recovered:
+            try:
+                await self._evidence.record(
+                    session_id,
+                    category="pcs",
+                    operation="pcs.lost",
+                    status="FAILED",
+                    payload={
+                        "run_id": run_id,
+                        "error": (
+                            "SceneWorks restarted; native process handles are not recoverable"
+                        ),
+                    },
+                    turn_id=turn_id,
+                    action_id=action_id,
+                )
+            except Exception:
+                # Recovery must not make application startup fail because an old
+                # evidence correlation record is itself damaged.
+                pass
+        return [item[0] for item in recovered]
 
     async def shutdown(self) -> None:
-        active: list[PcsRun]
         async with self._session_factory() as session:
             active = list(
                 (
                     await session.execute(
-                        select(PcsRun).where(PcsRun.status.in_(_ACTIVE_RUN_STATUSES))
+                        select(PcsRun).where(
+                            PcsRun.status.in_(_ACTIVE_RUN_STATUSES)
+                        )
                     )
                 ).scalars().all()
             )
@@ -1125,5 +1277,7 @@ class PcsControlService:
             if not task.done():
                 task.cancel()
         if self._monitors:
-            await asyncio.gather(*self._monitors.values(), return_exceptions=True)
+            await asyncio.gather(
+                *self._monitors.values(), return_exceptions=True
+            )
         self._monitors.clear()
