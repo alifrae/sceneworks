@@ -1,4 +1,4 @@
-"""Durable, provider-neutral evidence ledger for EngineeringSessions (WP15)."""
+"""Durable, provider-neutral evidence ledger for EngineeringSessions (WP15/WP16)."""
 
 from __future__ import annotations
 
@@ -141,8 +141,18 @@ class EngineeringEvidenceService:
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> EngineeringEvidence:
+        """Persist one evidence row while preserving causal action correlation.
+
+        Evidence ``action_id`` remains unique per row. Long-lived semantic
+        operations can produce later observations caused by the same initiating
+        action (for example PCS start -> log chunks -> exit). If the supplied
+        action id already exists, the derived observation gets a fresh action id
+        and records the original as ``caused_by_action_id``.
+        """
+        requested_action_id = action_id
         action_id = action_id or uuid.uuid4().hex
         category = category.strip().lower()
+        raw_payload = dict(payload or {})
         async with self._session_factory() as session:
             engineering = await session.get(EngineeringSession, session_id)
             if engineering is None:
@@ -155,6 +165,17 @@ class EngineeringEvidenceService:
                     raise EngineeringEvidenceError(
                         "turn does not belong to this engineering session"
                     )
+            if requested_action_id:
+                existing = (
+                    await session.execute(
+                        select(EngineeringEvidence.id)
+                        .where(EngineeringEvidence.action_id == requested_action_id)
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    raw_payload.setdefault("caused_by_action_id", requested_action_id)
+                    action_id = uuid.uuid4().hex
             row = EngineeringEvidence(
                 engineering_session_id=session_id,
                 task_id=engineering.task_id,
@@ -165,7 +186,7 @@ class EngineeringEvidenceService:
                 status=status.strip().upper(),
                 started_at=started_at or _now(),
                 finished_at=finished_at or _now(),
-                payload=_bounded_payload(_sanitize_payload(category, payload or {})),
+                payload=_bounded_payload(_sanitize_payload(category, raw_payload)),
             )
             session.add(row)
             await session.commit()
