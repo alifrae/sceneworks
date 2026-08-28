@@ -40,6 +40,18 @@ class Workspace:
     permissions: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class AgentAttachment:
+    """Provider-neutral immutable task context for one execution."""
+
+    id: int
+    filename: str
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    data: bytes
+
+
 @dataclass
 class AgentRequest:
     execution_id: str
@@ -50,6 +62,7 @@ class AgentRequest:
     # when the Execution row was created (WP8).
     model_profile: str | None = None
     model: str | None = None
+    attachments: tuple[AgentAttachment, ...] = ()
     metadata: dict = field(default_factory=dict)
 
 
