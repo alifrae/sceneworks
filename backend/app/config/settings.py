@@ -46,13 +46,15 @@ class Settings(BaseSettings):
     # managed repository. Relative paths resolve against the backend cwd.
     worktree_root: Path = Path("data/worktrees")
 
-    # SceneWorks-owned task context. Attachments are deliberately outside every
-    # managed repository/worktree and are referenced by immutable hashes.
+    # SceneWorks-owned task context and durable GUI evidence. Both live outside
+    # managed repositories/worktrees under the same project-scoped storage root
+    # so project purge can remove them together without touching user assets.
     attachment_root: Path = Path("data/attachments")
     attachment_max_bytes: int = 20_000_000
     attachment_task_max_bytes: int = 50_000_000
     attachment_task_max_count: int = 8
     mcp_attachment_max_bytes: int = 5_000_000
+    gui_screenshot_max_bytes: int = 8_000_000
 
     # Provider-neutral role intent -> concrete backend/model mapping (WP8).
     model_profile_routes: dict[str, ModelProfileRoute] = Field(default_factory=dict)
@@ -88,7 +90,7 @@ class Settings(BaseSettings):
     # observe  -> semantic read tools only;
     # standard -> governed SceneWorks actions (tasks/roles/workflows);
     # advanced -> standard plus provider-neutral EngineeringSessions exposing
-    #             SceneWorks-owned workspace/command/process/Git/PCS capabilities.
+    #             SceneWorks-owned workspace/command/process/Git/PCS/GUI evidence.
     mcp_enabled: bool = True
     mcp_mode: Literal["observe", "standard", "advanced"] = "observe"
     mcp_allow_actions: bool = False
@@ -102,6 +104,7 @@ class Settings(BaseSettings):
             "network_access",
             "agent_delegate",
             "external_asset_read",
+            "gui_observe",
             "subagents",
         ]
     )
