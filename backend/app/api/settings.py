@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.agents.model_routing import ModelRouter
 from app.agents.registry import BackendRegistry
 from app.api.deps import get_context
 from app.context import AppContext
 from app.git.workspace import GitWorktreeService
 from app.schemas import BackendOut, RoleOut, SettingsOut, SettingsUpdate
+from app.services.engineering_sessions import EngineeringSessionService
 from app.services.settings import ADVANCED_PERMISSIONS, MCP_MODES, apply_overrides
 
 backends_router = APIRouter(prefix="/api/backends", tags=["backends"])
@@ -53,6 +55,9 @@ async def get_settings(ctx: AppContext = Depends(get_context)) -> SettingsOut:
         gemini_executable=settings.gemini_executable,
         gemini_model=settings.gemini_model,
         gemini_extra_args=list(settings.gemini_extra_args),
+        opencode_executable=settings.opencode_executable,
+        opencode_model=settings.opencode_model,
+        opencode_agent=settings.opencode_agent,
         model_profile_routes={
             profile: route.model_dump()
             for profile, route in settings.model_profile_routes.items()
@@ -90,12 +95,20 @@ async def get_mcp_settings(ctx: AppContext = Depends(get_context)) -> dict:
         "tool_max_chars": settings.mcp_tool_max_chars,
         "advanced_session_permissions": list(settings.advanced_session_permissions),
         "available_advanced_permissions": sorted(ADVANCED_PERMISSIONS),
+        "available_runtimes": ctx.runtimes.keys(),
+        "available_backends": [key for key in ctx.backends.keys() if key != "fake"],
+        "default_backend": settings.default_backend,
         "action_tools_enabled": mode in {"standard", "advanced"},
         "advanced_agent_sessions_enabled": mode == "advanced",
+        "direct_engineering_sessions_enabled": mode == "advanced",
+        "semantic_pcs_control_enabled": mode == "advanced",
         "advanced_warning": (
-            "Advanced mode lets ChatGPT supervise Gemini CLI in an isolated Git "
-            "worktree. File access is worktree-confined, but shell execution is "
-            "not an OS sandbox and runs with the SceneWorks user's OS authority."
+            "Advanced mode gives the MCP client SceneWorks-owned repository, command, "
+            "process, Git and semantic PCS capabilities. Worktree paths are confined; "
+            "external PCS assets require an explicit project alias plus external_asset_read. "
+            "Command/process execution is not an OS sandbox and runs with the SceneWorks "
+            "user's OS authority; shell-capable processes may also access the network unless "
+            "the host is sandboxed separately."
         ),
     }
 
@@ -131,7 +144,6 @@ async def update_mcp_settings(
                 detail="mcp_mode must be one of: observe, standard, advanced",
             )
         patch["mcp_mode"] = mode
-        # New explicit mode selection supersedes the prototype compatibility flag.
         ctx.settings.mcp_allow_actions = False
     if "mcp_tool_max_chars" in body:
         try:
@@ -169,15 +181,44 @@ async def update_mcp_settings(
 
 
 async def _apply_patch(ctx: AppContext, patch: dict) -> None:
+    """Apply persisted operational settings to every live consumer.
+
+    WP13 rebuilt ``ctx.backends`` but left ExecutionEngine and workflow services
+    pointing at the old registry/router. WP14 rewires the dependency graph and
+    WP16 keeps the PCS semantic adapter attached to the rebuilt EngineeringSession
+    service as well.
+    """
     overrides = await ctx.settings_store.update(patch)
     ctx.settings_overrides = overrides
-    # apply_overrides mutates the shared Settings instance. Existing model
-    # routers and the Advanced session service therefore see route/policy changes
-    # without rewriting persisted executions/sessions.
     ctx.settings = apply_overrides(ctx.settings, overrides)
-    ctx.git = GitWorktreeService(ctx.settings)
+
+    new_git = GitWorktreeService(ctx.settings)
+    new_backends = BackendRegistry(ctx.settings)
+    new_router = ModelRouter(ctx.settings, new_backends.keys())
+
     await ctx.backends.shutdown()
-    ctx.backends = BackendRegistry(ctx.settings)
+    ctx.git = new_git
+    ctx.backends = new_backends
+    ctx.model_router = new_router
+
+    ctx.execution_engine._backends = new_backends
+    ctx.execution_engine._settings = ctx.settings
+    ctx.workflow._git = new_git
+    ctx.workflow._settings = ctx.settings
+    ctx.workflow._model_router = new_router
+    ctx.workflow_manager._git = new_git
+    ctx.workflow_manager._settings = ctx.settings
+    ctx.workflow_manager._runtime._git = new_git
+    ctx.workflow_manager._runtime._model_router = new_router
+    ctx.workflow_manager._roles_runtime._git = new_git
+    ctx.workflow_manager._advisory_runtime._git = new_git
+    ctx.agent_sessions._git = new_git
+    ctx.agent_sessions._settings = ctx.settings
+    ctx.engineering_sessions = EngineeringSessionService(
+        ctx.engine_factory, new_git, ctx.runtimes, ctx.settings
+    )
+    ctx.pcs_control._engineering_sessions = ctx.engineering_sessions
+
     ctx.roles.set_default_backend(
         ctx.settings.default_backend
         if ctx.settings.default_backend != "gemini_acp"

@@ -10,6 +10,7 @@ from app.agents.fake import FakeAgentBackend
 from app.agents.gemini_acp import GeminiACPBackend
 from app.agents.gemini_acp_attachments import AttachmentAwareGeminiACPBackend
 from app.agents.openhands import OpenHandsBackend
+from app.agents.opencode import OpenCodeBackend
 from app.config.settings import Settings
 
 HEALTH_CACHE_SECONDS = 60.0
@@ -34,10 +35,9 @@ class _FixedModelOpenHandsBackend(OpenHandsBackend):
 class _ExecutionModelProxy:
     """Bind AgentRequest.model to a provider instance for one execution.
 
-    The normal backends remain unaware of SceneWorks profile routing. This proxy
-    constructs an execution-scoped provider instance when a concrete model was
-    persisted on the Execution row, and keeps that exact instance available to
-    cancellation while the run is active.
+    Gemini and OpenHands take their model primarily from provider construction;
+    the proxy creates an execution-scoped provider instance. OpenCode consumes
+    ``AgentRequest.model`` directly and therefore needs no proxy.
     """
 
     def __init__(self, base: AgentBackend, settings: Settings):
@@ -92,6 +92,7 @@ class BackendRegistry:
         self._settings = settings
         self._backends: dict[str, AgentBackend] = {
             "gemini_acp": AttachmentAwareGeminiACPBackend(settings),
+            "opencode": OpenCodeBackend(settings),
         }
         if include_openhands:
             self._backends["openhands"] = OpenHandsBackend(settings)
@@ -131,23 +132,16 @@ class BackendRegistry:
         return list(self._backends.keys())
 
     async def shutdown(self) -> None:
-        """Cancel any stale-while-revalidate health work owned by this registry."""
+        """Cancel stale health work and backend-owned active work."""
         task = self._refresh_task
-        if task is None or task.done():
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     def _cold_health(self) -> list[BackendHealth]:
-        """Return truthful cheap state while provider probes run in background.
-
-        The scripted backend has no external dependency, so reporting it as
-        unavailable during a slow Gemini/OpenHands probe is simply wrong. Real
-        providers stay explicitly in a probing state until their checks finish.
-        """
         healths: list[BackendHealth] = []
         for key, backend in self._backends.items():
             if isinstance(backend, FakeAgentBackend):
@@ -172,7 +166,6 @@ class BackendRegistry:
         return healths
 
     async def health_all(self, force: bool = False) -> list[BackendHealth]:
-        """Health of every backend, served stale-while-revalidate."""
         if force:
             return await self._probe()
 
@@ -212,7 +205,7 @@ class BackendRegistry:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - health must isolate providers
+        except Exception as exc:  # noqa: BLE001
             return BackendHealth(
                 key=key,
                 label=getattr(backend, "label", key),
@@ -222,8 +215,6 @@ class BackendRegistry:
 
     async def _probe(self) -> list[BackendHealth]:
         async with self._health_lock:
-            # Providers are independent. Sequential probing allowed one slow or
-            # broken provider to keep every backend (including Fake) red.
             healths = await asyncio.gather(
                 *(
                     self._probe_one(key, backend)

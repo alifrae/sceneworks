@@ -10,6 +10,11 @@ from sqlalchemy import delete as sa_delete, func, or_, select
 
 from app.api.deps import get_context
 from app.context import AppContext
+from app.engineering_models import (
+    EngineeringEvidence,
+    EngineeringSession,
+    EngineeringTurn,
+)
 from app.git.workspace import GitError
 from app.models import (
     AgentSession,
@@ -23,6 +28,7 @@ from app.models import (
     TaskAttachment,
     WorkPackage,
 )
+from app.pcs_models import PcsProjectControl, PcsRun
 from app.schemas import (
     ProjectCreate,
     ProjectOut,
@@ -47,7 +53,17 @@ ACTIVE_TASK_STATES = {
     "CHANGES_REQUESTED",
     "READY_FOR_HUMAN",
 }
+COUNTED_ACTIVE_TASK_STATES = {
+    "ARCHITECTURE_ANALYSIS",
+    "READY_TO_IMPLEMENT",
+    "IMPLEMENTING",
+    "TESTING",
+    "REVIEWING",
+    "CHANGES_REQUESTED",
+}
 ACTIVE_SESSION_STATES = {"STARTING", "READY", "RUNNING"}
+ACTIVE_ENGINEERING_SESSION_STATES = {"STARTING", "ACTIVE"}
+ACTIVE_PCS_RUN_STATES = {"STARTING", "RUNNING", "STOPPING"}
 
 
 class ProjectPolicyBody(BaseModel):
@@ -70,7 +86,7 @@ async def _to_out(ctx: AppContext, project: Project) -> ProjectOut:
             await session.execute(
                 select(func.count(Task.id)).where(
                     Task.project_id == project.id,
-                    Task.status.in_(["NEW", "ARCHITECTURE_ANALYSIS", "READY_TO_IMPLEMENT", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED"]),
+                    Task.status.in_(COUNTED_ACTIVE_TASK_STATES),
                 )
             )
         ).scalar() or 0
@@ -95,7 +111,7 @@ async def list_projects(limit: int = 200, ctx: AppContext = Depends(get_context)
                     select(Task.project_id, func.count(Task.id))
                     .where(
                         Task.project_id.in_(project_ids),
-                        Task.status.in_(["NEW", "ARCHITECTURE_ANALYSIS", "READY_TO_IMPLEMENT", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED"]),
+                        Task.status.in_(COUNTED_ACTIVE_TASK_STATES),
                     )
                     .group_by(Task.project_id)
                 )
@@ -242,12 +258,7 @@ async def project_provenance(
     limit: int = 100,
     ctx: AppContext = Depends(get_context),
 ) -> ProjectProvenanceOut:
-    """Answer which previous SceneWorks tasks changed a given repository path.
-
-    When ``path`` is omitted the endpoint returns recent persisted provenance for
-    the project. Results survive worktree cleanup because changed paths are
-    captured from Git when implementation completes.
-    """
+    """Answer which previous SceneWorks tasks changed a given repository path."""
     async with ctx.engine_factory() as session:
         if await session.get(Project, project_id) is None:
             raise HTTPException(404, "project not found")
@@ -260,7 +271,7 @@ async def project_provenance(
 
 
 async def _purge_project_history(session, project_id: int) -> None:
-    """Delete SceneWorks-owned records for a project, never repository files."""
+    """Delete SceneWorks-owned records for a project, never repository/assets."""
     task_ids = list(
         (await session.execute(select(Task.id).where(Task.project_id == project_id))).scalars()
     )
@@ -273,6 +284,16 @@ async def _purge_project_history(session, project_id: int) -> None:
                 )
             ).scalars()
         )
+
+    engineering_session_ids = list(
+        (
+            await session.execute(
+                select(EngineeringSession.id).where(
+                    EngineeringSession.project_id == project_id
+                )
+            )
+        ).scalars()
+    )
 
     initiative_ids = list(
         (
@@ -301,6 +322,30 @@ async def _purge_project_history(session, project_id: int) -> None:
     if event_filters:
         await session.execute(sa_delete(Event).where(or_(*event_filters)))
 
+    # PCS runs reference EngineeringSessions/Turns/Tasks, so remove them before
+    # the evidence/session/task domains. External asset roots are configuration
+    # only; their files are never touched by project deletion.
+    await session.execute(sa_delete(PcsRun).where(PcsRun.project_id == project_id))
+    if engineering_session_ids:
+        await session.execute(
+            sa_delete(EngineeringEvidence).where(
+                EngineeringEvidence.engineering_session_id.in_(engineering_session_ids)
+            )
+        )
+        await session.execute(
+            sa_delete(EngineeringTurn).where(
+                EngineeringTurn.engineering_session_id.in_(engineering_session_ids)
+            )
+        )
+        await session.execute(
+            sa_delete(EngineeringSession).where(
+                EngineeringSession.id.in_(engineering_session_ids)
+            )
+        )
+
+    await session.execute(
+        sa_delete(PcsProjectControl).where(PcsProjectControl.project_id == project_id)
+    )
     await session.execute(
         sa_delete(ProjectMemory).where(ProjectMemory.project_id == project_id)
     )
@@ -335,18 +380,41 @@ async def delete_project(
     force: bool = False,
     ctx: AppContext = Depends(get_context),
 ) -> None:
-    """Unregister a project without ever touching its Git repository.
+    """Unregister a project without touching its repository or external assets.
 
-    By default deletion is allowed only when no SceneWorks-owned history exists.
-    ``purge_history=true`` also deletes terminal project history. Active tasks or
-    agent sessions still block deletion unless ``force=true`` is explicitly
-    supplied; force is intended for deterministic test-artifact cleanup.
+    Historical records require ``purge_history=true``. ``force`` keeps its
+    legacy meaning for task/provider-session test cleanup, but active direct
+    EngineeringSessions or managed PCS processes always require explicit
+    closure/stop first: deleting their authority record while the OS process or
+    worktree remains live would create an orphaned control surface.
     """
     purged = False
     async with ctx.engine_factory() as session:
         project = await session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "project not found")
+
+        active_engineering_count = (
+            await session.execute(
+                select(func.count(EngineeringSession.id)).where(
+                    EngineeringSession.project_id == project_id,
+                    EngineeringSession.status.in_(ACTIVE_ENGINEERING_SESSION_STATES),
+                )
+            )
+        ).scalar() or 0
+        active_pcs_count = (
+            await session.execute(
+                select(func.count(PcsRun.id)).where(
+                    PcsRun.project_id == project_id,
+                    PcsRun.status.in_(ACTIVE_PCS_RUN_STATES),
+                )
+            )
+        ).scalar() or 0
+        if active_engineering_count or active_pcs_count:
+            raise HTTPException(
+                409,
+                "cannot delete project while it has an active EngineeringSession or managed PCS run; stop PCS and close the session first",
+            )
 
         active_task_count = (
             await session.execute(
@@ -407,11 +475,33 @@ async def delete_project(
                 )
             ).scalar()
             or 0,
+            (
+                await session.execute(
+                    select(func.count(EngineeringSession.id)).where(
+                        EngineeringSession.project_id == project_id
+                    )
+                )
+            ).scalar()
+            or 0,
+            (
+                await session.execute(
+                    select(func.count(PcsProjectControl.project_id)).where(
+                        PcsProjectControl.project_id == project_id
+                    )
+                )
+            ).scalar()
+            or 0,
+            (
+                await session.execute(
+                    select(func.count(PcsRun.id)).where(PcsRun.project_id == project_id)
+                )
+            ).scalar()
+            or 0,
         ]
         if any(dependent_counts) and not purge_history:
             raise HTTPException(
                 409,
-                "project has SceneWorks history; retry with purge_history=true to delete it",
+                "project has SceneWorks history/configuration; retry with purge_history=true to delete it",
             )
 
         if purge_history:

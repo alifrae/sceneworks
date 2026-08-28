@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from pathlib import Path
 
 from sqlalchemy import event
@@ -35,7 +34,6 @@ def create_engine_and_sessionmaker(
     connect_args: dict = {}
     if url.startswith("sqlite"):
         connect_args = {"timeout": 30}
-        # Enable WAL for SQLite so reads do not block the writer.
         event.listen(
             __import__("sqlalchemy").engine.Engine, "connect", _set_sqlite_pragma
         )
@@ -46,21 +44,16 @@ def create_engine_and_sessionmaker(
 
 
 async def init_db(engine: AsyncEngine, settings: Settings | None = None) -> None:
-    """Bring the schema to head via Alembic.
-
-    Replaces `Base.metadata.create_all`, which created missing tables and
-    silently ignored every other schema change — so adding a column did nothing
-    to an existing database and the application failed later at query time
-    (docs/wp0-baseline-audit.md, F7).
-
-    `settings` is optional only so that callers holding just an engine keep
-    working; the URL is taken from the engine when it is not supplied, which
-    keeps migrations and the application pointed at the same database.
-    """
-    from app.models import all_models  # noqa: F401  (ensure tables are registered)
+    """Bring the schema to Alembic head and register all application metadata."""
+    from app.models import all_models  # noqa: F401
+    from app.engineering_models import (  # noqa: F401
+        EngineeringEvidence,
+        EngineeringSession,
+        EngineeringTurn,
+    )
+    from app.pcs_models import PcsProjectControl, PcsRun  # noqa: F401
     from app.db.migrations import ensure_schema
 
-    # SQLite does not create the directory; ensure it exists.
     if str(engine.url).startswith("sqlite") and engine.url.database not in (None, ":memory:"):
         Path(engine.url.database).expanduser().resolve().parent.mkdir(
             parents=True, exist_ok=True

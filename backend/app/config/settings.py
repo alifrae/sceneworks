@@ -42,8 +42,8 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./data/sceneworks.db"
 
-    # Root directory for isolated agent worktrees. Must not be inside a managed
-    # repository. Relative paths resolve against the backend working directory.
+    # Root directory for isolated agent/work sessions. Must not be inside a
+    # managed repository. Relative paths resolve against the backend cwd.
     worktree_root: Path = Path("data/worktrees")
 
     # SceneWorks-owned task context. Attachments are deliberately outside every
@@ -52,15 +52,9 @@ class Settings(BaseSettings):
     attachment_max_bytes: int = 20_000_000
     attachment_task_max_bytes: int = 50_000_000
     attachment_task_max_count: int = 8
-    # MCP can move attachment bytes through JSON-RPC, so keep that path smaller
-    # than the local browser upload limit to avoid enormous model/tool payloads.
     mcp_attachment_max_bytes: int = 5_000_000
 
     # Provider-neutral role intent -> concrete backend/model mapping (WP8).
-    # Example environment value:
-    # SCENEWORKS_MODEL_PROFILE_ROUTES='{"strongest":{"backend":"gemini_acp","model":"<model>"}}'
-    # Empty by default: existing role backend + backend default model semantics
-    # remain intact until an operator deliberately configures a route.
     model_profile_routes: dict[str, ModelProfileRoute] = Field(default_factory=dict)
 
     # Gemini CLI (ACP backend). None -> discover "gemini" on PATH.
@@ -68,88 +62,67 @@ class Settings(BaseSettings):
     gemini_extra_args: list[str] = Field(default_factory=list)
     gemini_model: str | None = None
     gemini_environment: dict[str, str] = Field(default_factory=dict)
-    # Timeout for Gemini subprocess startup, `--version` probes and the ACP
-    # `initialize` handshake (seconds). Node startup alone measured ~20s on a
-    # cold Windows run, and the handshake exceeded 30s whenever two agents
-    # started at once, failing executions with "ACP request initialize timed
-    # out". Kept generous: this bounds startup only, not the agent's work
-    # (that is execution_timeout_seconds).
     gemini_startup_timeout_seconds: int = 120
 
-    # Timeout for a single git command (seconds). Creating a worktree checks
-    # out the whole tree, which takes tens of seconds on a typical repository.
-    git_timeout_seconds: int = 300
+    # OpenCode backup backend. This path intentionally uses ``opencode run``
+    # rather than ACP, proving that SceneWorks agent routing is transport-neutral.
+    # Provider credentials/model catalogs remain owned by OpenCode.
+    opencode_executable: str | None = None
+    opencode_model: str | None = None
+    opencode_agent: str | None = None
+    opencode_extra_args: list[str] = Field(default_factory=list)
+    opencode_environment: dict[str, str] = Field(default_factory=dict)
 
-    # Hard limit for a single agent execution (seconds).
+    git_timeout_seconds: int = 300
     execution_timeout_seconds: int = 5400
-    # Grace period after cancellation before the engine force-kills (seconds).
     cancel_grace_seconds: int = 15
 
-    # Prompt/context limits.
     context_max_bytes: int = 200_000
     context_file_max_bytes: int = 60_000
-
-    # Number of events replayed to SSE clients on connect.
     sse_replay_events: int = 500
 
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
 
-    # WP11 MCP reasoning interface.
-    #
+    # MCP reasoning/control interface.
     # observe  -> semantic read tools only;
-    # standard -> governed SceneWorks action tools (tasks/roles/workflows);
-    # advanced -> standard tools plus persistent Gemini ACP execution sessions
-    #             supervised iteratively by the external MCP client.
+    # standard -> governed SceneWorks actions (tasks/roles/workflows);
+    # advanced -> standard plus provider-neutral EngineeringSessions exposing
+    #             SceneWorks-owned workspace/command/process/Git/PCS capabilities.
     mcp_enabled: bool = True
     mcp_mode: Literal["observe", "standard", "advanced"] = "observe"
-    # Backward-compatible flag used by the first WP11 prototype and existing
-    # deployments/tests. If true while mcp_mode is still observe, effective mode
-    # is standard. New configuration should use mcp_mode.
     mcp_allow_actions: bool = False
-    # Capabilities the operator is willing to grant an Advanced-mode session.
-    # Per-session requests can choose a subset, never exceed this allowlist.
     advanced_session_permissions: list[str] = Field(
         default_factory=lambda: [
             "repository_read",
             "repository_write",
             "shell_execute",
+            "process_control",
             "git_commit",
             "network_access",
+            "agent_delegate",
+            "external_asset_read",
             "subagents",
         ]
     )
-    # Total text budget returned by one semantic MCP tool call. Large diffs and
-    # artifacts are truncated with an explicit marker rather than overflowing
-    # an external model's context window.
     mcp_tool_max_chars: int = 120_000
 
-    # LangGraph workflow checkpoint database path (plain file path, not a URL).
     checkpoint_db_path: str = "data/workflow_checkpoints.db"
-    # Maximum review-repair iterations before forcing human intervention.
     max_review_iterations: int = 3
 
-    # Path to directory containing editable role prompt files (roles/*.md).
     roles_dir: Path = BACKEND_DIR / "app" / "roles" / "prompts"
 
     # OpenHands backend.
     openhands_url: str | None = None
     openhands_base_url: str | None = None
     openhands_executable: str | None = None
-    #: litellm-form model id, e.g. "lm_studio/google/gemma-4-e2b" or
-    #: "anthropic/claude-sonnet-4-20250514". Required: the SDK rejects an
-    #: unspecified model.
     openhands_model: str | None = None
-    #: LLM/provider API key used by the OpenHands SDK. Never returned by the API.
     openhands_api_key: str | None = None
-    #: Force a mode instead of resolving one: local | remote | http | cli.
     openhands_mode: str | None = None
-    #: Upper bound on agent turns per execution.
     openhands_max_iterations: int = 40
     openhands_environment: dict[str, str] = Field(default_factory=dict)
 
-    # When set to "fake", the default backend is the scripted FakeAgentBackend.
-    default_backend: Literal["gemini_acp", "openhands", "fake"] = "gemini_acp"
+    default_backend: Literal["gemini_acp", "opencode", "openhands", "fake"] = "gemini_acp"
 
     @property
     def effective_mcp_mode(self) -> Literal["observe", "standard", "advanced"]:

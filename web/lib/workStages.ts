@@ -2,11 +2,6 @@
 // concepts. This is the ONLY place that translates raw workflow state into
 // what the UI shows. See docs/wp-web-2-conversation-model.md section C for
 // the explicit backend-state -> stage -> action table this module encodes.
-//
-// Every field used here (status, current_role, current_execution_id,
-// execution_status, architecture_result, implementation_summary,
-// review_result) already exists on TaskOut — no backend change was needed
-// to build this mapping.
 
 import type { Task } from "./types";
 
@@ -58,12 +53,10 @@ export interface ProgressStep {
 
 export interface WorkView {
   stage: PrimaryStage;
-  /** What the stage badge should say — the exceptional label wins when present. */
   displayLabel: string;
   exceptional: Exceptional;
   attentionReason: string | null;
   needsAttention: boolean;
-  /** Role currently executing, or null when nobody is (queued / waiting on you / done). */
   ownerRole: string | null;
   ownerLabel: string;
   isAdvisoryOnly: boolean;
@@ -72,20 +65,10 @@ export interface WorkView {
 }
 
 const RUNNING_EXEC_STATUSES = new Set(["QUEUED", "STARTING", "RUNNING"]);
-
 const UNDERSTANDING_ROLES = new Set(["triage", "product", "cto", "technical_expert"]);
-
 const FINISHED_STATUSES = new Set(["READY_FOR_HUMAN", "ACCEPTED", "REJECTED"]);
 
 function isAdvisory(task: Task): boolean {
-  // TaskOut does not expose triage's requires_implementation decision, so
-  // this can only be inferred after the fact: a task that reached a human
-  // decision point without ever producing an implementation was routed as
-  // investigation/advisory-only. Absence of implementation_summary is NOT
-  // by itself evidence of that — every task starts implementation_summary
-  // as null while still investigating/implementing, so checking it before
-  // the task reaches a finished status would misclassify ordinary
-  // in-progress work as advisory-only.
   return FINISHED_STATUSES.has(task.status) && !task.implementation_summary && !task.review_result;
 }
 
@@ -106,11 +89,7 @@ export function getWorkView(task: Task): WorkView {
       ownerRole = null;
       break;
     case "ARCHITECTURE_ANALYSIS":
-      if (task.current_role && !UNDERSTANDING_ROLES.has(task.current_role)) {
-        stage = "architecture";
-      } else {
-        stage = "investigating";
-      }
+      stage = task.current_role && !UNDERSTANDING_ROLES.has(task.current_role) ? "architecture" : "investigating";
       break;
     case "AWAITING_ARCHITECTURE_APPROVAL":
       stage = "architecture";
@@ -137,8 +116,7 @@ export function getWorkView(task: Task): WorkView {
         ownerRole = "engineer";
       } else {
         exceptional = "blocked";
-        attentionReason =
-          "The reviewer requested changes and the automatic repair limit was reached. Decide how to proceed.";
+        attentionReason = "The reviewer requested changes and the automatic repair limit was reached. Decide how to proceed.";
         ownerRole = null;
       }
       break;
@@ -173,15 +151,18 @@ export function getWorkView(task: Task): WorkView {
       stage = "submitted";
   }
 
-  const displayLabel =
-    exceptional !== "none" ? EXCEPTIONAL_LABELS[exceptional] : STAGE_LABELS[stage];
+  const displayLabel = status === "NEW"
+    ? "Backlog"
+    : exceptional !== "none"
+      ? EXCEPTIONAL_LABELS[exceptional]
+      : STAGE_LABELS[stage];
 
   const ownerLabel = ownerRole
     ? ROLE_LABELS[ownerRole] || ownerRole
     : exceptional === "needs_input"
       ? "You"
-      : stage === "submitted"
-        ? "Queued"
+      : status === "NEW"
+        ? "Backlog"
         : stage === "completed"
           ? "—"
           : "—";
@@ -207,14 +188,12 @@ function buildProgress(
   advisoryOnly: boolean,
 ): ProgressStep[] {
   const understood = task.status !== "NEW";
-  const investigationDone =
-    understood && (task.current_role === "architect" || stage !== "investigating");
+  const investigationDone = understood && (task.current_role === "architect" || stage !== "investigating");
   const architectureDone = !!task.architecture_result;
   const approved = ["READY_TO_IMPLEMENT", "IMPLEMENTING", "TESTING", "REVIEWING", "CHANGES_REQUESTED", "READY_FOR_HUMAN", "ACCEPTED"].includes(task.status) || (advisoryOnly && task.status === "READY_FOR_HUMAN");
   const implementingDone = !!task.implementation_summary;
   const reviewDone = !!task.review_result && task.review_result.toUpperCase().includes("APPROVED");
   const complete = task.status === "ACCEPTED" || task.status === "REJECTED";
-
   const frozen = exceptional === "failed" || exceptional === "cancelled" || exceptional === "blocked";
 
   const steps: ProgressStep[] = [
@@ -239,22 +218,12 @@ function buildProgress(
   }
 
   steps.push({ key: "complete", label: "Complete", done: complete, active: false });
-
   return steps;
 }
 
-/**
- * Explicit action -> human label + intent, used by the follow-up composer.
- *
- * TaskStateMachine.allowed_actions() also returns internal, system-only
- * transitions (e.g. "architecture_completed", "review_failed") that have no
- * API route and are not things a human ever triggers — they exist purely to
- * validate the state machine. Only actions listed here are ever offered as
- * follow-up buttons; anything else in allowed_actions is silently ignored by
- * meaningfulActions() below. The full raw list remains visible in the
- * Advanced tab / the existing /tasks/{id} view.
- */
+/** Human-triggerable actions. Internal state-machine transitions stay hidden. */
 export const ACTION_INTENT: Record<string, { label: string; kind: "primary" | "danger" | "neutral"; needsNote?: string }> = {
+  start_architecture: { label: "Start work", kind: "primary" },
   approve_architecture: { label: "Approve plan", kind: "primary" },
   reject_architecture: { label: "Reject plan", kind: "danger", needsNote: "Reason" },
   request_architecture_revision: { label: "Request changes", kind: "neutral", needsNote: "What should change?" },
@@ -267,7 +236,6 @@ export const ACTION_INTENT: Record<string, { label: string; kind: "primary" | "d
   start_implementation: { label: "Resume implementation", kind: "primary" },
 };
 
-/** Filters a raw allowed_actions list down to actions a human can meaningfully trigger. */
 export function meaningfulActions(actions: string[]): string[] {
   return actions.filter((a) => a in ACTION_INTENT);
 }

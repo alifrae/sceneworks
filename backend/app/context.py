@@ -1,9 +1,9 @@
 """Application composition root.
 
-Builds every service once at startup, wires the execution engine's
-continuation hook to the LangGraph WorkflowManager, and reconciles
-interrupted executions and advanced MCP-supervised agent sessions.
-API handlers access services through this context.
+Builds every service once at startup, wires the execution engine's continuation
+hook to the LangGraph WorkflowManager, and reconciles interrupted executions,
+legacy provider sessions, provider-neutral engineering sessions and managed PCS
+runs.
 """
 
 from __future__ import annotations
@@ -24,9 +24,13 @@ from app.execution.engine import ExecutionEngine
 from app.git.workspace import GitWorktreeService
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
+from app.runtime.registry import RuntimeRegistry
 from app.services.agent_sessions import AgentSessionService
 from app.services.company import CompanyService
+from app.services.engineering_evidence import EngineeringEvidenceService
+from app.services.engineering_sessions import EngineeringSessionService
 from app.services.memory import MemoryService
+from app.services.pcs_control import PcsControlService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
 from app.services.workflow import TaskWorkflowService
@@ -45,6 +49,7 @@ class AppContext:
     backends: BackendRegistry
     model_router: ModelRouter
     git: GitWorktreeService
+    runtimes: RuntimeRegistry
     roles: RoleRegistry
     prompt_builder: PromptBuilder
     execution_engine: ExecutionEngine
@@ -54,6 +59,9 @@ class AppContext:
     memory: MemoryService
     provenance: ProvenanceService
     agent_sessions: AgentSessionService
+    engineering_sessions: EngineeringSessionService
+    engineering_evidence: EngineeringEvidenceService
+    pcs_control: PcsControlService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -66,19 +74,22 @@ class AppContext:
             except asyncio.CancelledError:
                 pass
         await self.backends.shutdown()
-        # Advanced sessions can own live Gemini ACP processes. Stop them before
-        # closing the database they use for status/audit persistence.
         await self.agent_sessions.shutdown()
+        # Mark/cancel in-flight governed executions before PCS/runtime cleanup
+        # introduces any delay. This preserves the restart-recovery invariant:
+        # work active at shutdown is recorded INTERRUPTED, never left looking
+        # completed merely because another subsystem took time to close.
         await self.execution_engine.shutdown()
+        # PCS control must drain/finalize managed runs before the native runtime
+        # destroys its process handles.
+        await self.pcs_control.shutdown()
+        await self.runtimes.shutdown()
         await self.workflow_manager.shutdown()
         await close_db(self.db_engine)
 
 
 async def _warm_backend_health(backends: BackendRegistry) -> None:
     try:
-        # Warm the real cache while the application remains available. A normal
-        # health_all() call is intentionally stale-while-revalidate and returns
-        # immediately, so startup must force the actual provider probe here.
         await backends.health_all(force=True)
     except asyncio.CancelledError:
         raise
@@ -100,6 +111,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     backends = BackendRegistry(settings)
     model_router = ModelRouter(settings, backends.keys())
     git = GitWorktreeService(settings)
+    runtimes = RuntimeRegistry()
     roles = RoleRegistry(
         settings.roles_dir,
         default_backend=(
@@ -124,6 +136,13 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     memory = MemoryService(session_factory, event_store, bus)
     provenance = ProvenanceService(session_factory, git)
     agent_sessions = AgentSessionService(session_factory, git, event_store, settings)
+    engineering_sessions = EngineeringSessionService(
+        session_factory, git, runtimes, settings
+    )
+    engineering_evidence = EngineeringEvidenceService(session_factory)
+    pcs_control = PcsControlService(
+        session_factory, engineering_sessions, engineering_evidence
+    )
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -152,6 +171,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         backends=backends,
         model_router=model_router,
         git=git,
+        runtimes=runtimes,
         roles=roles,
         prompt_builder=prompt_builder,
         execution_engine=execution_engine,
@@ -161,6 +181,9 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         memory=memory,
         provenance=provenance,
         agent_sessions=agent_sessions,
+        engineering_sessions=engineering_sessions,
+        engineering_evidence=engineering_evidence,
+        pcs_control=pcs_control,
         settings_store=settings_store,
         settings_overrides=overrides,
     )
@@ -173,8 +196,20 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     advanced_interrupted = await agent_sessions.recover_interrupted()
     if advanced_interrupted:
         logger.warning(
-            "reconciled %d interrupted advanced agent sessions from previous run",
+            "reconciled %d interrupted legacy provider sessions from previous run",
             len(advanced_interrupted),
+        )
+    engineering_interrupted = await engineering_sessions.recover_interrupted()
+    if engineering_interrupted:
+        logger.warning(
+            "reconciled %d interrupted engineering-session creations from previous run",
+            len(engineering_interrupted),
+        )
+    pcs_interrupted = await pcs_control.recover_interrupted()
+    if pcs_interrupted:
+        logger.warning(
+            "marked %d managed PCS runs lost after SceneWorks restart",
+            len(pcs_interrupted),
         )
     recovered = await workflow_manager.recover_workflows()
     if recovered:

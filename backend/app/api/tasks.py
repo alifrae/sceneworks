@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_context
@@ -17,6 +17,7 @@ from app.schemas import (
     CapabilityProfile,
     DiffOut,
     EngineeringContract,
+    TaskBacklogUpdate,
     TaskCreate,
     TaskOut,
     TaskProvenanceOut,
@@ -55,11 +56,26 @@ async def _task_out(ctx: AppContext, task: Task) -> TaskOut:
     return out
 
 
+async def _validate_work_package(session, project_id: int, work_package_id: int | None) -> None:
+    if work_package_id is None:
+        return
+    work_package = await session.get(WorkPackage, work_package_id)
+    if work_package is None:
+        raise HTTPException(404, "work package not found")
+    initiative = await session.get(Initiative, work_package.initiative_id)
+    if initiative is None or initiative.project_id != project_id:
+        raise HTTPException(400, "work package belongs to a different project")
+
+
 @router.get("")
 async def list_tasks(
     project_id: int | None = None,
     status: str | None = None,
     role: str | None = None,
+    work_item_type: str | None = None,
+    mode: str | None = None,
+    priority: str | None = None,
+    query: str | None = None,
     limit: int = 200,
     ctx: AppContext = Depends(get_context),
 ) -> list[TaskOut]:
@@ -71,6 +87,24 @@ async def list_tasks(
             stmt = stmt.where(Task.status == status.upper())
         if role:
             stmt = stmt.where(Task.current_role == role)
+        if work_item_type:
+            stmt = stmt.where(Task.work_item_type == work_item_type.lower())
+        if priority:
+            stmt = stmt.where(Task.priority == priority.lower())
+        if mode:
+            normalized = mode.lower()
+            if normalized == "auto":
+                stmt = stmt.where(Task.requested_mode == "auto")
+            else:
+                stmt = stmt.where(
+                    or_(
+                        Task.resolved_mode == normalized,
+                        (Task.resolved_mode.is_(None)) & (Task.requested_mode == normalized),
+                    )
+                )
+        if query and query.strip():
+            needle = f"%{query.strip()}%"
+            stmt = stmt.where(or_(Task.title.ilike(needle), Task.description.ilike(needle)))
         tasks = (await session.execute(stmt)).scalars().all()
         execution_ids = [t.current_execution_id for t in tasks if t.current_execution_id]
         execution_status: dict[str, str] = {}
@@ -80,7 +114,7 @@ async def list_tasks(
                     select(Execution.id, Execution.status).where(Execution.id.in_(execution_ids))
                 )
             ).all()
-            execution_status = {execution_id: status for execution_id, status in rows}
+            execution_status = {execution_id: row_status for execution_id, row_status in rows}
 
     result: list[TaskOut] = []
     for task in tasks:
@@ -98,16 +132,7 @@ async def create_task(body: TaskCreate, ctx: AppContext = Depends(get_context)) 
         project = await session.get(Project, body.project_id)
         if project is None:
             raise HTTPException(404, "project not found")
-
-        if body.work_package_id is not None:
-            work_package = await session.get(WorkPackage, body.work_package_id)
-            if work_package is None:
-                raise HTTPException(404, "work package not found")
-            initiative = await session.get(Initiative, work_package.initiative_id)
-            if initiative is None or initiative.project_id != body.project_id:
-                raise HTTPException(
-                    400, "work package belongs to a different project"
-                )
+        await _validate_work_package(session, body.project_id, body.work_package_id)
 
         task = Task(
             project_id=body.project_id,
@@ -115,6 +140,9 @@ async def create_task(body: TaskCreate, ctx: AppContext = Depends(get_context)) 
             title=body.title,
             description=body.description,
             priority=body.priority,
+            work_item_type=body.work_item_type,
+            requested_mode=body.requested_mode,
+            resolved_mode=None if body.requested_mode == "auto" else body.requested_mode,
             engineering_contract=body.engineering_contract.model_dump(),
             capability_requirements=body.capability_requirements.model_dump(),
             status=TaskStatus.NEW.value,
@@ -131,6 +159,31 @@ async def get_task(task_id: int, ctx: AppContext = Depends(get_context)) -> Task
         task = await session.get(Task, task_id)
         if task is None:
             raise HTTPException(404, "task not found")
+    return await _task_out(ctx, task)
+
+
+@router.patch("/{task_id}")
+async def update_backlog_task(
+    task_id: int,
+    body: TaskBacklogUpdate,
+    ctx: AppContext = Depends(get_context),
+) -> TaskOut:
+    """Edit lightweight work-management metadata before execution starts."""
+    async with ctx.engine_factory() as session:
+        task = await session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(404, "task not found")
+        if task.status != TaskStatus.NEW.value:
+            raise HTTPException(409, "task metadata can only be changed while task is NEW")
+        data = body.model_dump(exclude_unset=True)
+        if "work_package_id" in data:
+            await _validate_work_package(session, task.project_id, data["work_package_id"])
+        for key, value in data.items():
+            setattr(task, key, value)
+        if "requested_mode" in data:
+            task.resolved_mode = None if task.requested_mode == "auto" else task.requested_mode
+        await session.commit()
+        await session.refresh(task)
     return await _task_out(ctx, task)
 
 
@@ -163,21 +216,13 @@ async def replace_capability_requirements(
     body: CapabilityProfile,
     ctx: AppContext = Depends(get_context),
 ) -> TaskOut:
-    """Replace task capability overlays before workflow execution starts.
-
-    Capability labels affect professional reasoning/method selection. They do
-    not add project facts and therefore do not replace task contracts or
-    repository evidence.
-    """
+    """Replace task capability overlays before workflow execution starts."""
     async with ctx.engine_factory() as session:
         task = await session.get(Task, task_id)
         if task is None:
             raise HTTPException(404, "task not found")
         if task.status != TaskStatus.NEW.value:
-            raise HTTPException(
-                409,
-                "capability requirements can only be changed while task is NEW",
-            )
+            raise HTTPException(409, "capability requirements can only be changed while task is NEW")
         task.capability_requirements = body.model_dump()
         await session.commit()
         await session.refresh(task)
@@ -204,9 +249,7 @@ async def delete_task(task_id: int, ctx: AppContext = Depends(get_context)) -> N
         if task.status not in (TaskStatus.NEW.value, TaskStatus.CANCELLED.value, TaskStatus.REJECTED.value):
             raise HTTPException(409, "only NEW, CANCELLED or REJECTED tasks can be deleted")
         execution_count = (
-            await session.execute(
-                select(func.count(Execution.id)).where(Execution.task_id == task_id)
-            )
+            await session.execute(select(func.count(Execution.id)).where(Execution.task_id == task_id))
         ).scalar() or 0
         if execution_count:
             raise HTTPException(409, "task has execution history; cannot delete")

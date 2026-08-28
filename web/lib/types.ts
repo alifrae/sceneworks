@@ -76,6 +76,10 @@ export interface EngineeringContract {
   acceptance_criteria: string[];
 }
 
+export type WorkItemType = "task" | "bug" | "feature" | "idea";
+export type ExecutionMode = "auto" | "change" | "investigate" | "plan" | "ask";
+export type ResolvedExecutionMode = Exclude<ExecutionMode, "auto">;
+
 export interface Task {
   id: number;
   project_id: number;
@@ -84,6 +88,9 @@ export interface Task {
   description: string;
   status: string;
   priority: string;
+  work_item_type: WorkItemType;
+  requested_mode: ExecutionMode;
+  resolved_mode: ResolvedExecutionMode | null;
   current_role: string | null;
   current_execution_id: string | null;
   base_commit: string | null;
@@ -203,6 +210,9 @@ export interface Settings {
   gemini_executable: string | null;
   gemini_model: string | null;
   gemini_extra_args: string[];
+  opencode_executable: string | null;
+  opencode_model: string | null;
+  opencode_agent: string | null;
   model_profile_routes: Record<string, ModelProfileRoute>;
   execution_timeout_seconds: number;
   cancel_grace_seconds: number;
@@ -223,8 +233,12 @@ export interface McpSettings {
   tool_max_chars: number;
   advanced_session_permissions: string[];
   available_advanced_permissions: string[];
+  available_runtimes: string[];
+  available_backends: string[];
+  default_backend: string;
   action_tools_enabled: boolean;
   advanced_agent_sessions_enabled: boolean;
+  direct_engineering_sessions_enabled: boolean;
   advanced_warning: string;
 }
 

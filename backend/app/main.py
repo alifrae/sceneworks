@@ -34,6 +34,7 @@ from app.api import (
     initiatives_router,
     mcp_router,
     memory_router,
+    pcs_router,
     projects_router,
     roles_router,
     settings_router,
@@ -110,6 +111,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     if context is not None:
         app.state.context = context
     app.include_router(projects_router)
+    app.include_router(pcs_router)
     app.include_router(initiatives_router)
     app.include_router(tasks_router)
     app.include_router(attachments_router)

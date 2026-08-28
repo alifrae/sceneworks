@@ -6,6 +6,7 @@ from app.api.executions import router as executions_router
 from app.api.initiatives import router as initiatives_router
 from app.api.mcp import router as mcp_router
 from app.api.memory import router as memory_router
+from app.api.pcs import router as pcs_router
 from app.api.projects import router as projects_router
 from app.api.settings import backends_router, roles_router, settings_router
 from app.api.tasks import router as tasks_router
@@ -19,6 +20,7 @@ __all__ = [
     "initiatives_router",
     "mcp_router",
     "memory_router",
+    "pcs_router",
     "projects_router",
     "roles_router",
     "backends_router",

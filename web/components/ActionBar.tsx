@@ -11,7 +11,7 @@ interface ActionBarProps {
 }
 
 const LABELS: Record<string, string> = {
-  start_architecture: "Run Architect analysis",
+  start_architecture: "Start work",
   approve_architecture: "Approve architecture",
   reject_architecture: "Reject architecture",
   request_architecture_revision: "Request revision",
@@ -102,7 +102,7 @@ export default function ActionBar({ allowedActions, onAction, busy, pendingActio
           <button
             key={action}
             className={`btn ${
-              action === "accept" || action === "approve_architecture"
+              action === "accept" || action === "approve_architecture" || action === "start_architecture"
                 ? "primary"
                 : action === "cancel" || action === "reject" || action === "reject_architecture"
                   ? "danger"

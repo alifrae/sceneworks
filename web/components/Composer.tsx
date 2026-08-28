@@ -8,7 +8,13 @@ import {
   deleteTaskAttachment,
   uploadTaskAttachment,
 } from "@/lib/attachments";
-import type { EngineeringContract, Project, TaskAttachment } from "@/lib/types";
+import type {
+  EngineeringContract,
+  ExecutionMode,
+  Project,
+  TaskAttachment,
+  WorkItemType,
+} from "@/lib/types";
 
 interface ComposerProps {
   defaultProjectId?: number;
@@ -33,6 +39,14 @@ const ATTACHMENT_ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.json,.csv";
 const MAX_ATTACHMENT_COUNT = 8;
 const MAX_ATTACHMENT_BYTES = 20_000_000;
 const MAX_TASK_ATTACHMENT_BYTES = 50_000_000;
+
+const MODE_HELP: Record<ExecutionMode, string> = {
+  auto: "SceneWorks infers the execution path.",
+  change: "Implementation and review are required.",
+  investigate: "Read-only diagnosis; no source changes.",
+  plan: "Architecture/design output only; no source changes.",
+  ask: "Read-only answer; no implementation workflow.",
+};
 
 function lines(value: string): string[] {
   return value
@@ -66,6 +80,8 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>(defaultProjectId ? String(defaultProjectId) : "");
   const [question, setQuestion] = useState("");
+  const [workItemType, setWorkItemType] = useState<WorkItemType>("task");
+  const [mode, setMode] = useState<ExecutionMode>("auto");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [showContract, setShowContract] = useState(false);
   const [contract, setContract] = useState<ContractDraft>(EMPTY_CONTRACT);
@@ -127,7 +143,7 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
     if (fileInput.current) fileInput.current.value = "";
   }
 
-  async function send() {
+  async function submit(startNow: boolean) {
     if (!question.trim() || !projectId) return;
     setBusy(true);
     setError(null);
@@ -140,6 +156,8 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         title,
         description: question.trim(),
         priority: "medium",
+        work_item_type: workItemType,
+        requested_mode: mode,
         engineering_contract: contractFromDraft(contract),
       });
       taskId = task.id;
@@ -148,8 +166,6 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
           uploaded.push(await uploadTaskAttachment(task.id, file));
         }
       } catch (attachmentError) {
-        // Attachment binding is atomic from the user's perspective: never start
-        // a task with only a subset of the context they selected.
         for (const item of uploaded) {
           await deleteTaskAttachment(task.id, item.id).catch(() => undefined);
         }
@@ -157,11 +173,13 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         taskId = null;
         throw attachmentError;
       }
-      await api.taskAction(task.id, "start_architecture");
+      if (startNow) {
+        await api.taskAction(task.id, "start_architecture");
+      }
       router.push(`/work/${task.id}`);
     } catch (e) {
       setError(
-        taskId
+        taskId && startNow
           ? `Task ${taskId} was created but could not be started: ${errorMessage(e)}`
           : errorMessage(e),
       );
@@ -193,17 +211,40 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
       <textarea
         className="composer-input"
         rows={3}
-        placeholder="Ask the team… e.g. Find why startup went from 8s to 30s and fix it."
+        placeholder="Describe work, an issue, an idea, or a question…"
         value={question}
         onChange={(e) => setQuestion(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            send();
+            submit(true);
           }
         }}
         disabled={busy}
       />
+
+      <div className="row" style={{ marginTop: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label className="field" style={{ minWidth: 130 }}>
+          Type
+          <select value={workItemType} onChange={(e) => setWorkItemType(e.target.value as WorkItemType)} disabled={busy}>
+            <option value="task">Task</option>
+            <option value="bug">Bug</option>
+            <option value="feature">Feature</option>
+            <option value="idea">Idea</option>
+          </select>
+        </label>
+        <label className="field" style={{ minWidth: 160 }}>
+          Mode
+          <select value={mode} onChange={(e) => setMode(e.target.value as ExecutionMode)} disabled={busy}>
+            <option value="auto">Auto</option>
+            <option value="change">Change</option>
+            <option value="investigate">Investigate</option>
+            <option value="plan">Plan</option>
+            <option value="ask">Ask</option>
+          </select>
+        </label>
+        <span className="muted small" style={{ paddingBottom: 8 }}>{MODE_HELP[mode]}</span>
+      </div>
 
       {attachments.length > 0 && (
         <div className="attachment-chips" aria-label="Task attachments">
@@ -255,69 +296,48 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
       {showContract && (
         <div className="panel" style={{ marginTop: 8 }}>
           <p className="small muted">
-            Optional. One item per line. These constraints become binding for Architect, Engineer and Reviewer once work starts.
+            Optional. One item per line. These constraints become binding once work starts.
           </p>
           <label className="field">
             Acceptance criteria
-            <textarea
-              rows={3}
-              value={contract.acceptance}
-              onChange={(e) => setContract({ ...contract, acceptance: e.target.value })}
-              placeholder={"Existing behavior remains unchanged\nNew path is covered by tests"}
-              disabled={busy}
-            />
+            <textarea rows={3} value={contract.acceptance} onChange={(e) => setContract({ ...contract, acceptance: e.target.value })} placeholder={"Existing behavior remains unchanged\nNew path is covered by tests"} disabled={busy} />
           </label>
           <label className="field">
             Allowed scope
-            <textarea
-              rows={2}
-              value={contract.scope}
-              onChange={(e) => setContract({ ...contract, scope: e.target.value })}
-              placeholder={"backend/app/...\nbackend/tests/..."}
-              disabled={busy}
-            />
+            <textarea rows={2} value={contract.scope} onChange={(e) => setContract({ ...contract, scope: e.target.value })} placeholder={"backend/app/...\nbackend/tests/..."} disabled={busy} />
           </label>
           <label className="field">
             Forbidden changes
-            <textarea
-              rows={2}
-              value={contract.forbidden}
-              onChange={(e) => setContract({ ...contract, forbidden: e.target.value })}
-              placeholder="Do not change the public API"
-              disabled={busy}
-            />
+            <textarea rows={2} value={contract.forbidden} onChange={(e) => setContract({ ...contract, forbidden: e.target.value })} placeholder="Do not change the public API" disabled={busy} />
           </label>
           <label className="field">
             Required tests / evidence
-            <textarea
-              rows={2}
-              value={contract.tests}
-              onChange={(e) => setContract({ ...contract, tests: e.target.value })}
-              placeholder="uv run pytest tests/test_target.py"
-              disabled={busy}
-            />
+            <textarea rows={2} value={contract.tests} onChange={(e) => setContract({ ...contract, tests: e.target.value })} placeholder="uv run pytest tests/test_target.py" disabled={busy} />
           </label>
         </div>
       )}
 
-      <div className="row space-between composer-footer">
+      <div className="row space-between composer-footer" style={{ gap: 12, flexWrap: "wrap" }}>
         {projects.length > 1 ? (
           <label className="composer-project">
             Project
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)} disabled={busy}>
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           </label>
         ) : (
           <span className="muted small">Project: {projects[0]?.name}</span>
         )}
-        <button className="btn primary" onClick={send} disabled={busy || !question.trim() || !projectId}>
-          {busy ? (attachments.length ? "Uploading context…" : "Sending…") : "Send"}
-        </button>
+        <div className="row">
+          <button className="btn" onClick={() => submit(false)} disabled={busy || !question.trim() || !projectId}>
+            {busy ? "Saving…" : "Save to backlog"}
+          </button>
+          <button className="btn primary" onClick={() => submit(true)} disabled={busy || !question.trim() || !projectId}>
+            {busy ? (attachments.length ? "Uploading context…" : "Starting…") : "Start now"}
+          </button>
+        </div>
       </div>
       {error && <div className="notice error">{error}</div>}
     </div>
