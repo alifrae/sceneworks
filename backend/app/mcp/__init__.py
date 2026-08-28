@@ -1,9 +1,9 @@
-"""SceneWorks MCP reasoning, engineering-control and evidence interface.
+"""SceneWorks MCP reasoning, engineering-control and PCS evidence interface.
 
 Observe and Standard modes expose semantic SceneWorks concepts. Advanced mode
-adds provider-neutral EngineeringSessions and WP15 durable evidence/turn
-correlation. Agent providers are optional workers; SceneWorks-captured runtime,
-process, command, file and Git observations remain the evidence authority.
+adds provider-neutral EngineeringSessions, durable WP15 evidence correlation and
+WP16 PCS runtime semantics. Agent providers are optional workers; SceneWorks-
+captured runtime/process/log/Git/PCS observations remain the evidence authority.
 """
 
 from __future__ import annotations
@@ -11,15 +11,18 @@ from __future__ import annotations
 from typing import Any
 
 from app.mcp.server import MCPToolError
-from app.mcp.wp15_events_server import CompleteEvidenceMCPServer
+from app.mcp.wp16_server import PcsRuntimeMCPServer
 
 
-class SceneWorksMCPServer(CompleteEvidenceMCPServer):
-    """Canonical WP15 server with provider-neutral discovery/error guidance."""
+class SceneWorksMCPServer(PcsRuntimeMCPServer):
+    """Canonical WP16 server with provider-neutral PCS-control guidance."""
 
-    def _wp15_instructions(self) -> str:
+    def _wp16_instructions(self) -> str:
         if self.mode == "observe":
-            mode_text = "Observe mode: read-only semantic tools; no executions or mutations."
+            mode_text = (
+                "Observe mode: read-only semantic tools; PCS runtime configuration may be "
+                "inspected but processes/actions are unavailable."
+            )
         elif self.mode == "standard":
             mode_text = (
                 "Standard mode: governed SceneWorks actions and host-visible Git project "
@@ -28,15 +31,15 @@ class SceneWorksMCPServer(CompleteEvidenceMCPServer):
         else:
             mode_text = (
                 "Advanced mode: Standard tools plus task-bindable EngineeringSessions, "
-                "explicit supervisor turns, direct workspace/command/process/Git control, "
-                "and a durable SceneWorks evidence ledger. Agent delegation is optional."
+                "durable evidence, direct workspace/command/process/Git control, and semantic "
+                "PCS start/stop/restart/log/health/runtime-state/asset/runbook operations."
             )
         return (
             "SceneWorks is the engineering control plane and evidence authority. Ground "
-            "reasoning in project state, accepted memory, task contracts, captured evidence "
-            "and Git truth. Provider/agent conclusions are inference, not authoritative "
-            "evidence. Direct machine capabilities exist only through an isolated "
-            "EngineeringSession and its permission gates. "
+            "reasoning in project state, accepted memory, task contracts, captured evidence, "
+            "PCS runtime observations and Git truth. Provider/agent conclusions are inference, "
+            "not authoritative evidence. Prefer PCS semantic/API control over GUI automation "
+            "whenever deterministic PCS APIs are available. "
             + mode_text
         )
 
@@ -44,8 +47,8 @@ class SceneWorksMCPServer(CompleteEvidenceMCPServer):
         if self.mode != "advanced":
             raise MCPToolError(
                 "This tool requires explicit Advanced MCP mode. Advanced mode gives the MCP "
-                "client direct SceneWorks-owned engineering control and durable evidence in "
-                "an isolated worktree; Gemini/OpenCode/OpenHands are optional workers."
+                "client SceneWorks-owned engineering and PCS runtime control with durable "
+                "evidence; Gemini/OpenCode/OpenHands are optional workers."
             )
 
     async def handle(self, payload: Any) -> tuple[Any | None, int]:
@@ -57,7 +60,7 @@ class SceneWorksMCPServer(CompleteEvidenceMCPServer):
             if isinstance(body, dict):
                 result = body.get("result")
                 if isinstance(result, dict):
-                    result["instructions"] = self._wp15_instructions()
+                    result["instructions"] = self._wp16_instructions()
         return body, status
 
 
