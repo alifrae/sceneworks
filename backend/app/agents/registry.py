@@ -8,6 +8,7 @@ import time
 from app.agents.base import AgentBackend, AgentEventSink, AgentRequest, AgentResult, BackendHealth, Workspace
 from app.agents.fake import FakeAgentBackend
 from app.agents.gemini_acp import GeminiACPBackend
+from app.agents.gemini_acp_attachments import AttachmentAwareGeminiACPBackend
 from app.agents.openhands import OpenHandsBackend
 from app.config.settings import Settings
 
@@ -56,7 +57,7 @@ class _ExecutionModelProxy:
                 deep=True,
                 update={"gemini_model": model, "gemini_environment": env},
             )
-            return GeminiACPBackend(routed)
+            return AttachmentAwareGeminiACPBackend(routed)
         if isinstance(self._base, OpenHandsBackend):
             routed = self._settings.model_copy(
                 deep=True,
@@ -90,7 +91,7 @@ class BackendRegistry:
     def __init__(self, settings: Settings, include_fake: bool = True, include_openhands: bool = True):
         self._settings = settings
         self._backends: dict[str, AgentBackend] = {
-            "gemini_acp": GeminiACPBackend(settings),
+            "gemini_acp": AttachmentAwareGeminiACPBackend(settings),
         }
         if include_openhands:
             self._backends["openhands"] = OpenHandsBackend(settings)
