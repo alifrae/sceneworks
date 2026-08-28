@@ -210,6 +210,9 @@ export interface Settings {
   gemini_executable: string | null;
   gemini_model: string | null;
   gemini_extra_args: string[];
+  opencode_executable: string | null;
+  opencode_model: string | null;
+  opencode_agent: string | null;
   model_profile_routes: Record<string, ModelProfileRoute>;
   execution_timeout_seconds: number;
   cancel_grace_seconds: number;
@@ -230,8 +233,12 @@ export interface McpSettings {
   tool_max_chars: number;
   advanced_session_permissions: string[];
   available_advanced_permissions: string[];
+  available_runtimes: string[];
+  available_backends: string[];
+  default_backend: string;
   action_tools_enabled: boolean;
   advanced_agent_sessions_enabled: boolean;
+  direct_engineering_sessions_enabled: boolean;
   advanced_warning: string;
 }
 
