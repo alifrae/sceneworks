@@ -23,6 +23,7 @@ async def mcp_info(request: Request) -> dict[str, Any]:
     if not ctx.settings.mcp_enabled:
         raise HTTPException(status_code=404, detail="MCP interface is disabled")
     mode = ctx.settings.effective_mcp_mode
+    advanced = mode == "advanced"
     return {
         "name": "SceneWorks",
         "version": __version__,
@@ -30,9 +31,12 @@ async def mcp_info(request: Request) -> dict[str, Any]:
         "transport": "streamable HTTP / JSON-RPC",
         "mode": mode,
         "action_tools_enabled": mode in {"standard", "advanced"},
-        "direct_engineering_sessions_enabled": mode == "advanced",
-        "legacy_gemini_provider_sessions_enabled": mode == "advanced",
-        "runtimes": ctx.runtimes.keys() if mode == "advanced" else [],
+        # Compatibility key from WP11. Provider sessions still exist, but are
+        # legacy now; direct EngineeringSessions are the primary WP14 surface.
+        "advanced_agent_sessions_enabled": advanced,
+        "direct_engineering_sessions_enabled": advanced,
+        "legacy_gemini_provider_sessions_enabled": advanced,
+        "runtimes": ctx.runtimes.keys() if advanced else [],
         "agent_backends": [key for key in ctx.backends.keys() if key != "fake"],
         "security": (
             "SceneWorks does not add OAuth at this endpoint. Keep it local/use a "
