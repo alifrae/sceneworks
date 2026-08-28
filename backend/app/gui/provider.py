@@ -7,10 +7,11 @@ host-desktop control surface.
 
 from __future__ import annotations
 
-import io
 import sys
 from dataclasses import dataclass
 from typing import Protocol
+
+from app.gui.png import encode_rgb
 
 
 class GuiObservationError(RuntimeError):
@@ -58,11 +59,12 @@ class GuiObservationProvider(Protocol):
 
 
 class SystemGuiObservationProvider:
-    """Windows top-level-window observation using Win32 + Pillow ImageGrab.
+    """Windows top-level-window observation using Win32 APIs only.
 
-    Captures the visible screen rectangle occupied by the selected managed PCS
-    window. This deliberately does not claim occlusion-safe off-screen rendering;
-    callers receive ``occlusion_safe=False`` as part of the evidence metadata.
+    Capture uses a GDI screen-region copy and therefore records what is actually
+    visible at the selected PCS window rectangle. It deliberately reports
+    ``occlusion_safe=False`` instead of pretending an obscured/minimized window
+    was independently rendered.
     """
 
     def _require_windows(self) -> None:
@@ -149,23 +151,114 @@ class SystemGuiObservationProvider:
             raise GuiObservationError("selected window has no capturable area")
 
         import ctypes
-        from PIL import ImageGrab
+        from ctypes import wintypes
 
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD),
+                ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
+        class RGBQUAD(ctypes.Structure):
+            _fields_ = [
+                ("rgbBlue", ctypes.c_ubyte),
+                ("rgbGreen", ctypes.c_ubyte),
+                ("rgbRed", ctypes.c_ubyte),
+                ("rgbReserved", ctypes.c_ubyte),
+            ]
+
+        class BITMAPINFO(ctypes.Structure):
+            _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", RGBQUAD * 1)]
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
         hwnd = self._parse_window_id(window.window_id)
-        if not ctypes.windll.user32.IsWindow(hwnd):
+        if not user32.IsWindow(wintypes.HWND(hwnd)):
             raise GuiObservationError("selected PCS window no longer exists")
 
-        image = ImageGrab.grab(
-            bbox=(window.left, window.top, window.right, window.bottom),
-            all_screens=True,
-        ).convert("RGB")
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return GuiCapture(
-            data=buffer.getvalue(),
-            mime_type="image/png",
-            width=image.width,
-            height=image.height,
-            capture_method="visible_screen_region",
-            occlusion_safe=False,
-        )
+        width, height = window.width, window.height
+        screen_dc = user32.GetDC(None)
+        if not screen_dc:
+            raise GuiObservationError("could not acquire desktop device context")
+        memory_dc = None
+        bitmap = None
+        previous = None
+        try:
+            memory_dc = gdi32.CreateCompatibleDC(screen_dc)
+            bitmap = gdi32.CreateCompatibleBitmap(screen_dc, width, height)
+            if not memory_dc or not bitmap:
+                raise GuiObservationError("could not allocate screenshot bitmap")
+            previous = gdi32.SelectObject(memory_dc, bitmap)
+            SRCCOPY = 0x00CC0020
+            CAPTUREBLT = 0x40000000
+            if not gdi32.BitBlt(
+                memory_dc,
+                0,
+                0,
+                width,
+                height,
+                screen_dc,
+                window.left,
+                window.top,
+                SRCCOPY | CAPTUREBLT,
+            ):
+                raise GuiObservationError("Windows screenshot capture failed")
+
+            row_bytes = ((width * 24 + 31) // 32) * 4
+            raw_size = row_bytes * height
+            pixels = (ctypes.c_ubyte * raw_size)()
+            info = BITMAPINFO()
+            info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            info.bmiHeader.biWidth = width
+            info.bmiHeader.biHeight = -height  # top-down rows
+            info.bmiHeader.biPlanes = 1
+            info.bmiHeader.biBitCount = 24
+            info.bmiHeader.biCompression = 0  # BI_RGB
+            info.bmiHeader.biSizeImage = raw_size
+            if not gdi32.GetDIBits(
+                memory_dc,
+                bitmap,
+                0,
+                height,
+                ctypes.byref(pixels),
+                ctypes.byref(info),
+                0,
+            ):
+                raise GuiObservationError("could not read screenshot pixels")
+
+            raw = bytes(pixels)
+            rgb = bytearray(width * height * 3)
+            out = 0
+            for row in range(height):
+                row_start = row * row_bytes
+                for col in range(width):
+                    offset = row_start + col * 3
+                    blue, green, red = raw[offset : offset + 3]
+                    rgb[out : out + 3] = bytes((red, green, blue))
+                    out += 3
+            png = encode_rgb(width, height, bytes(rgb))
+            return GuiCapture(
+                data=png,
+                mime_type="image/png",
+                width=width,
+                height=height,
+                capture_method="visible_screen_region_gdi",
+                occlusion_safe=False,
+            )
+        finally:
+            if previous and memory_dc:
+                gdi32.SelectObject(memory_dc, previous)
+            if bitmap:
+                gdi32.DeleteObject(bitmap)
+            if memory_dc:
+                gdi32.DeleteDC(memory_dc)
+            user32.ReleaseDC(None, screen_dc)
