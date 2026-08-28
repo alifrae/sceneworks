@@ -15,6 +15,7 @@ import LoadingShell from "@/components/LoadingShell";
 import Markdown from "@/components/Markdown";
 import ProgressSteps from "@/components/ProgressSteps";
 import RoleStatusPanel from "@/components/RoleStatusPanel";
+import TaskAttachments from "@/components/TaskAttachments";
 
 type TabKey = "plan" | "changes" | "results" | "activity" | "advanced";
 
@@ -140,6 +141,7 @@ export default function WorkThreadPage() {
             <div className="turn">
               <div className="turn-author">You</div>
               <div className="turn-content">{task.description || task.title}</div>
+              <TaskAttachments taskId={taskId} mutable={task.status === "NEW"} />
             </div>
 
             {task.architecture_result && (
