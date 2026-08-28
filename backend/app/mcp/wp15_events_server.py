@@ -1,4 +1,4 @@
-"""WP15 completion layer: execution-event aggregation and evidence status semantics."""
+"""WP15 completion layer: correlated histories and task-facing evidence summaries."""
 
 from __future__ import annotations
 
@@ -6,21 +6,60 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.engineering_models import EngineeringSession
 from app.models import Event
+from app.mcp.server import _bounded
 from app.mcp.wp15_server import EvidenceMCPServer
+from app.services.engineering_sessions import engineering_session_row
 
 
 class CompleteEvidenceMCPServer(EvidenceMCPServer):
     """Expose one correlated history across direct actions and delegated agents."""
 
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        result = await super().call_tool(name, arguments)
+        if name != "sceneworks.get_task":
+            return result
+        args = arguments or {}
+        task_id = int(args.get("task_id"))
+        async with self.ctx.engine_factory() as session:
+            sessions = list(
+                (
+                    await session.execute(
+                        select(EngineeringSession)
+                        .where(EngineeringSession.task_id == task_id)
+                        .order_by(EngineeringSession.created_at.desc())
+                        .limit(20)
+                    )
+                ).scalars().all()
+            )
+        linked = []
+        for row in sessions:
+            linked.append(
+                {
+                    "session": engineering_session_row(row),
+                    "evidence_summary": await self.ctx.engineering_evidence.summary(row.id),
+                }
+            )
+        return _bounded(
+            {**result, "engineering_sessions": linked},
+            int(self.ctx.settings.mcp_tool_max_chars),
+        )
+
     async def _events(self, args: dict[str, Any]) -> dict[str, Any]:
         result = await super()._events(args)
-        execution_ids = {
-            str(event.get("payload", {}).get("execution_id"))
+        links = {
+            str(event.get("payload", {}).get("execution_id")): {
+                "turn_id": event.get("turn_id"),
+                "action_id": event.get("action_id"),
+            }
             for event in result.get("events", [])
             if event.get("category") == "agent"
             and event.get("payload", {}).get("execution_id")
         }
+        execution_ids = set(links)
         agent_events: list[dict[str, Any]] = []
         if execution_ids:
             limit = max(1, min(500, int(args.get("limit") or 100)))
@@ -39,6 +78,8 @@ class CompleteEvidenceMCPServer(EvidenceMCPServer):
                 {
                     "id": row.id,
                     "execution_id": row.execution_id,
+                    "turn_id": links.get(str(row.execution_id), {}).get("turn_id"),
+                    "action_id": links.get(str(row.execution_id), {}).get("action_id"),
                     "task_id": row.task_id,
                     "type": row.type,
                     "payload": dict(row.payload or {}),
