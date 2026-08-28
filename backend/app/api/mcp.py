@@ -1,4 +1,4 @@
-"""HTTP transport for the SceneWorks MCP reasoning interface (WP11)."""
+"""HTTP transport for the SceneWorks MCP reasoning/control interface."""
 
 from __future__ import annotations
 
@@ -30,11 +30,15 @@ async def mcp_info(request: Request) -> dict[str, Any]:
         "transport": "streamable HTTP / JSON-RPC",
         "mode": mode,
         "action_tools_enabled": mode in {"standard", "advanced"},
-        "advanced_agent_sessions_enabled": mode == "advanced",
+        "direct_engineering_sessions_enabled": mode == "advanced",
+        "legacy_gemini_provider_sessions_enabled": mode == "advanced",
+        "runtimes": ctx.runtimes.keys() if mode == "advanced" else [],
+        "agent_backends": [key for key in ctx.backends.keys() if key != "fake"],
         "security": (
             "SceneWorks does not add OAuth at this endpoint. Keep it local/use a "
             "trusted tunnel, or put authenticated TLS infrastructure in front of it. "
-            "Advanced shell execution is worktree-cwd gated but is not an OS sandbox."
+            "Advanced filesystem paths are worktree-confined, but command/process "
+            "execution is not an OS sandbox and runs with the SceneWorks user's authority."
         ),
     }
 
@@ -61,8 +65,6 @@ async def mcp_rpc(request: Request) -> Response:
     name_header = request.headers.get("Mcp-Name")
     protocol_header = request.headers.get("MCP-Protocol-Version")
 
-    # Current MCP clients send routing headers for stateless HTTP. Validate them
-    # when present while remaining compatible with legacy clients that omit them.
     if isinstance(payload, dict):
         method = payload.get("method")
         if method_header and method and method_header != method:
@@ -92,9 +94,6 @@ async def mcp_rpc(request: Request) -> Response:
                     },
                 )
 
-    # Unknown protocol versions fail explicitly instead of being silently
-    # interpreted under a different contract. Legacy initialize requests often
-    # omit the header and negotiate in the request body, which remains supported.
     if protocol_header and protocol_header not in SceneWorksMCPServer_protocols():
         return JSONResponse(
             status_code=400,
