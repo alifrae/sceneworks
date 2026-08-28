@@ -6,9 +6,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.engineering_models import EngineeringSession
+from app.engineering_models import EngineeringSession, EngineeringTurn
 from app.models import Event
-from app.mcp.server import _bounded
+from app.mcp.server import MCPToolError, _bounded
 from app.mcp.wp15_server import EvidenceMCPServer
 from app.services.engineering_sessions import engineering_session_row
 
@@ -47,6 +47,26 @@ class CompleteEvidenceMCPServer(EvidenceMCPServer):
             {**result, "engineering_sessions": linked},
             int(self.ctx.settings.mcp_tool_max_chars),
         )
+
+    async def _engineering_session_close(self, args: dict[str, Any]) -> dict[str, Any]:
+        session_id = int(args.get("session_id"))
+        async with self.ctx.engine_factory() as session:
+            active = (
+                await session.execute(
+                    select(EngineeringTurn)
+                    .where(
+                        EngineeringTurn.engineering_session_id == session_id,
+                        EngineeringTurn.status == "ACTIVE",
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if active is not None:
+            raise MCPToolError(
+                f"engineering session {session_id} still has active turn {active.id}; "
+                "finish the turn explicitly before closing the session"
+            )
+        return await super()._engineering_session_close(args)
 
     async def _events(self, args: dict[str, Any]) -> dict[str, Any]:
         result = await super()._events(args)
