@@ -22,6 +22,11 @@ const SECONDARY_NAV = [
 
 const PREFETCH_ROUTES = [...NAV, ...SECONDARY_NAV].map((item) => item.href);
 
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+  cancelIdleCallback?: (id: number) => void;
+};
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -41,9 +46,10 @@ export default function Sidebar() {
     // `next dev` can otherwise feel like the menu itself is slow while a route
     // bundle is compiled on demand.
     const warm = () => PREFETCH_ROUTES.forEach((href) => router.prefetch(href));
-    if ("requestIdleCallback" in window) {
-      const id = window.requestIdleCallback(warm, { timeout: 1200 });
-      return () => window.cancelIdleCallback(id);
+    const idleWindow = window as IdleWindow;
+    if (idleWindow.requestIdleCallback) {
+      const id = idleWindow.requestIdleCallback(warm, { timeout: 1200 });
+      return () => idleWindow.cancelIdleCallback?.(id);
     }
     const id = window.setTimeout(warm, 250);
     return () => window.clearTimeout(id);
