@@ -4,11 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 
 class RuntimeErrorBase(RuntimeError):
     """Expected runtime-domain failure safe to surface through MCP."""
+
+
+class CommandRuntimeError(RuntimeErrorBase):
+    """Command failure carrying bounded objective evidence for the ledger."""
+
+    def __init__(self, message: str, evidence: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.evidence = evidence or {}
 
 
 @dataclass(frozen=True)
