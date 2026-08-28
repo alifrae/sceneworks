@@ -8,7 +8,7 @@ import LoadingShell from "@/components/LoadingShell";
 const MODE_HELP: Record<McpMode, string> = {
   observe: "Read-only semantic project/task/evidence access. ChatGPT cannot launch agents or change SceneWorks state.",
   standard: "ChatGPT can register projects, create/control governed tasks and ask roles. SceneWorks remains the workflow authority.",
-  advanced: "Standard mode plus direct SceneWorks-owned engineering sessions: workspace, commands, processes, Git and optional agent delegation.",
+  advanced: "Standard mode plus direct SceneWorks-owned engineering sessions: workspace, commands, processes, Git, semantic PCS control and optional agent delegation.",
 };
 
 const PERMISSION_LABELS: Record<string, string> = {
@@ -16,6 +16,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   repository_write: "Repository write",
   shell_execute: "Commands / tests",
   process_control: "Persistent process control (PCS, dev servers, logs)",
+  external_asset_read: "Read project-scoped external PCS recordings / test assets",
   git_commit: "Git commit",
   network_access: "Network capability (provider/host dependent)",
   agent_delegate: "Delegate to configured agent backends",
