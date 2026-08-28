@@ -1,0 +1,80 @@
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.attachment-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.25));
+  border-radius: 10px;
+  background: var(--surface-raised, rgba(15, 23, 42, 0.55));
+}
+
+.attachment-chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.task-attachments {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.task-attachment-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.25));
+  border-radius: 12px;
+  background: var(--surface-raised, rgba(15, 23, 42, 0.55));
+}
+
+.task-attachment-main {
+  min-width: 0;
+}
+
+.task-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.task-attachment-preview {
+  max-width: min(100%, 760px);
+  max-height: 460px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.25));
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .task-attachment-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .attachment-chip > span:first-child {
+    max-width: 180px;
+  }
+}
