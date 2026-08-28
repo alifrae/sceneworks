@@ -32,6 +32,7 @@ from app.engineering_models import (  # noqa: E402,F401
     EngineeringSession,
     EngineeringTurn,
 )
+from app.pcs_models import PcsProjectControl, PcsRun  # noqa: E402,F401
 
 config = context.config
 
