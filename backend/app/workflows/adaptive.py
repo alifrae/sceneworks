@@ -1,14 +1,9 @@
-"""WP11 adaptive workflow routing.
+"""Adaptive workflow routing with WP13 execution-intent constraints.
 
-The existing workflow remains the default. This subclass adds one conservative
-latency optimisation: a bounded non-high-priority bug with an explicit allowed
-scope, required tests and acceptance criteria may skip the Architect and flow
-straight from triage/advisors to Engineer -> Reviewer. Riskier/cross-cutting work
-keeps the architecture/approval path.
-
-The policy is deterministic and state-machine mediated. An LLM cannot silently
-skip architecture merely by emitting ``use_architect=false`` for an unbounded
-implementation task.
+The existing workflow remains the execution engine. WP13 adds a user-visible
+intent contract (auto/change/investigate/plan/ask) without creating parallel
+workflow graphs. Explicit intent deterministically constrains LLM triage; auto
+keeps triage-driven routing and records the resolved intent for provenance.
 """
 
 from __future__ import annotations
@@ -24,7 +19,7 @@ from app.workflows.state import InitiativeState
 
 
 class WorkflowManager(BaseWorkflowManager):
-    """WP11 public manager with conservative risk/latency routing."""
+    """Public manager with conservative risk/latency and intent routing."""
 
     def _build_graph(self) -> StateGraph:
         """Build the base graph with Engineer as a legal post-advisor target."""
@@ -107,10 +102,40 @@ class WorkflowManager(BaseWorkflowManager):
             contract = task.engineering_contract or {}
             bounded = _bounded_contract(contract)
             request_type = str(triage.get("request_type") or result.get("request_type") or "feature")
-            requires_implementation = bool(
+            inferred_requires_implementation = bool(
                 triage.get("requires_implementation", result.get("requires_implementation", True))
             )
+            requested_mode = str(task.requested_mode or "auto").lower()
+            resolved_mode = _resolve_execution_mode(
+                requested_mode,
+                request_type,
+                inferred_requires_implementation,
+            )
+            mode_source = "inferred" if requested_mode == "auto" else "user"
+
+            # Explicit modes are an authority boundary: the model can still
+            # select useful advisory roles, but cannot silently turn a read-only
+            # investigation/plan/answer into source modification or suppress a
+            # requested change.
+            if resolved_mode == "change":
+                triage["requires_implementation"] = True
+            elif resolved_mode in {"investigate", "plan"}:
+                triage["requires_implementation"] = False
+                triage["use_architect"] = True
+            elif resolved_mode == "ask":
+                triage.update(
+                    {
+                        "requires_implementation": False,
+                        "use_product": False,
+                        "use_cto": False,
+                        "use_technical_expert": False,
+                        "use_architect": True,
+                    }
+                )
+
+            requires_implementation = bool(triage.get("requires_implementation", True))
             requested_architect = bool(triage.get("use_architect", True))
+            task.resolved_mode = resolved_mode
 
             decision = "architecture"
             reason = "architecture retained"
@@ -129,16 +154,9 @@ class WorkflowManager(BaseWorkflowManager):
                         "acceptance_criteria; Architect skipped to reduce redundant latency"
                     )
                     if task.status == TaskStatus.ARCHITECTURE_ANALYSIS.value:
-                        await self._transition(
-                            task,
-                            "skip_architecture",
-                            "workflow-policy",
-                            session,
-                        )
+                        await self._transition(task, "skip_architecture", "workflow-policy", session)
                     result["task_status"] = TaskStatus.READY_TO_IMPLEMENT.value
                 elif not requested_architect:
-                    # LLM triage alone cannot waive architecture for an
-                    # unbounded implementation. Fail safe to the full path.
                     triage["use_architect"] = True
                     decision = "architecture"
                     reason = "triage requested a skip but deterministic bounded-task gate did not pass"
@@ -146,18 +164,24 @@ class WorkflowManager(BaseWorkflowManager):
                 decision = "advisory_only"
                 reason = "no implementation required and no Architect selected"
                 if task.status == TaskStatus.ARCHITECTURE_ANALYSIS.value:
-                    await self._transition(
-                        task,
-                        "advisory_completed",
-                        "workflow-policy",
-                        session,
-                    )
+                    await self._transition(task, "advisory_completed", "workflow-policy", session)
                 result["task_status"] = TaskStatus.READY_FOR_HUMAN.value
+            else:
+                decision = f"read_only_{resolved_mode}"
+                reason = f"{resolved_mode} mode requires read-only analysis and no Engineer execution"
 
+            await session.commit()
+
+        triage["requested_mode"] = requested_mode
+        triage["resolved_mode"] = resolved_mode
+        triage["mode_source"] = mode_source
         triage["routing_policy"] = {
             "decision": decision,
             "reason": reason,
             "bounded_contract": bounded,
+            "requested_mode": requested_mode,
+            "resolved_mode": resolved_mode,
+            "mode_source": mode_source,
         }
         result["triage_result"] = json.dumps(triage)
         result["requires_implementation"] = bool(triage.get("requires_implementation", True))
@@ -170,6 +194,9 @@ class WorkflowManager(BaseWorkflowManager):
                 "reason": reason,
                 "request_type": result["request_type"],
                 "bounded_contract": bounded,
+                "requested_mode": requested_mode,
+                "resolved_mode": resolved_mode,
+                "mode_source": mode_source,
             },
         )
         return result
@@ -192,6 +219,23 @@ class WorkflowManager(BaseWorkflowManager):
         if bool(triage.get("requires_implementation", state.get("requires_implementation", True))):
             return "engineer"
         return "__end__"
+
+
+def _resolve_execution_mode(
+    requested_mode: str,
+    request_type: str,
+    requires_implementation: bool,
+) -> str:
+    """Resolve Auto from triage while treating explicit user intent as binding."""
+    if requested_mode in {"change", "investigate", "plan", "ask"}:
+        return requested_mode
+    if requires_implementation:
+        return "change"
+    if request_type in {"architecture", "technology_decision"}:
+        return "plan"
+    if request_type == "product_question":
+        return "ask"
+    return "investigate"
 
 
 def _bounded_contract(contract: dict[str, Any]) -> bool:
