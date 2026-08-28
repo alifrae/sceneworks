@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config.settings import Settings
 from app.engineering_models import EngineeringSession
-from app.git.workspace import GitError, GitWorktreeService
+from app.git.workspace import GitError, GitWorktreeService, run_git
 from app.models import Project
 from app.runtime.base import ExecutionRuntime, RuntimeErrorBase
 from app.runtime.registry import RuntimeRegistry
@@ -146,7 +146,7 @@ class EngineeringSessionService:
 
         branch = f"sw/mcp-{session_id}"
         try:
-            workspace = await self._git.create_branch_worktree(
+            worktree_path = await self._create_worktree(
                 repo_path, base_commit, session_id, branch
             )
         except GitError as exc:
@@ -166,13 +166,52 @@ class EngineeringSessionService:
             row = await session.get(EngineeringSession, session_id)
             if row is None:
                 raise EngineeringSessionError("engineering session disappeared during creation")
-            row.branch = workspace.branch
-            row.worktree_path = str(workspace.worktree_path)
+            row.branch = branch
+            row.worktree_path = str(worktree_path)
             row.status = "ACTIVE"
             row.updated_at = _now()
             await session.commit()
             await session.refresh(row)
             return row
+
+    async def _create_worktree(
+        self,
+        repo_path: Path,
+        base_commit: str,
+        session_id: int,
+        branch: str,
+    ) -> Path:
+        """Create a branch worktree in an MCP-specific namespace.
+
+        Task IDs and EngineeringSession IDs are independent sequences. Reusing
+        the task worktree naming helper could therefore collide for equal IDs.
+        """
+        if not await self._git.ensure_branch_available(repo_path, branch):
+            existing = await self._git.find_worktree_for_branch(repo_path, branch)
+            if existing is not None:
+                return existing
+            raise GitError(f"branch {branch!r} already exists but has no worktree")
+        root = self._git.worktree_root.resolve()
+        destination = (root / f"{repo_path.name}-sw-mcp-{session_id}").resolve()
+        if not destination.is_relative_to(root):
+            raise GitError("engineering-session worktree escapes configured root")
+        if destination.exists():
+            raise GitError(f"engineering-session worktree already exists: {destination}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await run_git(
+                repo_path,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(destination),
+                base_commit,
+                timeout=self._settings.git_timeout_seconds,
+            )
+        except GitError as exc:
+            raise GitError(f"could not create engineering-session worktree: {exc}") from exc
+        return destination
 
     async def get(self, session_id: int) -> EngineeringSession:
         async with self._session_factory() as session:
