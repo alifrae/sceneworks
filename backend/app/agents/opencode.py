@@ -36,7 +36,12 @@ class OpenCodeBackend:
         self._active: dict[str, asyncio.subprocess.Process] = {}
 
     def _executable(self) -> str | None:
-        return self._settings.opencode_executable or shutil.which("opencode")
+        configured = self._settings.opencode_executable
+        if configured:
+            # `which` also validates an explicit absolute/relative executable
+            # path instead of treating any configured string as healthy.
+            return shutil.which(configured)
+        return shutil.which("opencode")
 
     def _model(self, request: AgentRequest | None = None) -> str | None:
         if request is not None and request.model:
