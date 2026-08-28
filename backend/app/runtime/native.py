@@ -1,4 +1,4 @@
-"""Native SceneWorks execution runtime (WP14/WP15).
+"""Native SceneWorks execution runtime (WP14-WP16).
 
 No model or agent logic lives here. Filesystem operations are confined to the
 EngineeringSession worktree. Commands and child processes use that worktree as
@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 from uuid import uuid4
 
 from app.git.workspace import GitError, run_git
@@ -32,6 +32,14 @@ _MAX_PROCESS_EVENTS = 5000
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _environment(overrides: Mapping[str, str] | None) -> dict[str, str] | None:
+    if not overrides:
+        return None
+    merged = dict(os.environ)
+    merged.update({str(key): str(value) for key, value in overrides.items()})
+    return merged
 
 
 @dataclass
@@ -246,6 +254,7 @@ class NativeRuntime:
         *,
         cwd: str = "",
         timeout: int = 300,
+        environment: Mapping[str, str] | None = None,
     ) -> CommandResult:
         if not command.strip():
             raise RuntimeErrorBase("command is required")
@@ -255,6 +264,7 @@ class NativeRuntime:
                 command,
                 *[str(item) for item in args],
                 cwd=str(workdir),
+                env=_environment(environment),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -296,6 +306,7 @@ class NativeRuntime:
         args: Sequence[str] = (),
         *,
         cwd: str = "",
+        environment: Mapping[str, str] | None = None,
     ) -> ProcessSnapshot:
         if not command.strip():
             raise RuntimeErrorBase("command is required")
@@ -305,6 +316,7 @@ class NativeRuntime:
                 command,
                 *[str(item) for item in args],
                 cwd=str(workdir),
+                env=_environment(environment),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.PIPE,
@@ -342,6 +354,7 @@ class NativeRuntime:
             record.output.append(
                 {
                     "seq": len(record.output),
+                    "timestamp": _iso_now(),
                     "stream": stream,
                     "text": chunk.decode(errors="replace")[:8000],
                 }
