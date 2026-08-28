@@ -1,14 +1,22 @@
-"""Provider-neutral execution runtime contract (WP14)."""
+"""Provider-neutral execution runtime contract (WP14/WP15)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 
 class RuntimeErrorBase(RuntimeError):
     """Expected runtime-domain failure safe to surface through MCP."""
+
+
+class CommandRuntimeError(RuntimeErrorBase):
+    """Command failure carrying bounded objective evidence for the ledger."""
+
+    def __init__(self, message: str, evidence: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.evidence = evidence or {}
 
 
 @dataclass(frozen=True)
@@ -21,8 +29,11 @@ class CommandResult:
 @dataclass(frozen=True)
 class ProcessSnapshot:
     process_id: str
+    pid: int | None
     command: list[str]
     cwd: str
+    started_at: str
+    finished_at: str | None
     running: bool
     returncode: int | None
     next_cursor: int

@@ -1,9 +1,8 @@
-"""Provider-neutral direct engineering sessions (WP14).
+"""Provider-neutral direct engineering sessions (WP14/WP15).
 
 An EngineeringSession owns a SceneWorks-created Git worktree plus a runtime and
-permission ceiling. It does not own a model conversation. ChatGPT can therefore
-inspect/run/debug directly even when every configured agent provider is down,
-and may optionally delegate bounded work to any registered AgentBackend.
+permission ceiling. WP15 optionally binds it to one governed Task so every turn
+and evidence record can be correlated with the work item being verified.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config.settings import Settings
 from app.engineering_models import EngineeringSession
 from app.git.workspace import GitError, GitWorktreeService, run_git
-from app.models import Project
+from app.models import Project, Task
 from app.runtime.base import ExecutionRuntime, RuntimeErrorBase
 from app.runtime.registry import RuntimeRegistry
 
@@ -86,6 +85,7 @@ class EngineeringSessionService:
         self,
         project_id: int,
         *,
+        task_id: int | None = None,
         permissions: list[str] | None = None,
         runtime: str = "native",
         default_backend: str | None = None,
@@ -103,9 +103,6 @@ class EngineeringSessionService:
                 "unknown engineering-session permissions: " + ", ".join(sorted(unknown))
             )
         allowed = set(self._settings.advanced_session_permissions)
-        # WP11 did not have these direct-runtime names. Treat process_control as
-        # part of shell_execute and agent_delegate as available when subagents
-        # were allowed, preserving old deployments while the setting migrates.
         if "shell_execute" in allowed:
             allowed.add("process_control")
         if "subagents" in allowed:
@@ -122,6 +119,14 @@ class EngineeringSessionService:
             project = await session.get(Project, project_id)
             if project is None:
                 raise EngineeringSessionError(f"project {project_id} not found")
+            if task_id is not None:
+                task = await session.get(Task, task_id)
+                if task is None:
+                    raise EngineeringSessionError(f"task {task_id} not found")
+                if task.project_id != project_id:
+                    raise EngineeringSessionError(
+                        f"task {task_id} belongs to project {task.project_id}, not project {project_id}"
+                    )
             repo_path = Path(project.repository_path).resolve()
             info = await self._git.repo_info(repo_path)
             if not info.is_git:
@@ -131,6 +136,7 @@ class EngineeringSessionService:
             )
             row = EngineeringSession(
                 project_id=project.id,
+                task_id=task_id,
                 runtime=runtime,
                 status="STARTING",
                 base_commit=base_commit,
@@ -181,11 +187,7 @@ class EngineeringSessionService:
         session_id: int,
         branch: str,
     ) -> Path:
-        """Create a branch worktree in an MCP-specific namespace.
-
-        Task IDs and EngineeringSession IDs are independent sequences. Reusing
-        the task worktree naming helper could therefore collide for equal IDs.
-        """
+        """Create a branch worktree in an MCP-specific namespace."""
         if not await self._git.ensure_branch_available(repo_path, branch):
             existing = await self._git.find_worktree_for_branch(repo_path, branch)
             if existing is not None:
@@ -269,7 +271,6 @@ class EngineeringSessionService:
                     "refusing to remove a dirty engineering-session worktree; commit or discard changes first"
                 )
             try:
-                # Preserve the branch/commits. Cleanup removes only the checked-out worktree.
                 await self._git.remove_worktree(
                     Path(project.repository_path).resolve(), worktree, None
                 )
@@ -295,6 +296,7 @@ def engineering_session_row(row: EngineeringSession) -> dict:
     return {
         "id": row.id,
         "project_id": row.project_id,
+        "task_id": row.task_id,
         "runtime": row.runtime,
         "status": row.status,
         "base_commit": row.base_commit,

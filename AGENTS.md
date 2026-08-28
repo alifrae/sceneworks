@@ -19,7 +19,7 @@ These rules apply to every coding agent working in SceneWorks.
 1. **Model provider, agent backend, and execution runtime are separate concepts.**
    - A model generates reasoning/text.
    - An `AgentBackend` is an autonomous worker transport/runtime.
-   - an `ExecutionRuntime` exposes SceneWorks-owned machine capabilities.
+   - An `ExecutionRuntime` exposes SceneWorks-owned machine capabilities.
    Do not collapse these layers.
 
 2. **Gemini CLI is the default, not a platform dependency.**
@@ -43,10 +43,19 @@ These rules apply to every coding agent working in SceneWorks.
 8. **Gemini-native capabilities stay provider-native.**
    Do not clone Gemini web search/fetch, native subagents, or provider-specific reasoning features into the native execution runtime merely for parity.
 
-9. **Git provenance remains SceneWorks authority.**
-   Worktrees, base commits, diffs, branch names and persisted execution/session records are owned by SceneWorks. Agent prose is not evidence of repository state.
+9. **SceneWorks-captured state is evidence; agent conclusions are inference.**
+   Git state, file hashes, command/process results, runtime observations and persisted SceneWorks events are authoritative observations of what occurred. Gemini/OpenCode/OpenHands summaries must never silently replace or override them.
 
-10. **Settings changes must reach live consumers.**
+10. **Engineering evidence must be causally attributable.**
+    Direct Advanced actions should be attributable to `EngineeringSession -> Task (when bound) -> EngineeringTurn -> action_id`. Delegated executions must retain the originating turn/action identifiers. Do not add new Advanced control paths that bypass this correlation model.
+
+11. **The evidence ledger is not a repository mirror.**
+    File evidence records paths, ranges and hashes; writes record before/after hashes. Git evidence may retain status/stat/hash metadata while the real diff remains Git truth. Persist full source/diff contents only when an explicit artifact requirement justifies it. Command/process output must be bounded.
+
+12. **Git provenance remains SceneWorks authority.**
+    Worktrees, base commits, diffs, changed-file hashes, branch names and persisted execution/session records are owned by SceneWorks. Agent prose is not evidence of repository state.
+
+13. **Settings changes must reach live consumers.**
     When rebuilding a backend registry, router, Git service or runtime dependency, update every long-lived service that holds that dependency. A setting that appears saved but requires an undocumented restart is a defect.
 
 ## Backend additions
@@ -65,6 +74,7 @@ These rules apply to every coding agent working in SceneWorks.
 - Treat every path from MCP as untrusted.
 - Keep command execution argument-based; do not introduce shell-string evaluation without an explicit requirement and security review.
 - Persistent process output must be bounded and attributable to its EngineeringSession.
+- When a runtime primitive becomes part of Advanced control, add or update its evidence mapping in the same change.
 
 ## Documentation policy
 

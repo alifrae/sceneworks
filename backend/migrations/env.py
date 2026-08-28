@@ -27,7 +27,11 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.db.session import Base  # noqa: E402
 from app.models import all_models  # noqa: E402,F401  (registers core tables)
-from app.engineering_models import EngineeringSession  # noqa: E402,F401  (WP14 table)
+from app.engineering_models import (  # noqa: E402,F401
+    EngineeringEvidence,
+    EngineeringSession,
+    EngineeringTurn,
+)
 
 config = context.config
 
@@ -38,16 +42,7 @@ target_metadata = Base.metadata
 
 
 def _sync_url() -> str:
-    """Resolve the database URL, as a synchronous driver URL.
-
-    Resolution order matters, and getting it wrong is dangerous: an earlier
-    version consulted only ``get_settings()``, so a migration invoked
-    programmatically against one database was executed against the *default*
-    one instead. That attempted to create tables in a live database holding
-    real project history.
-
-    The caller's explicit choice therefore always wins over ambient settings.
-    """
+    """Resolve the database URL, as a synchronous driver URL."""
     if override := context.get_x_argument(as_dictionary=True).get("db_url"):
         return _strip_async_driver(override)
     if injected := config.attributes.get("db_url"):

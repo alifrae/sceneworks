@@ -1,4 +1,4 @@
-"""Native SceneWorks execution runtime (WP14).
+"""Native SceneWorks execution runtime (WP14/WP15).
 
 No model or agent logic lives here. Filesystem operations are confined to the
 EngineeringSession worktree. Commands and child processes use that worktree as
@@ -12,16 +12,26 @@ import asyncio
 import hashlib
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
 
 from app.git.workspace import GitError, run_git
-from app.runtime.base import CommandResult, ProcessSnapshot, RuntimeErrorBase
+from app.runtime.base import (
+    CommandResult,
+    CommandRuntimeError,
+    ProcessSnapshot,
+    RuntimeErrorBase,
+)
 
 _MAX_FILE_BYTES = 4_000_000
 _MAX_COMMAND_CHARS = 240_000
 _MAX_PROCESS_EVENTS = 5000
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -30,6 +40,8 @@ class _ProcessRecord:
     command: list[str]
     cwd: Path
     process: asyncio.subprocess.Process
+    started_at: str
+    finished_at: str | None = None
     output: list[dict] = field(default_factory=list)
     readers: list[asyncio.Task] = field(default_factory=list)
 
@@ -161,8 +173,6 @@ class NativeRuntime:
                 continue
             try:
                 resolved = candidate.resolve()
-                # rglob can yield symlinked files. Resolve before stat/read so a
-                # symlink cannot turn search into a host-filesystem read primitive.
                 if not resolved.is_relative_to(workspace) or not resolved.is_file():
                     continue
                 if resolved.stat().st_size > _MAX_FILE_BYTES:
@@ -249,15 +259,30 @@ class NativeRuntime:
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as exc:
-            raise RuntimeErrorBase(f"could not start command: {exc}") from exc
+            raise CommandRuntimeError(
+                f"could not start command: {exc}",
+                {"stdout": "", "stderr": "", "timed_out": False, "cancelled": False},
+            ) from exc
+        communicate = asyncio.create_task(process.communicate())
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=max(1, timeout)
+                asyncio.shield(communicate), timeout=max(1, timeout)
             )
         except asyncio.TimeoutError as exc:
             process.kill()
-            await process.wait()
-            raise RuntimeErrorBase(f"command timed out after {timeout}s") from exc
+            stdout, stderr = await communicate
+            stdout_text = stdout.decode(errors="replace")[:_MAX_COMMAND_CHARS]
+            stderr_text = stderr.decode(errors="replace")[:_MAX_COMMAND_CHARS]
+            raise CommandRuntimeError(
+                f"command timed out after {timeout}s",
+                {
+                    "exit_code": process.returncode,
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
+                    "timed_out": True,
+                    "cancelled": False,
+                },
+            ) from exc
         return CommandResult(
             returncode=int(process.returncode or 0),
             stdout=stdout.decode(errors="replace")[:_MAX_COMMAND_CHARS],
@@ -292,6 +317,7 @@ class NativeRuntime:
             command=[command, *[str(item) for item in args]],
             cwd=workdir,
             process=process,
+            started_at=_iso_now(),
         )
         record.readers = [
             asyncio.create_task(self._drain(record, "stdout", process.stdout)),
@@ -338,8 +364,11 @@ class NativeRuntime:
         events = record.output[start : start + max(0, max_events)] if max_events else []
         return ProcessSnapshot(
             process_id=record.process_id,
+            pid=record.process.pid,
             command=list(record.command),
             cwd=str(record.cwd),
+            started_at=record.started_at,
+            finished_at=record.finished_at,
             running=record.process.returncode is None,
             returncode=record.process.returncode,
             next_cursor=start + len(events),
@@ -352,6 +381,8 @@ class NativeRuntime:
         record = self._record(process_id)
         if record.process.returncode is not None:
             await asyncio.gather(*record.readers, return_exceptions=True)
+            if record.finished_at is None:
+                record.finished_at = _iso_now()
         return self._snapshot(record, cursor=cursor, max_events=max_events)
 
     async def stop_process(self, process_id: str) -> ProcessSnapshot:
@@ -364,6 +395,8 @@ class NativeRuntime:
                 record.process.kill()
                 await record.process.wait()
         await asyncio.gather(*record.readers, return_exceptions=True)
+        if record.finished_at is None:
+            record.finished_at = _iso_now()
         return self._snapshot(record, cursor=0, max_events=len(record.output))
 
     async def git_status(self, root: Path) -> dict:
@@ -375,6 +408,60 @@ class NativeRuntime:
         except GitError as exc:
             raise RuntimeErrorBase(str(exc)) from exc
         return {"branch": branch, "head": head, "status": porcelain}
+
+    async def _changed_file_hashes(
+        self, workspace: Path, base_commit: str | None
+    ) -> list[dict]:
+        names: set[str] = set()
+        try:
+            if base_commit:
+                names.update(
+                    line.strip()
+                    for line in (
+                        await run_git(
+                            workspace, "diff", "--name-only", f"{base_commit}..HEAD"
+                        )
+                    ).splitlines()
+                    if line.strip()
+                )
+            for args in (
+                ("diff", "--name-only", "HEAD"),
+                ("diff", "--cached", "--name-only"),
+                ("ls-files", "--others", "--exclude-standard"),
+            ):
+                names.update(
+                    line.strip()
+                    for line in (await run_git(workspace, *args)).splitlines()
+                    if line.strip()
+                )
+        except GitError as exc:
+            raise RuntimeErrorBase(str(exc)) from exc
+
+        rows: list[dict] = []
+        for name in sorted(names):
+            candidate = (workspace / name).resolve()
+            if not candidate.is_relative_to(workspace):
+                continue
+            if candidate.is_file():
+                data = candidate.read_bytes()
+                rows.append(
+                    {
+                        "path": name.replace("\\", "/"),
+                        "exists": True,
+                        "bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "path": name.replace("\\", "/"),
+                        "exists": False,
+                        "bytes": None,
+                        "sha256": None,
+                    }
+                )
+        return rows
 
     async def git_diff(self, root: Path, *, base_commit: str | None = None) -> dict:
         workspace = self._root(root)
@@ -388,6 +475,7 @@ class NativeRuntime:
             working = await run_git(workspace, "diff", "HEAD")
             staged = await run_git(workspace, "diff", "--cached")
             status = await run_git(workspace, "status", "--porcelain")
+            changed_files = await self._changed_file_hashes(workspace, base_commit)
         except GitError as exc:
             raise RuntimeErrorBase(str(exc)) from exc
         return {
@@ -397,6 +485,7 @@ class NativeRuntime:
             "working": working,
             "staged": staged,
             "status": status,
+            "changed_files": changed_files,
         }
 
     async def git_commit(self, root: Path, message: str) -> dict:
