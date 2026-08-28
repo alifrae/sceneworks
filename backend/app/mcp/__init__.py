@@ -1,11 +1,12 @@
-"""SceneWorks MCP reasoning interface.
+"""SceneWorks MCP reasoning and engineering-control interface.
 
-The MCP boundary exposes SceneWorks semantics to external reasoning clients.
-It deliberately does not expose raw filesystem, shell, SQL, or Git primitives;
-repository execution remains mediated by the configured AgentBackend and
-SceneWorks worktree/permission policy.
+Observe and Standard modes expose semantic SceneWorks concepts. Advanced mode
+adds provider-neutral EngineeringSessions: direct worktree-confined filesystem,
+command/process and Git capabilities owned by SceneWorks itself. Agent providers
+(Gemini ACP, OpenCode, OpenHands) are optional delegated workers rather than the
+execution substrate.
 """
 
-from app.mcp.wp13_server import WorkManagementMCPServer as SceneWorksMCPServer
+from app.mcp.wp14_server import ProviderNeutralMCPServer as SceneWorksMCPServer
 
 __all__ = ["SceneWorksMCPServer"]
