@@ -2,7 +2,8 @@
 
 Builds every service once at startup, wires the execution engine's continuation
 hook to the LangGraph WorkflowManager, and reconciles interrupted executions,
-legacy provider sessions, and provider-neutral engineering sessions.
+legacy provider sessions, provider-neutral engineering sessions and managed PCS
+runs.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from app.services.company import CompanyService
 from app.services.engineering_evidence import EngineeringEvidenceService
 from app.services.engineering_sessions import EngineeringSessionService
 from app.services.memory import MemoryService
+from app.services.pcs_control import PcsControlService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
 from app.services.workflow import TaskWorkflowService
@@ -59,6 +61,7 @@ class AppContext:
     agent_sessions: AgentSessionService
     engineering_sessions: EngineeringSessionService
     engineering_evidence: EngineeringEvidenceService
+    pcs_control: PcsControlService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -72,6 +75,9 @@ class AppContext:
                 pass
         await self.backends.shutdown()
         await self.agent_sessions.shutdown()
+        # PCS control must drain/finalize managed runs before the native runtime
+        # destroys its process handles.
+        await self.pcs_control.shutdown()
         await self.runtimes.shutdown()
         await self.execution_engine.shutdown()
         await self.workflow_manager.shutdown()
@@ -130,6 +136,9 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         session_factory, git, runtimes, settings
     )
     engineering_evidence = EngineeringEvidenceService(session_factory)
+    pcs_control = PcsControlService(
+        session_factory, engineering_sessions, engineering_evidence
+    )
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -170,6 +179,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         agent_sessions=agent_sessions,
         engineering_sessions=engineering_sessions,
         engineering_evidence=engineering_evidence,
+        pcs_control=pcs_control,
         settings_store=settings_store,
         settings_overrides=overrides,
     )
@@ -190,6 +200,12 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         logger.warning(
             "reconciled %d interrupted engineering-session creations from previous run",
             len(engineering_interrupted),
+        )
+    pcs_interrupted = await pcs_control.recover_interrupted()
+    if pcs_interrupted:
+        logger.warning(
+            "marked %d managed PCS runs lost after SceneWorks restart",
+            len(pcs_interrupted),
         )
     recovered = await workflow_manager.recover_workflows()
     if recovered:
