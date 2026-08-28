@@ -75,11 +75,15 @@ class AppContext:
                 pass
         await self.backends.shutdown()
         await self.agent_sessions.shutdown()
+        # Mark/cancel in-flight governed executions before PCS/runtime cleanup
+        # introduces any delay. This preserves the restart-recovery invariant:
+        # work active at shutdown is recorded INTERRUPTED, never left looking
+        # completed merely because another subsystem took time to close.
+        await self.execution_engine.shutdown()
         # PCS control must drain/finalize managed runs before the native runtime
         # destroys its process handles.
         await self.pcs_control.shutdown()
         await self.runtimes.shutdown()
-        await self.execution_engine.shutdown()
         await self.workflow_manager.shutdown()
         await close_db(self.db_engine)
 
