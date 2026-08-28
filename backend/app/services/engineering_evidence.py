@@ -25,7 +25,6 @@ def _now() -> datetime:
 
 
 def _bounded_payload(value: Any) -> Any:
-    """Keep evidence useful without turning SQLite into an unbounded log sink."""
     if isinstance(value, str):
         if len(value) <= _MAX_PAYLOAD_STRING:
             return value
@@ -64,6 +63,20 @@ class EngineeringEvidenceService:
                 raise EngineeringEvidenceError(
                     f"engineering session {session_id} is {engineering.status.lower()}, not active"
                 )
+            active = (
+                await session.execute(
+                    select(EngineeringTurn)
+                    .where(
+                        EngineeringTurn.engineering_session_id == session_id,
+                        EngineeringTurn.status == "ACTIVE",
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if active is not None:
+                raise EngineeringEvidenceError(
+                    f"engineering session {session_id} already has active turn {active.id}; finish it before starting another"
+                )
             turn = EngineeringTurn(
                 id=uuid.uuid4().hex,
                 engineering_session_id=session_id,
@@ -76,14 +89,20 @@ class EngineeringEvidenceService:
             await session.refresh(turn)
             return turn
 
-    async def finish_turn(self, session_id: int, turn_id: str, status: str = "COMPLETED") -> EngineeringTurn:
+    async def finish_turn(
+        self, session_id: int, turn_id: str, status: str = "COMPLETED"
+    ) -> EngineeringTurn:
         normalized = status.strip().upper()
         if normalized not in {"COMPLETED", "FAILED", "CANCELLED"}:
-            raise EngineeringEvidenceError("turn status must be COMPLETED, FAILED or CANCELLED")
+            raise EngineeringEvidenceError(
+                "turn status must be COMPLETED, FAILED or CANCELLED"
+            )
         async with self._session_factory() as session:
             turn = await session.get(EngineeringTurn, turn_id)
             if turn is None or turn.engineering_session_id != session_id:
-                raise EngineeringEvidenceError("turn does not belong to this engineering session")
+                raise EngineeringEvidenceError(
+                    "turn does not belong to this engineering session"
+                )
             if turn.status != "ACTIVE":
                 return turn
             turn.status = normalized
@@ -99,7 +118,13 @@ class EngineeringEvidenceService:
         async with self._session_factory() as session:
             turn = await session.get(EngineeringTurn, turn_id)
             if turn is None or turn.engineering_session_id != session_id:
-                raise EngineeringEvidenceError("turn does not belong to this engineering session")
+                raise EngineeringEvidenceError(
+                    "turn does not belong to this engineering session"
+                )
+            if turn.status != "ACTIVE":
+                raise EngineeringEvidenceError(
+                    f"turn {turn_id} is {turn.status.lower()}, not active"
+                )
             return turn.id
 
     async def record(
@@ -120,11 +145,15 @@ class EngineeringEvidenceService:
         async with self._session_factory() as session:
             engineering = await session.get(EngineeringSession, session_id)
             if engineering is None:
-                raise EngineeringEvidenceError(f"engineering session {session_id} not found")
+                raise EngineeringEvidenceError(
+                    f"engineering session {session_id} not found"
+                )
             if turn_id:
                 turn = await session.get(EngineeringTurn, turn_id)
                 if turn is None or turn.engineering_session_id != session_id:
-                    raise EngineeringEvidenceError("turn does not belong to this engineering session")
+                    raise EngineeringEvidenceError(
+                        "turn does not belong to this engineering session"
+                    )
             row = EngineeringEvidence(
                 engineering_session_id=session_id,
                 task_id=engineering.task_id,
@@ -142,8 +171,15 @@ class EngineeringEvidenceService:
             await session.refresh(row)
             return row
 
-    async def list_turns(self, session_id: int, limit: int = 50) -> list[EngineeringTurn]:
+    async def list_turns(
+        self, session_id: int, limit: int = 50
+    ) -> list[EngineeringTurn]:
         async with self._session_factory() as session:
+            engineering = await session.get(EngineeringSession, session_id)
+            if engineering is None:
+                raise EngineeringEvidenceError(
+                    f"engineering session {session_id} not found"
+                )
             return list(
                 (
                     await session.execute(
@@ -167,29 +203,39 @@ class EngineeringEvidenceService:
         async with self._session_factory() as session:
             engineering = await session.get(EngineeringSession, session_id)
             if engineering is None:
-                raise EngineeringEvidenceError(f"engineering session {session_id} not found")
+                raise EngineeringEvidenceError(
+                    f"engineering session {session_id} not found"
+                )
             query = select(EngineeringEvidence).where(
                 EngineeringEvidence.engineering_session_id == session_id
             )
             if turn_id:
                 query = query.where(EngineeringEvidence.turn_id == turn_id)
             if category:
-                query = query.where(EngineeringEvidence.category == category.strip().lower())
+                query = query.where(
+                    EngineeringEvidence.category == category.strip().lower()
+                )
             if after_id is not None:
                 query = query.where(EngineeringEvidence.id > after_id)
-            query = query.order_by(EngineeringEvidence.id.asc()).limit(max(1, min(limit, 500)))
+            query = query.order_by(EngineeringEvidence.id.asc()).limit(
+                max(1, min(limit, 500))
+            )
             return list((await session.execute(query)).scalars().all())
 
     async def summary(self, session_id: int) -> dict[str, Any]:
         async with self._session_factory() as session:
             engineering = await session.get(EngineeringSession, session_id)
             if engineering is None:
-                raise EngineeringEvidenceError(f"engineering session {session_id} not found")
+                raise EngineeringEvidenceError(
+                    f"engineering session {session_id} not found"
+                )
             rows = list(
                 (
                     await session.execute(
                         select(EngineeringEvidence)
-                        .where(EngineeringEvidence.engineering_session_id == session_id)
+                        .where(
+                            EngineeringEvidence.engineering_session_id == session_id
+                        )
                         .order_by(EngineeringEvidence.id.asc())
                     )
                 ).scalars().all()
@@ -205,7 +251,13 @@ class EngineeringEvidenceService:
             )
         categories = Counter(row.category for row in rows)
         statuses = Counter(row.status for row in rows)
-        non_failures = {"COMPLETED", "SUCCEEDED", "RUNNING", "STARTED", "QUEUED"}
+        non_failures = {
+            "COMPLETED",
+            "SUCCEEDED",
+            "RUNNING",
+            "STARTED",
+            "QUEUED",
+        }
         failures = [row for row in rows if row.status not in non_failures]
         return {
             "engineering_session_id": session_id,
