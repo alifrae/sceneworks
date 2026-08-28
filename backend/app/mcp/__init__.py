@@ -1,10 +1,10 @@
-"""SceneWorks MCP reasoning, engineering-control, PCS and GUI evidence interface.
+"""SceneWorks MCP reasoning, engineering-control, PCS and GUI interface.
 
 Observe and Standard modes expose semantic SceneWorks concepts. Advanced mode
 adds provider-neutral EngineeringSessions, durable WP15 evidence correlation,
-WP16 PCS runtime semantics and WP17 observation-only GUI evidence. Agent
-providers are optional workers; SceneWorks-captured runtime/process/log/Git/PCS
-and screenshot observations remain the evidence authority.
+WP16 PCS runtime semantics, WP17 GUI evidence and WP18 controlled accessibility
+automation. Agent providers are optional workers; SceneWorks-captured runtime,
+process, log, Git, PCS and GUI observations remain the evidence authority.
 """
 
 from __future__ import annotations
@@ -12,17 +12,17 @@ from __future__ import annotations
 from typing import Any
 
 from app.mcp.server import MCPToolError
-from app.mcp.wp17_server import GuiEvidenceMCPServer
+from app.mcp.wp18_server import GuiAutomationMCPServer
 
 
-class SceneWorksMCPServer(GuiEvidenceMCPServer):
-    """Canonical WP17 server with provider-neutral PCS/GUI evidence guidance."""
+class SceneWorksMCPServer(GuiAutomationMCPServer):
+    """Canonical WP18 server with provider-neutral PCS/GUI control guidance."""
 
-    def _wp17_instructions(self) -> str:
+    def _wp18_instructions(self) -> str:
         if self.mode == "observe":
             mode_text = (
                 "Observe mode: read-only semantic tools; PCS runtime configuration may be "
-                "inspected but processes/actions/GUI capture are unavailable."
+                "inspected but processes/actions/GUI capture and automation are unavailable."
             )
         elif self.mode == "standard":
             mode_text = (
@@ -33,16 +33,19 @@ class SceneWorksMCPServer(GuiEvidenceMCPServer):
             mode_text = (
                 "Advanced mode: Standard tools plus task-bindable EngineeringSessions, "
                 "durable evidence, direct workspace/command/process/Git control, semantic "
-                "PCS control, and managed-PCS window/dialog/screenshot/visual-diff evidence."
+                "PCS control, managed-PCS visual evidence and permission-gated Windows UI "
+                "Automation controls."
             )
         return (
             "SceneWorks is the engineering control plane and evidence authority. Ground "
             "reasoning in project state, accepted memory, task contracts, captured evidence, "
             "PCS runtime observations, GUI artifacts and Git truth. Provider/agent conclusions "
             "and visual interpretation are inference, not authoritative evidence. Prefer PCS "
-            "semantic/API control over GUI observation whenever deterministic PCS APIs are "
-            "available. WP17 GUI support is observation-only and restricted to the managed PCS "
-            "process; it does not expose focus, click, keyboard or arbitrary desktop capture. "
+            "semantic/API control over GUI automation whenever deterministic PCS APIs are "
+            "available. WP18 GUI mutation is a fallback: it requires gui_observe plus "
+            "gui_automate, resolves opaque UI Automation control ids only inside the current "
+            "SceneWorks-managed PCS window, never uses caller-supplied screen coordinates, and "
+            "requires before/after screenshot evidence with deterministic visual comparison. "
             + mode_text
         )
 
@@ -50,8 +53,8 @@ class SceneWorksMCPServer(GuiEvidenceMCPServer):
         if self.mode != "advanced":
             raise MCPToolError(
                 "This tool requires explicit Advanced MCP mode. Advanced mode gives the MCP "
-                "client SceneWorks-owned engineering, PCS runtime and managed GUI evidence "
-                "capabilities; Gemini/OpenCode/OpenHands are optional workers."
+                "client SceneWorks-owned engineering, PCS runtime and managed GUI capabilities; "
+                "Gemini/OpenCode/OpenHands are optional workers."
             )
 
     async def _engineering_session_close(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -72,7 +75,7 @@ class SceneWorksMCPServer(GuiEvidenceMCPServer):
             if isinstance(body, dict):
                 result = body.get("result")
                 if isinstance(result, dict):
-                    result["instructions"] = self._wp17_instructions()
+                    result["instructions"] = self._wp18_instructions()
         return body, status
 
 

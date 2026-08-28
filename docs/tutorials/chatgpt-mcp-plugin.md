@@ -6,12 +6,13 @@ SceneWorks exposes one MCP endpoint with three authority levels. Start in
 ```text
 Observe  -> semantic reads
 Standard -> governed actions + project registration
-Advanced -> direct EngineeringSession + evidence + semantic PCS control + optional workers
+Advanced -> direct EngineeringSession + evidence + semantic PCS/GUI control + optional workers
 ```
 
-Gemini CLI remains the default agent worker, but Advanced direct execution,
-PCS lifecycle control and evidence capture are owned by SceneWorks and do not
-require a functioning Gemini model session.
+Gemini CLI remains the default agent worker, but Advanced direct execution, PCS
+lifecycle control, evidence capture, managed-PCS screenshots and controlled GUI
+automation are owned by SceneWorks and do not require a functioning Gemini model
+session.
 
 ## 1. Start SceneWorks and verify MCP locally
 
@@ -184,7 +185,7 @@ If PCS is already cloned on the machine where SceneWorks runs:
 The path is resolved on the **SceneWorks host**, not by ChatGPT. Registration
 validates Git and does not upload/copy the repository through the tunnel.
 
-## 5. Advanced mode
+## 5. Advanced mode and permissions
 
 Configure:
 
@@ -192,7 +193,7 @@ Configure:
 SCENEWORKS_MCP_MODE=advanced
 ```
 
-Advanced permissions include:
+Advanced permissions currently include:
 
 ```text
 repository_read
@@ -202,13 +203,23 @@ process_control
 git_commit
 agent_delegate
 external_asset_read
+gui_observe
+gui_automate
 ```
 
 `network_access` remains a host/provider capability indicator and `subagents`
 exists for legacy Gemini ACP sessions.
 
-`external_asset_read` is independent of repository/process control. Use it only
-when PCS needs recordings/corpora outside the worktree.
+Important permission separations:
+
+- `external_asset_read` is independent of repository/process control;
+- `gui_observe` allows managed-PCS window/dialog discovery and screenshot
+  evidence only;
+- `gui_automate` is separate and does not replace `gui_observe`;
+- WP18 GUI mutation requires **both** `gui_observe` and `gui_automate` because
+  before/after visual evidence is mandatory.
+
+Only grant the capability subset needed by the EngineeringSession.
 
 ## 6. Create a task-bound EngineeringSession
 
@@ -269,8 +280,8 @@ sceneworks.git.diff
 sceneworks.git.commit
 ```
 
-These remain useful generic primitives. For PCS lifecycle/observation, prefer the
-semantic `pcs.*` tools below because they add profiles, persistent logs, health,
+These remain useful generic primitives. For PCS lifecycle/observation/control,
+prefer semantic `pcs.*` tools because they add profiles, persistent logs, health,
 crash semantics and PCS-specific evidence automatically.
 
 ## 9. Configure PCS run profiles
@@ -366,27 +377,8 @@ sceneworks.pcs.errors
 sceneworks.pcs.log_tail
 ```
 
-Events include:
-
-```text
-timestamp
-severity
-source (stdout/stderr)
-text
-run correlation
-```
-
-Examples:
-
-```text
-@SceneWorks show only ERROR/CRITICAL PCS logs from this run.
-```
-
-```text
-@SceneWorks tail the last 50 PCS log events containing "renderer".
-```
-
-The log evidence is bounded and intended for engineering verification, not as a
+Events include timestamp, severity, source, text and run correlation. The log
+evidence is bounded and intended for engineering verification, not as a
 replacement for a production log platform.
 
 ## 12. Crash and exit evidence
@@ -404,8 +396,8 @@ Before finalization, remaining bounded stdout/stderr is persisted. Configured
 worktree-relative log/crash files are recorded with path, size, timestamp and
 SHA-256 (up to the documented hash bound).
 
-A Gemini statement such as "PCS crashed because X" is still inference. The
-exit code, captured fatal logs and crash/log-file hashes are evidence.
+A Gemini statement such as "PCS crashed because X" is still inference. The exit
+code, captured fatal logs and crash/log-file hashes are evidence.
 
 ## 13. PCS health checks
 
@@ -415,16 +407,12 @@ Use:
 sceneworks.pcs.health
 ```
 
-It combines:
+It combines managed process state, configured loopback TCP ports and optional
+loopback PCS API health response. If no checks are configured, a live managed
+process is considered ready.
 
-- managed process state;
-- configured loopback TCP ports;
-- optional loopback PCS API health response.
-
-If no checks are configured, a live managed process is considered ready.
-
-Remote hosts are intentionally rejected in WP16 so semantic health cannot become
-an arbitrary network scanner.
+Remote hosts are intentionally rejected so semantic health cannot become an
+arbitrary network scanner.
 
 ## 14. Semantic PCS runtime state
 
@@ -438,18 +426,9 @@ When a profile defines a PCS `runtime_state_path`, SceneWorks reads that PCS API
 and treats it as the semantic source.
 
 Without such an API, SceneWorks reports objective process state and explicit
-unknowns for:
-
-```text
-active recording
-frame
-playback state
-loaded configuration
-active views
-errors/warnings
-```
-
-It does not infer those fields from logs or ask Gemini to guess.
+unknowns for active recording, frame, playback state, loaded configuration,
+active views and errors/warnings. It does not infer those fields from logs or ask
+Gemini to guess.
 
 As PCS API hardening exposes more capabilities, prefer adding them here rather
 than automating equivalent GUI interactions.
@@ -469,23 +448,15 @@ Configure explicit read-only aliases, for example:
 }
 ```
 
-The EngineeringSession must grant:
-
-```text
-external_asset_read
-```
-
-Then ChatGPT can use:
+The EngineeringSession must grant `external_asset_read`. Then ChatGPT can use:
 
 ```text
 sceneworks.pcs.assets
 sceneworks.pcs.asset_info
 ```
 
-Only alias-relative paths/metadata are returned. The configured absolute root is
-not exposed through MCP.
-
-To pass an asset to PCS/runbook command arguments:
+Only alias-relative paths/metadata are returned. To pass an asset to a trusted
+PCS profile/runbook argument, use:
 
 ```text
 {{asset:regression:playback/frame32.dat}}
@@ -494,12 +465,10 @@ To pass an asset to PCS/runbook command arguments:
 SceneWorks resolves that placeholder locally after permission/confinement checks.
 The resolved absolute path is not persisted/echoed into MCP evidence.
 
-Asset access is read-only in WP16.
-
 ## 16. Deterministic PCS verification runbooks
 
 Runbooks encode repeatable verification procedures rather than prompts.
-Supported steps:
+Supported steps include:
 
 ```text
 command
@@ -510,25 +479,7 @@ health
 runtime_state
 ```
 
-Example:
-
-```json
-{
-  "runbooks": {
-    "startup-smoke": {
-      "stop_on_failure": true,
-      "steps": [
-        {"action": "start", "profile": "debug"},
-        {"action": "health"},
-        {"action": "runtime_state"},
-        {"action": "stop"}
-      ]
-    }
-  }
-}
-```
-
-Run it with:
+Run them with:
 
 ```text
 sceneworks.pcs.run_verification
@@ -537,7 +488,121 @@ sceneworks.pcs.run_verification
 Each step produces objective evidence and the runbook returns pass/fail. This is
 preferred to repeatedly telling a worker how to launch/build/smoke-test PCS.
 
-## 17. Inspect evidence independently
+## 17. Observe PCS GUI state with WP17
+
+When visual layout, renderer output or dialog state is part of the problem, grant:
+
+```text
+gui_observe
+```
+
+and use:
+
+```text
+sceneworks.pcs.windows
+sceneworks.pcs.dialogs
+sceneworks.pcs.screenshot
+sceneworks.pcs.gui_artifacts
+sceneworks.pcs.gui_artifact
+sceneworks.pcs.visual_compare
+```
+
+Fresh window/dialog/screenshot observation is restricted to the live
+SceneWorks-managed PCS PID. MCP cannot supply an arbitrary PID or request a
+desktop-wide screenshot.
+
+`pcs.screenshot` stores durable PNG evidence outside the Git worktree and returns
+the image as MCP image content. Evidence records hash, dimensions, capture method,
+run/session/task/turn/action correlation and window metadata without exposing the
+internal storage path.
+
+`pcs.visual_compare` deterministically returns:
+
+```text
+changed_pixel_ratio
+changed_bbox
+identical
+```
+
+and persists a pixel-difference image when dimensions match and pixels changed.
+These metrics are evidence; a statement about what the changed pixels *mean* is
+still interpretation.
+
+The Windows capture provider records `occlusion_safe=false`: it captures the
+visible screen rectangle occupied by PCS. Keep the target window visible and
+unobstructed for acceptance evidence.
+
+## 18. Control UI-only PCS workflows with WP18
+
+Use WP18 only when the operation is not available through a hardened PCS API.
+The session must grant both:
+
+```text
+gui_observe
+gui_automate
+```
+
+First discover accessibility controls:
+
+```text
+sceneworks.pcs.controls
+```
+
+Each control includes an opaque `control_id`, accessibility name/automation id,
+control type, bounds and supported UI Automation patterns. Control ids are bound
+to one current managed PCS window and may become stale when the UI rebuilds.
+
+Supported actions are:
+
+```text
+sceneworks.pcs.gui.invoke
+sceneworks.pcs.gui.set_value
+sceneworks.pcs.gui.select
+sceneworks.pcs.gui.toggle
+```
+
+The Windows provider uses UI Automation patterns (`Invoke`, `Value`,
+`SelectionItem`, `Toggle`) rather than simulated mouse coordinates or keyboard
+injection. There is deliberately no MCP tool for coordinate clicking, pointer
+movement, arbitrary HWND/PID targeting or generic desktop automation.
+
+Every mutation follows this contract:
+
+```text
+validate managed PCS/session/permissions
+  -> capture durable BEFORE screenshot
+  -> execute one accessibility action
+  -> bounded settle delay
+  -> capture durable AFTER screenshot
+  -> deterministic visual comparison
+  -> persist final action evidence
+```
+
+If the pre-action screenshot fails, SceneWorks does not execute the action. If an
+action may have executed but after-action evidence cannot be completed, the
+action is recorded as `PARTIAL`/unverified and the tool returns an error rather
+than claiming success.
+
+`pcs.gui.set_value` does not persist the supplied text/path. Evidence stores only
+its character count and SHA-256.
+
+Example UI-only flow:
+
+```text
+pcs.windows
+pcs.controls(window_id=...)
+pcs.gui.invoke(control_id=<Play button>)
+engineering_session.evidence(category="gui")
+```
+
+The mutation result includes before/after artifact metadata, deterministic visual
+comparison and the resulting PCS screenshot as MCP image content.
+
+Real Windows/Qt accessibility support depends on what PCS widgets expose through
+UI Automation. SceneWorks will fail when a control has no supported accessibility
+pattern; it must not silently fall back to coordinate clicking.
+
+## 19. Inspect evidence independently
 
 Use:
 
@@ -547,14 +612,14 @@ sceneworks.engineering_session.events
 sceneworks.engineering_session.summary
 ```
 
-The evidence stream now includes PCS lifecycle, structured log, health/runtime
-observations and runbook results in addition to WP15 file/command/process/Git
-information.
+The evidence stream includes file/command/process/Git state, PCS lifecycle/logs,
+health/runtime observations, runbook results, GUI screenshots/visual comparisons
+and WP18 GUI actions.
 
-For task closure, ask for the task contract + current Git diff + EngineeringSession
-evidence instead of asking Gemini whether its fix worked.
+For task closure, ask for the task contract + current Git diff +
+EngineeringSession evidence instead of asking Gemini whether its fix worked.
 
-## 18. Delegate implementation when useful
+## 20. Delegate implementation when useful
 
 Optional worker delegation remains:
 
@@ -570,29 +635,31 @@ backend=opencode     # non-ACP backup
 backend=openhands    # experimental
 ```
 
-A good PCS bug loop is now:
+A PCS bug loop can therefore be:
 
 ```text
 ChatGPT creates/binds session
   -> starts PCS semantically
-  -> reproduces / reads objective logs + state
+  -> reproduces / reads objective logs + runtime state
+  -> captures GUI evidence or uses a UIA fallback only if needed
   -> delegates code investigation/implementation if useful
   -> inspects actual Git diff
   -> restarts PCS semantically
-  -> runs deterministic verification runbook
-  -> compares evidence with acceptance criteria
+  -> reruns deterministic verification
+  -> compares before/after evidence with acceptance criteria
 ```
 
-If Gemini authentication is broken, the direct PCS/runtime/evidence path still
-works.
+If Gemini authentication is broken, the direct PCS/runtime/evidence/GUI path
+still works.
 
-## 19. Project/session cleanup
+## 21. Project/session cleanup
 
 - Stop managed PCS before closing an EngineeringSession.
 - Active EngineeringSessions/PCS runs block project deletion even with legacy
   `force=true` cleanup.
-- `purge_history=true` removes SceneWorks PCS/session/evidence/config records but
-  never deletes the Git repository or configured external recordings.
+- `purge_history=true` removes SceneWorks PCS/session/evidence/config records and
+  project-owned GUI artifacts but never deletes the Git repository or configured
+  external recordings.
 - If SceneWorks itself restarts while PCS was active, the old managed run is
   marked `LOST`; native process handles cannot currently be recovered.
 
@@ -607,7 +674,13 @@ Before enabling Advanced:
 - understand external asset aliases govern SceneWorks access but do not create an
   OS sandbox around a child process that receives an asset path;
 - keep PCS API/health probes loopback-only;
+- grant `gui_observe` deliberately because screenshots can contain engineering
+  data;
+- grant `gui_automate` only for UI-only workflows and retain the API-first rule;
 - review Git diff and objective evidence before integration.
+
+WP18's managed-window/accessibility restrictions are an application-governance
+boundary, not an OS sandbox.
 
 ## Troubleshooting
 
@@ -636,11 +709,11 @@ launcher process. Do not store the API key in Git.
 
 Expected for the local tunnel path. SceneWorks itself is not an OAuth provider.
 
-### New WP16 tools do not appear
+### New PCS/GUI tools do not appear
 
-Run the WP16 code, reconnect/refresh the tunnel/plugin, and rescan tools after
-changing MCP mode. The schema comes from the currently running SceneWorks
-backend.
+Run the current SceneWorks code, reconnect/refresh the tunnel/plugin, and rescan
+tools after changing MCP mode. The schema comes from the currently running
+SceneWorks backend.
 
 ### PCS cannot start
 
@@ -666,6 +739,31 @@ the configured host directory no longer exists.
 Configure a hardened PCS runtime-state API endpoint. SceneWorks deliberately does
 not fabricate playback/frame/view state from logs.
 
+### Screenshot/window tools are denied
+
+The session needs `gui_observe`, the Advanced capability ceiling must allow it,
+and there must be a live SceneWorks-managed PCS process with a visible window.
+
+### GUI automation tools are denied
+
+The session needs **both** `gui_observe` and `gui_automate`. The target
+`control_id` must come from `pcs.controls` for a current visible managed PCS
+window.
+
+### A GUI control is listed but cannot be invoked
+
+Inspect its `patterns` field. A control without the needed UIA pattern is not
+automatable through WP18. Prefer adding a semantic PCS API or improving PCS
+accessibility instead of adding coordinate clicking.
+
+### A GUI action reports partial/unverified
+
+The action may already have executed, but SceneWorks could not complete the
+required after-action screenshot/comparison. Inspect the recorded GUI evidence,
+current PCS state and a fresh screenshot before issuing another mutation.
+
 See [WP14 provider-neutral execution](../wp14-provider-neutral-execution.md),
-[WP15 evidence ledger](../wp15-evidence-ledger.md), and
-[WP16 PCS runtime control](../wp16-pcs-runtime-control.md).
+[WP15 evidence ledger](../wp15-evidence-ledger.md),
+[WP16 PCS runtime control](../wp16-pcs-runtime-control.md),
+[WP17 managed PCS GUI evidence](../wp17-gui-evidence.md), and
+[WP18 controlled GUI automation](../wp18-controlled-gui-automation.md).

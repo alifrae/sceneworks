@@ -27,6 +27,7 @@ ADVANCED_PERMISSIONS = {
     "agent_delegate",
     "external_asset_read",
     "gui_observe",
+    "gui_automate",
     "subagents",
 }
 

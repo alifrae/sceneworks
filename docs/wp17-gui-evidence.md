@@ -47,8 +47,9 @@ WP17 does **not** provide:
 - OCR;
 - semantic interpretation of screenshot contents.
 
-Controlled GUI automation is a separate future boundary and must not be smuggled
-into this observation package.
+Controlled accessibility automation is implemented separately by WP18 with its
+own `gui_automate` permission and evidence-first mutation contract. It is not part
+of the WP17 observation surface.
 
 ## MCP tools
 
@@ -85,7 +86,7 @@ process_control
 shell_execute
 repository_write
 external_asset_read
-future gui_automate authority
+gui_automate
 ```
 
 A normal visual-verification session that starts PCS itself therefore commonly
@@ -257,7 +258,10 @@ The confinement properties are:
 - screenshot storage remains SceneWorks-owned and project-scoped;
 - storage paths are not exposed through MCP;
 - artifact bytes are SHA-256 verified when retrieved;
-- no input/automation capabilities are present in WP17.
+- no input/automation capabilities are present in the WP17 tool surface.
+
+WP18 may automate accessibility controls only when its separate permission is
+granted; that does not change the read-only meaning of `gui_observe`.
 
 This is still not an OS security sandbox. A separately granted shell/process
 capability retains the OS-authority caveats documented by WP14/WP16.
@@ -276,7 +280,7 @@ WP17 is complete when:
    diff artifact when changed.
 6. MCP returns image content without putting raw image bytes in
    `structuredContent`.
-7. No generic desktop or GUI-control tools exist.
+7. No generic desktop or GUI-control tools exist in the WP17 surface.
 8. Linux/non-Windows deterministic tests use a fake provider; no live PCS GUI or
    paid model is required for CI.
 9. Existing WP14-WP16 behavior and full qualification remain green.

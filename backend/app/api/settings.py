@@ -102,13 +102,18 @@ async def get_mcp_settings(ctx: AppContext = Depends(get_context)) -> dict:
         "advanced_agent_sessions_enabled": mode == "advanced",
         "direct_engineering_sessions_enabled": mode == "advanced",
         "semantic_pcs_control_enabled": mode == "advanced",
+        "pcs_gui_observation_enabled": mode == "advanced",
+        "pcs_gui_automation_enabled": mode == "advanced",
         "advanced_warning": (
             "Advanced mode gives the MCP client SceneWorks-owned repository, command, "
-            "process, Git and semantic PCS capabilities. Worktree paths are confined; "
-            "external PCS assets require an explicit project alias plus external_asset_read. "
-            "Command/process execution is not an OS sandbox and runs with the SceneWorks "
-            "user's OS authority; shell-capable processes may also access the network unless "
-            "the host is sandboxed separately."
+            "process, Git, semantic PCS and managed-PCS GUI capabilities. GUI automation "
+            "requires the separate gui_automate permission and is constrained to UI "
+            "Automation controls inside the live SceneWorks-managed PCS window; no raw "
+            "desktop coordinates, arbitrary HWNDs or arbitrary PIDs are exposed. Worktree "
+            "paths are confined; external PCS assets require an explicit project alias plus "
+            "external_asset_read. Command/process execution is not an OS sandbox and runs "
+            "with the SceneWorks user's OS authority; shell-capable processes may also "
+            "access the network unless the host is sandboxed separately."
         ),
     }
 
@@ -184,9 +189,9 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
     """Apply persisted operational settings to every live consumer.
 
     WP13 rebuilt ``ctx.backends`` but left ExecutionEngine and workflow services
-    pointing at the old registry/router. WP14 rewires the dependency graph and
-    WP16 keeps the PCS semantic adapter attached to the rebuilt EngineeringSession
-    service as well.
+    pointing at the old registry/router. WP14 rewires the dependency graph;
+    WP16/WP17/WP18 keep PCS and GUI services attached to the rebuilt
+    EngineeringSession service and current Settings object as well.
     """
     overrides = await ctx.settings_store.update(patch)
     ctx.settings_overrides = overrides
@@ -218,6 +223,11 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
         ctx.engine_factory, new_git, ctx.runtimes, ctx.settings
     )
     ctx.pcs_control._engineering_sessions = ctx.engineering_sessions
+    ctx.gui_evidence._engineering_sessions = ctx.engineering_sessions
+    ctx.gui_evidence._settings = ctx.settings
+    ctx.gui_automation._engineering_sessions = ctx.engineering_sessions
+    ctx.gui_automation._pcs = ctx.pcs_control
+    ctx.gui_automation._gui = ctx.gui_evidence
 
     ctx.roles.set_default_backend(
         ctx.settings.default_backend
