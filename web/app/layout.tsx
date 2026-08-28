@@ -1,5 +1,6 @@
 import "./globals.css";
 import "./modern.css";
+import "./attachments.css";
 import type { Metadata } from "next";
 import Sidebar from "@/components/Sidebar";
 
