@@ -1,4 +1,4 @@
-"""Provider-neutral model-profile routing (WP8).
+"""Provider-neutral model-profile routing (WP8/WP14).
 
 A role declares intent (`strongest`, `coding`, `research`). Configuration maps
 that profile to an optional backend and model. Resolution happens when the
@@ -43,9 +43,7 @@ class ModelRouter:
 
         backend = (route.backend.strip() if route and route.backend else role.backend).strip()
         if not backend:
-            raise ModelRoutingError(
-                f"role {role.key!r} resolved to an empty backend"
-            )
+            raise ModelRoutingError(f"role {role.key!r} resolved to an empty backend")
         if self._available and backend not in self._available:
             raise ModelRoutingError(
                 f"model profile {profile or '<none>'!r} for role {role.key!r} "
@@ -71,6 +69,8 @@ class ModelRouter:
         if backend == "gemini_acp":
             configured = self._settings.gemini_environment.get("GEMINI_MODEL")
             return (configured or self._settings.gemini_model or "").strip() or None
+        if backend == "opencode":
+            return (self._settings.opencode_model or "").strip() or None
         if backend == "openhands":
             return (self._settings.openhands_model or "").strip() or None
         return None
