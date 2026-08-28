@@ -26,6 +26,7 @@ from app.roles.registry import RoleRegistry
 from app.runtime.registry import RuntimeRegistry
 from app.services.agent_sessions import AgentSessionService
 from app.services.company import CompanyService
+from app.services.engineering_evidence import EngineeringEvidenceService
 from app.services.engineering_sessions import EngineeringSessionService
 from app.services.memory import MemoryService
 from app.services.provenance import ProvenanceService
@@ -57,6 +58,7 @@ class AppContext:
     provenance: ProvenanceService
     agent_sessions: AgentSessionService
     engineering_sessions: EngineeringSessionService
+    engineering_evidence: EngineeringEvidenceService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -69,10 +71,7 @@ class AppContext:
             except asyncio.CancelledError:
                 pass
         await self.backends.shutdown()
-        # Legacy provider sessions can own live Gemini ACP processes.
         await self.agent_sessions.shutdown()
-        # Direct EngineeringSession child processes belong to the runtime, not a
-        # model backend. Stop them independently before database shutdown.
         await self.runtimes.shutdown()
         await self.execution_engine.shutdown()
         await self.workflow_manager.shutdown()
@@ -130,6 +129,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     engineering_sessions = EngineeringSessionService(
         session_factory, git, runtimes, settings
     )
+    engineering_evidence = EngineeringEvidenceService(session_factory)
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -169,6 +169,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         provenance=provenance,
         agent_sessions=agent_sessions,
         engineering_sessions=engineering_sessions,
+        engineering_evidence=engineering_evidence,
         settings_store=settings_store,
         settings_overrides=overrides,
     )
