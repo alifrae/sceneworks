@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 InitiativeStatus = Literal["planned", "active", "blocked", "completed", "cancelled"]
 WorkPackageStatus = Literal["planned", "ready", "active", "blocked", "completed", "cancelled"]
+WorkItemType = Literal["task", "bug", "feature", "idea"]
+ExecutionMode = Literal["auto", "change", "investigate", "plan", "ask"]
 
 
 class RoleCapabilityOverlay(BaseModel):
@@ -74,9 +76,6 @@ class RepoStatusOut(BaseModel):
     error: str | None = None
     worktrees: list[dict] = []
     active_tasks: int = 0
-
-
-# --- Initiative / work-package hierarchy (WP5) ---
 
 
 class InitiativeCreate(BaseModel):
@@ -162,8 +161,21 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: str = ""
     priority: Literal["low", "medium", "high"] = "medium"
+    work_item_type: WorkItemType = "task"
+    requested_mode: ExecutionMode = "auto"
     engineering_contract: EngineeringContract = Field(default_factory=EngineeringContract)
     capability_requirements: CapabilityProfile = Field(default_factory=CapabilityProfile)
+
+
+class TaskBacklogUpdate(BaseModel):
+    """Editable metadata for a task that has not started execution yet."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    priority: Literal["low", "medium", "high"] | None = None
+    work_item_type: WorkItemType | None = None
+    requested_mode: ExecutionMode | None = None
+    work_package_id: int | None = None
 
 
 class TaskOut(BaseModel):
@@ -176,6 +188,9 @@ class TaskOut(BaseModel):
     description: str
     status: str
     priority: str
+    work_item_type: str
+    requested_mode: str
+    resolved_mode: str | None
     current_role: str | None
     current_execution_id: str | None
     base_commit: str | None
