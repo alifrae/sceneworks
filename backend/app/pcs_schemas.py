@@ -3,17 +3,37 @@
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 _NAME_PATTERN = r"^[A-Za-z0-9._-]+$"
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _validate_relative_path(value: str, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return value
+    if text.startswith(("/", "\\")) or (len(text) > 2 and text[1] == ":"):
+        raise ValueError(f"{label} must be worktree-relative")
+    if ".." in text.replace("\\", "/").split("/"):
+        raise ValueError(f"{label} may not contain '..'")
+    return value
 
 
 class PcsPortCheck(BaseModel):
     name: str = Field(default="", max_length=120)
     host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
     port: int = Field(ge=1, le=65535)
+
+    @field_validator("host")
+    @classmethod
+    def _loopback_only(cls, value: str) -> str:
+        if value.strip().lower() not in _LOOPBACK_HOSTS:
+            raise ValueError("WP16 PCS port health checks are loopback-only")
+        return value
 
 
 class PcsAssetRoot(BaseModel):
@@ -42,18 +62,38 @@ class PcsRunProfile(BaseModel):
     runtime_state_path: str | None = Field(default=None, max_length=500)
     startup_timeout_seconds: int = Field(default=30, ge=1, le=300)
 
-    @field_validator("cwd", "log_paths", "crash_paths")
+    @field_validator("cwd")
     @classmethod
-    def _reject_absolute_project_paths(cls, value):
-        values = value if isinstance(value, list) else [value]
-        for item in values:
-            text = str(item or "").strip()
-            if not text:
-                continue
-            if text.startswith(("/", "\\")) or (len(text) > 2 and text[1] == ":"):
-                raise ValueError("cwd/log/crash paths must be worktree-relative")
-            if ".." in text.replace("\\", "/").split("/"):
-                raise ValueError("cwd/log/crash paths may not contain '..'")
+    def _validate_cwd(cls, value: str) -> str:
+        return _validate_relative_path(value, "cwd")
+
+    @field_validator("log_paths", "crash_paths")
+    @classmethod
+    def _validate_project_paths(cls, value: list[str]) -> list[str]:
+        for item in value:
+            _validate_relative_path(item, "log/crash path")
+        return value
+
+    @field_validator("api_base_url")
+    @classmethod
+    def _validate_loopback_api(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS:
+            raise ValueError("PCS api_base_url must target localhost/loopback")
+        if parsed.username or parsed.password:
+            raise ValueError("PCS api_base_url may not embed credentials")
+        return value
+
+    @field_validator("health_path", "runtime_state_path")
+    @classmethod
+    def _validate_api_paths(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme or parsed.netloc or value.startswith("//"):
+            raise ValueError("PCS API endpoint paths must be relative to api_base_url")
         return value
 
 
@@ -72,6 +112,11 @@ class PcsRunbookStep(BaseModel):
     cwd: str = Field(default="", max_length=1000)
     timeout_seconds: int = Field(default=300, ge=1, le=3600)
     expect_exit_code: int | None = 0
+
+    @field_validator("cwd")
+    @classmethod
+    def _validate_cwd(cls, value: str) -> str:
+        return _validate_relative_path(value, "runbook cwd")
 
     @model_validator(mode="after")
     def _validate_command_step(self) -> "PcsRunbookStep":
