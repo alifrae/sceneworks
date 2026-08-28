@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.engineering_models import EngineeringEvidence, EngineeringSession, EngineeringTurn
+from app.models import Task
 
 _MAX_PAYLOAD_STRING = 120_000
 
@@ -229,6 +230,11 @@ class EngineeringEvidenceService:
                 raise EngineeringEvidenceError(
                     f"engineering session {session_id} not found"
                 )
+            task = (
+                await session.get(Task, engineering.task_id)
+                if engineering.task_id is not None
+                else None
+            )
             rows = list(
                 (
                     await session.execute(
@@ -249,6 +255,7 @@ class EngineeringEvidenceService:
                     )
                 ).scalar_one()
             )
+
         categories = Counter(row.category for row in rows)
         statuses = Counter(row.status for row in rows)
         non_failures = {
@@ -259,10 +266,31 @@ class EngineeringEvidenceService:
             "QUEUED",
         }
         failures = [row for row in rows if row.status not in non_failures]
+        latest_by_category: dict[str, EngineeringEvidence] = {}
+        for row in rows:
+            latest_by_category[row.category] = row
+        latest_git = latest_by_category.get("git")
+        changed_files = []
+        if latest_git is not None:
+            raw_changed = (latest_git.payload or {}).get("changed_files")
+            if isinstance(raw_changed, list):
+                changed_files = raw_changed
+        contract = dict(task.engineering_contract or {}) if task is not None else {}
         return {
             "engineering_session_id": session_id,
             "project_id": engineering.project_id,
             "task_id": engineering.task_id,
+            "task": (
+                {
+                    "id": task.id,
+                    "title": task.title,
+                    "status": task.status,
+                    "acceptance_criteria": list(contract.get("acceptance_criteria") or []),
+                    "required_tests": list(contract.get("required_tests") or []),
+                }
+                if task is not None
+                else None
+            ),
             "base_commit": engineering.base_commit,
             "branch": engineering.branch,
             "turn_count": turn_count,
@@ -271,6 +299,18 @@ class EngineeringEvidenceService:
             "statuses": dict(sorted(statuses.items())),
             "failure_count": len(failures),
             "latest_evidence_id": rows[-1].id if rows else None,
+            "changed_files": changed_files,
+            "latest_actions": [
+                {
+                    "id": row.id,
+                    "turn_id": row.turn_id,
+                    "action_id": row.action_id,
+                    "category": row.category,
+                    "operation": row.operation,
+                    "status": row.status,
+                }
+                for row in rows[-12:]
+            ],
             "latest_failures": [evidence_row(row) for row in failures[-10:]],
         }
 
