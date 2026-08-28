@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -10,7 +11,12 @@ from app.engineering_models import EngineeringSession, EngineeringTurn
 from app.models import Event
 from app.mcp.server import MCPToolError, _bounded
 from app.mcp.wp15_server import EvidenceMCPServer
+from app.services.engineering_evidence import EngineeringEvidenceError
 from app.services.engineering_sessions import engineering_session_row
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class CompleteEvidenceMCPServer(EvidenceMCPServer):
@@ -109,6 +115,50 @@ class CompleteEvidenceMCPServer(EvidenceMCPServer):
                 for row in rows
             ]
         return {**result, "agent_events": agent_events}
+
+    async def _record_failure(
+        self,
+        session_id: int,
+        name: str,
+        args: dict[str, Any],
+        turn_id: str | None,
+        action_id: str,
+        started: datetime,
+        exc: Exception,
+        before: dict[str, Any],
+    ) -> None:
+        category = self._category(name)
+        runtime_evidence = getattr(exc, "evidence", {})
+        if not isinstance(runtime_evidence, dict):
+            runtime_evidence = {}
+        payload = {
+            **self._input_payload(name, args),
+            **before,
+            **runtime_evidence,
+            "error": f"{type(exc).__name__}: {exc}",
+            "timed_out": bool(
+                runtime_evidence.get("timed_out")
+                or "timed out" in str(exc).lower()
+            ),
+            "cancelled": bool(
+                runtime_evidence.get("cancelled")
+                or "cancel" in str(exc).lower()
+            ),
+        }
+        try:
+            await self.ctx.engineering_evidence.record(
+                session_id,
+                category=category,
+                operation=name.removeprefix("sceneworks."),
+                status="FAILED",
+                payload=payload,
+                turn_id=turn_id,
+                action_id=action_id,
+                started_at=started,
+                finished_at=_now(),
+            )
+        except EngineeringEvidenceError:
+            return
 
     def _success_payload(
         self,
