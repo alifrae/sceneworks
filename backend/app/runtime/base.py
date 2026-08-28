@@ -1,10 +1,10 @@
-"""Provider-neutral execution runtime contract (WP14/WP15)."""
+"""Provider-neutral execution runtime contract (WP14-WP16)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 
 class RuntimeErrorBase(RuntimeError):
@@ -92,6 +92,7 @@ class ExecutionRuntime(Protocol):
         *,
         cwd: str = "",
         timeout: int = 300,
+        environment: Mapping[str, str] | None = None,
     ) -> CommandResult: ...
 
     async def start_process(
@@ -101,6 +102,7 @@ class ExecutionRuntime(Protocol):
         args: Sequence[str] = (),
         *,
         cwd: str = "",
+        environment: Mapping[str, str] | None = None,
     ) -> ProcessSnapshot: ...
 
     async def process_output(
