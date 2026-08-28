@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from app.agents.fake import FakeAgentBackend, ScriptStep
+
 
 async def _rpc(client, name: str, arguments: dict, request_id: int = 1):
     response = await client.post(
@@ -39,10 +41,31 @@ async def _register_project_and_task(client, git_repo):
         json={
             "project_id": project["id"],
             "title": "Verify evidence correlation",
+            "engineering_contract": {
+                "required_tests": ["pytest -q tests/test_wp15_evidence.py"],
+                "acceptance_criteria": ["objective evidence is correlated to the task"],
+            },
         },
     )
     assert task_response.status_code == 201, task_response.text
     return project, task_response.json()
+
+
+async def _wait_execution(client, execution_id: str, request_id: int = 50):
+    deadline = asyncio.get_running_loop().time() + 5
+    while True:
+        execution = await _rpc(
+            client,
+            "sceneworks.get_execution",
+            {"execution_id": execution_id},
+            request_id=request_id,
+        )
+        row = execution["execution"]
+        if row["status"] in {"COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"}:
+            return row
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"execution did not finish: {row['status']}")
+        await asyncio.sleep(0.05)
 
 
 async def test_wp15_task_bound_turn_records_file_command_process_and_git_evidence(
@@ -199,17 +222,118 @@ async def test_wp15_task_bound_turn_records_file_command_process_and_git_evidenc
         request_id=11,
     )
     assert summary["task_id"] == task["id"]
+    assert summary["task"]["required_tests"] == ["pytest -q tests/test_wp15_evidence.py"]
+    assert summary["task"]["acceptance_criteria"] == [
+        "objective evidence is correlated to the task"
+    ]
     assert summary["turn_count"] == 1
     assert summary["evidence_count"] >= len(rows)
     assert summary["failure_count"] == 0
+    assert any(row["path"] == "README.md" for row in summary["changed_files"])
+
+    task_view = await _rpc(
+        client,
+        "sceneworks.get_task",
+        {"task_id": task["id"]},
+        request_id=12,
+    )
+    assert task_view["engineering_sessions"][0]["session"]["id"] == session_id
+    assert task_view["engineering_sessions"][0]["evidence_summary"]["task_id"] == task["id"]
 
     finished = await _rpc(
         client,
         "sceneworks.engineering_session.finish_turn",
         {"session_id": session_id, "turn_id": turn_id, "status": "COMPLETED"},
-        request_id=12,
+        request_id=13,
     )
     assert finished["turn"]["status"] == "COMPLETED"
+
+
+async def test_wp15_delegated_agent_events_keep_turn_and_action_correlation(
+    client, context, git_repo
+):
+    project, task = await _register_project_and_task(client, git_repo)
+    context.settings.mcp_mode = "advanced"
+    context.backends.register(
+        "test_worker",
+        FakeAgentBackend(
+            role_scripts={
+                "mcp_delegate": [
+                    ScriptStep(
+                        kind="emit",
+                        type="agent.message",
+                        payload={"text": "delegated-worker-trace"},
+                    ),
+                    ScriptStep(kind="summary", summary="delegated worker done"),
+                ]
+            }
+        ),
+    )
+
+    created = await _rpc(
+        client,
+        "sceneworks.engineering_session.create",
+        {
+            "project_id": project["id"],
+            "task_id": task["id"],
+            "permissions": [
+                "repository_read",
+                "repository_write",
+                "shell_execute",
+                "process_control",
+                "agent_delegate",
+            ],
+        },
+        request_id=20,
+    )
+    session_id = created["session"]["id"]
+    begun = await _rpc(
+        client,
+        "sceneworks.engineering_session.begin_turn",
+        {"session_id": session_id, "intent": "delegate bounded inspection"},
+        request_id=21,
+    )
+    turn_id = begun["turn"]["id"]
+
+    delegated = await _rpc(
+        client,
+        "sceneworks.agent.delegate",
+        {
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "backend": "test_worker",
+            "prompt": "Inspect and report only.",
+        },
+        request_id=22,
+    )
+    action_id = delegated["evidence_action_id"]
+    execution_id = delegated["execution_id"]
+    execution = await _wait_execution(client, execution_id, request_id=23)
+    assert execution["status"] == "COMPLETED"
+    assert execution["workspace"]["engineering_turn_id"] == turn_id
+    assert execution["workspace"]["engineering_evidence_action_id"] == action_id
+
+    history = await _rpc(
+        client,
+        "sceneworks.engineering_session.events",
+        {"session_id": session_id, "limit": 200},
+        request_id=24,
+    )
+    delegate_evidence = next(
+        row for row in history["events"] if row["operation"] == "agent.delegate"
+    )
+    assert delegate_evidence["turn_id"] == turn_id
+    assert delegate_evidence["action_id"] == action_id
+    traced = [
+        row
+        for row in history["agent_events"]
+        if row["execution_id"] == execution_id
+        and row["type"] == "agent.message"
+        and row["payload"].get("text") == "delegated-worker-trace"
+    ]
+    assert traced
+    assert traced[0]["turn_id"] == turn_id
+    assert traced[0]["action_id"] == action_id
 
 
 async def test_wp15_tool_catalog_exposes_turns_evidence_and_task_binding(
