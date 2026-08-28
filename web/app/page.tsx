@@ -3,24 +3,17 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import BrandMark from "@/components/BrandMark";
 import { useTasks } from "@/lib/useTasks";
 import Composer from "@/components/Composer";
 import WorkRow from "@/components/WorkRow";
 import { getWorkView } from "@/lib/workStages";
 
-// The homepage: "ask the team" is the first thing a new user sees, and it
-// renders without waiting on any task/project list. See
-// docs/wp-web-2-conversation-model.md section A for the before/after
-// information architecture this replaces.
 function HomeContent() {
   const searchParams = useSearchParams();
   const preselectProject = searchParams.get("project");
   const { tasks, error } = useTasks();
 
-  // The API failure is reported once here, page-wide. The Composer suppresses
-  // its own copy on this page so one outage cannot stack duplicate banners,
-  // and every section below renders its terminal state (data, empty, or
-  // unavailable) instead of being pinned on a loading state by a failed fetch.
   const unavailable = tasks === null && error !== null;
 
   const needsAttention = (tasks ?? []).filter((t) => getWorkView(t).needsAttention);
@@ -40,15 +33,32 @@ function HomeContent() {
 
   return (
     <div>
-      <h1 className="small muted" style={{ fontSize: 13, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-        SceneWorks
-      </h1>
-      <p style={{ fontSize: 18, fontWeight: 600, margin: "2px 0 16px" }}>What should the team work on?</p>
+      <section className="home-hero">
+        <div className="home-brand-row">
+          <BrandMark size={38} />
+          <div>
+            <div className="hero-brand-name">SceneWorks</div>
+            <div className="hero-kicker">AI engineering control plane</div>
+          </div>
+        </div>
 
-      <Composer defaultProjectId={preselectProject ? Number(preselectProject) : undefined} suppressError />
+        <h1 className="hero-title">Move engineering work from intent to verified change.</h1>
+        <p className="hero-copy">
+          Describe the outcome. SceneWorks routes the work, isolates implementation, preserves the evidence,
+          and brings decisions back to you before anything is integrated.
+        </p>
+
+        <Composer defaultProjectId={preselectProject ? Number(preselectProject) : undefined} suppressError />
+
+        <div className="hero-trust-strip" aria-label="SceneWorks operating guarantees">
+          <span className="hero-trust-item">Isolated Git worktrees</span>
+          <span className="hero-trust-item">Human approval boundary</span>
+          <span className="hero-trust-item">Traceable agent execution</span>
+        </div>
+      </section>
 
       {unavailable && (
-        <div className="notice error">Cannot reach the SceneWorks API: {error}</div>
+        <div className="notice error" style={{ marginTop: 16 }}>Cannot reach the SceneWorks API: {error}</div>
       )}
 
       <section className={`section${tasks !== null && !error && needsAttention.length > 0 ? " attention" : ""}`}>
@@ -96,6 +106,7 @@ function HomeContent() {
       <section className="section">
         <div className="section-head">
           <h3>Recent results</h3>
+          <Link href="/work?filter=completed" className="small">View all →</Link>
         </div>
         {tasks === null ? (
           sectionBody("Nothing completed yet.")
@@ -110,8 +121,8 @@ function HomeContent() {
         )}
       </section>
 
-      <p className="meta" style={{ marginTop: 24 }}>
-        Looking for operational counters? See the <Link href="/dashboard">dashboard</Link>.
+      <p className="meta" style={{ marginTop: 28 }}>
+        Operational counters and provider state live in the <Link href="/dashboard">dashboard</Link>. Performance and connectivity checks live in <Link href="/diagnostics">diagnostics</Link>.
       </p>
     </div>
   );
