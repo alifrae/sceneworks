@@ -389,6 +389,54 @@ class NativeRuntime:
             raise RuntimeErrorBase(str(exc)) from exc
         return {"branch": branch, "head": head, "status": porcelain}
 
+    async def _changed_file_hashes(self, workspace: Path, base_commit: str | None) -> list[dict]:
+        names: set[str] = set()
+        try:
+            if base_commit:
+                names.update(
+                    line.strip()
+                    for line in (await run_git(workspace, "diff", "--name-only", f"{base_commit}..HEAD")).splitlines()
+                    if line.strip()
+                )
+            for args in (
+                ("diff", "--name-only", "HEAD"),
+                ("diff", "--cached", "--name-only"),
+                ("ls-files", "--others", "--exclude-standard"),
+            ):
+                names.update(
+                    line.strip()
+                    for line in (await run_git(workspace, *args)).splitlines()
+                    if line.strip()
+                )
+        except GitError as exc:
+            raise RuntimeErrorBase(str(exc)) from exc
+
+        rows: list[dict] = []
+        for name in sorted(names):
+            candidate = (workspace / name).resolve()
+            if not candidate.is_relative_to(workspace):
+                continue
+            if candidate.is_file():
+                data = candidate.read_bytes()
+                rows.append(
+                    {
+                        "path": name.replace("\\", "/"),
+                        "exists": True,
+                        "bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "path": name.replace("\\", "/"),
+                        "exists": False,
+                        "bytes": None,
+                        "sha256": None,
+                    }
+                )
+        return rows
+
     async def git_diff(self, root: Path, *, base_commit: str | None = None) -> dict:
         workspace = self._root(root)
         try:
@@ -401,6 +449,7 @@ class NativeRuntime:
             working = await run_git(workspace, "diff", "HEAD")
             staged = await run_git(workspace, "diff", "--cached")
             status = await run_git(workspace, "status", "--porcelain")
+            changed_files = await self._changed_file_hashes(workspace, base_commit)
         except GitError as exc:
             raise RuntimeErrorBase(str(exc)) from exc
         return {
@@ -410,6 +459,7 @@ class NativeRuntime:
             "working": working,
             "staged": staged,
             "status": status,
+            "changed_files": changed_files,
         }
 
     async def git_commit(self, root: Path, message: str) -> dict:
