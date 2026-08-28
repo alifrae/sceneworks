@@ -25,7 +25,8 @@ ADVANCED_PERMISSIONS = {
     "git_commit",
     "network_access",
     "agent_delegate",
-    "subagents",  # legacy Gemini provider-session capability
+    "external_asset_read",
+    "subagents",
 }
 
 EDITABLE_KEYS = {
