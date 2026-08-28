@@ -18,7 +18,12 @@ from typing import Sequence
 from uuid import uuid4
 
 from app.git.workspace import GitError, run_git
-from app.runtime.base import CommandResult, ProcessSnapshot, RuntimeErrorBase
+from app.runtime.base import (
+    CommandResult,
+    CommandRuntimeError,
+    ProcessSnapshot,
+    RuntimeErrorBase,
+)
 
 _MAX_FILE_BYTES = 4_000_000
 _MAX_COMMAND_CHARS = 240_000
@@ -254,15 +259,30 @@ class NativeRuntime:
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as exc:
-            raise RuntimeErrorBase(f"could not start command: {exc}") from exc
+            raise CommandRuntimeError(
+                f"could not start command: {exc}",
+                {"stdout": "", "stderr": "", "timed_out": False, "cancelled": False},
+            ) from exc
+        communicate = asyncio.create_task(process.communicate())
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=max(1, timeout)
+                asyncio.shield(communicate), timeout=max(1, timeout)
             )
         except asyncio.TimeoutError as exc:
             process.kill()
-            await process.wait()
-            raise RuntimeErrorBase(f"command timed out after {timeout}s") from exc
+            stdout, stderr = await communicate
+            stdout_text = stdout.decode(errors="replace")[:_MAX_COMMAND_CHARS]
+            stderr_text = stderr.decode(errors="replace")[:_MAX_COMMAND_CHARS]
+            raise CommandRuntimeError(
+                f"command timed out after {timeout}s",
+                {
+                    "exit_code": process.returncode,
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
+                    "timed_out": True,
+                    "cancelled": False,
+                },
+            ) from exc
         return CommandResult(
             returncode=int(process.returncode or 0),
             stdout=stdout.decode(errors="replace")[:_MAX_COMMAND_CHARS],
@@ -389,13 +409,19 @@ class NativeRuntime:
             raise RuntimeErrorBase(str(exc)) from exc
         return {"branch": branch, "head": head, "status": porcelain}
 
-    async def _changed_file_hashes(self, workspace: Path, base_commit: str | None) -> list[dict]:
+    async def _changed_file_hashes(
+        self, workspace: Path, base_commit: str | None
+    ) -> list[dict]:
         names: set[str] = set()
         try:
             if base_commit:
                 names.update(
                     line.strip()
-                    for line in (await run_git(workspace, "diff", "--name-only", f"{base_commit}..HEAD")).splitlines()
+                    for line in (
+                        await run_git(
+                            workspace, "diff", "--name-only", f"{base_commit}..HEAD"
+                        )
+                    ).splitlines()
                     if line.strip()
                 )
             for args in (
