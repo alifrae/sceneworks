@@ -1,6 +1,6 @@
 """Attachment extension for the SceneWorks MCP semantic surface.
 
-The core WP11 server remains provider- and storage-agnostic.  This extension
+The core WP11 server remains provider- and storage-agnostic. This extension
 adds task-context semantics without exposing host paths: external reasoning
 clients can discover attachment metadata, retrieve bounded rich content, and in
 Standard/Advanced mode add small attachments to NEW tasks.
@@ -240,6 +240,22 @@ class AttachmentMCPServer(CoreSceneWorksMCPServer):
             )
             session.add(row)
             try:
+                await session.flush()
+                await self.ctx.event_store.append(
+                    execution_id=None,
+                    task_id=task_id,
+                    type="task.attachment_added",
+                    payload={
+                        "attachment_id": row.id,
+                        "filename": row.filename,
+                        "mime_type": row.mime_type,
+                        "size_bytes": row.size_bytes,
+                        "sha256": row.sha256,
+                        "source": "mcp",
+                        "authority": "untrusted_user_context",
+                    },
+                    session=session,
+                )
                 await session.commit()
                 await session.refresh(row)
             except IntegrityError as exc:
