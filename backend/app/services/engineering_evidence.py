@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -36,6 +37,18 @@ def _bounded_payload(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return str(value)
+
+
+def _sanitize_payload(category: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist evidence, not a second copy of repository source/diffs."""
+    cleaned = dict(payload)
+    if category.strip().lower() == "git":
+        for key in ("committed", "working", "staged"):
+            value = cleaned.pop(key, None)
+            if isinstance(value, str):
+                cleaned[f"{key}_sha256"] = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                cleaned[f"{key}_chars"] = len(value)
+    return cleaned
 
 
 class EngineeringEvidenceService:
@@ -103,6 +116,7 @@ class EngineeringEvidenceService:
         finished_at: datetime | None = None,
     ) -> EngineeringEvidence:
         action_id = action_id or uuid.uuid4().hex
+        category = category.strip().lower()
         async with self._session_factory() as session:
             engineering = await session.get(EngineeringSession, session_id)
             if engineering is None:
@@ -116,12 +130,12 @@ class EngineeringEvidenceService:
                 task_id=engineering.task_id,
                 turn_id=turn_id,
                 action_id=action_id,
-                category=category.strip().lower(),
+                category=category,
                 operation=operation.strip(),
                 status=status.strip().upper(),
                 started_at=started_at or _now(),
                 finished_at=finished_at or _now(),
-                payload=_bounded_payload(payload or {}),
+                payload=_bounded_payload(_sanitize_payload(category, payload or {})),
             )
             session.add(row)
             await session.commit()
@@ -151,6 +165,9 @@ class EngineeringEvidenceService:
         limit: int = 100,
     ) -> list[EngineeringEvidence]:
         async with self._session_factory() as session:
+            engineering = await session.get(EngineeringSession, session_id)
+            if engineering is None:
+                raise EngineeringEvidenceError(f"engineering session {session_id} not found")
             query = select(EngineeringEvidence).where(
                 EngineeringEvidence.engineering_session_id == session_id
             )
@@ -188,7 +205,8 @@ class EngineeringEvidenceService:
             )
         categories = Counter(row.category for row in rows)
         statuses = Counter(row.status for row in rows)
-        failures = [row for row in rows if row.status not in {"COMPLETED", "SUCCEEDED", "RUNNING"}]
+        non_failures = {"COMPLETED", "SUCCEEDED", "RUNNING", "STARTED", "QUEUED"}
+        failures = [row for row in rows if row.status not in non_failures]
         return {
             "engineering_session_id": session_id,
             "project_id": engineering.project_id,
