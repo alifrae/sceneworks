@@ -61,6 +61,11 @@ class AppContext:
     async def shutdown(self) -> None:
         if self.health_warmup is not None and not self.health_warmup.done():
             self.health_warmup.cancel()
+            try:
+                await self.health_warmup
+            except asyncio.CancelledError:
+                pass
+        await self.backends.shutdown()
         # Advanced sessions can own live Gemini ACP processes. Stop them before
         # closing the database they use for status/audit persistence.
         await self.agent_sessions.shutdown()
@@ -71,7 +76,10 @@ class AppContext:
 
 async def _warm_backend_health(backends: BackendRegistry) -> None:
     try:
-        await backends.health_all()
+        # Warm the real cache while the application remains available. A normal
+        # health_all() call is intentionally stale-while-revalidate and returns
+        # immediately, so startup must force the actual provider probe here.
+        await backends.health_all(force=True)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001

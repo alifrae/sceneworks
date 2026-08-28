@@ -25,6 +25,7 @@ from starlette.requests import Request
 
 from app import __version__
 from app.api import (
+    attachments_router,
     backends_router,
     company_router,
     dashboard_router,
@@ -111,6 +112,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.include_router(projects_router)
     app.include_router(initiatives_router)
     app.include_router(tasks_router)
+    app.include_router(attachments_router)
     app.include_router(executions_router)
     app.include_router(company_router)
     app.include_router(backends_router)

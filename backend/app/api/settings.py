@@ -17,8 +17,10 @@ settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 @backends_router.get("")
-async def list_backends(ctx: AppContext = Depends(get_context)) -> list[BackendOut]:
-    healths = await ctx.backends.health_all()
+async def list_backends(
+    refresh: bool = False, ctx: AppContext = Depends(get_context)
+) -> list[BackendOut]:
+    healths = await ctx.backends.health_all(force=refresh)
     return [BackendOut.model_validate(h.__dict__) for h in healths]
 
 
@@ -170,10 +172,11 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
     overrides = await ctx.settings_store.update(patch)
     ctx.settings_overrides = overrides
     # apply_overrides mutates the shared Settings instance. Existing model
-    # routers, the Advanced session service and provider registries therefore
-    # see route/policy changes without rewriting persisted executions/sessions.
+    # routers and the Advanced session service therefore see route/policy changes
+    # without rewriting persisted executions/sessions.
     ctx.settings = apply_overrides(ctx.settings, overrides)
     ctx.git = GitWorktreeService(ctx.settings)
+    await ctx.backends.shutdown()
     ctx.backends = BackendRegistry(ctx.settings)
     ctx.roles.set_default_backend(
         ctx.settings.default_backend

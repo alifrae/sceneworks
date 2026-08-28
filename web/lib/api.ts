@@ -21,6 +21,9 @@ import type {
   WorkPackage,
 } from "./types";
 
+// The backend binds IPv4 loopback by default. Keep that exact address rather
+// than deriving localhost from the frontend host, which could resolve to ::1
+// on some Windows setups. Remote deployments should set NEXT_PUBLIC_API_URL.
 export const API_URL: string =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8010";
 
@@ -37,15 +40,46 @@ export class ApiError extends Error {
   }
 }
 
-function unreachableMessage(): string {
-  return `the SceneWorks API at ${API_URL} did not respond (connection failed). Is the backend running?`;
+export type ApiHealth = {
+  status: string;
+  app: string;
+  active_executions: number;
+};
+
+export type RequestDiagnostic = {
+  timestamp: string;
+  method: string;
+  path: string;
+  status: number;
+  requestId: string;
+  durationMs: number;
+  serverDurationMs: number | null;
+  responseSize: string | null;
+  cause: string;
+};
+
+const REQUEST_DIAGNOSTICS: RequestDiagnostic[] = [];
+const MAX_REQUEST_DIAGNOSTICS = 60;
+
+export function getRequestDiagnostics(): RequestDiagnostic[] {
+  return [...REQUEST_DIAGNOSTICS].reverse();
+}
+
+function unreachableMessage(cause?: unknown): string {
+  const detail = cause instanceof Error && cause.message ? ` (${cause.name}: ${cause.message})` : "";
+  return `the SceneWorks API at ${API_URL} did not respond${detail}. Is the backend running?`;
 }
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-type RequestOptions = { cacheTtlMs?: number; diagnosticCause?: string };
+type RequestOptions = {
+  cacheTtlMs?: number;
+  diagnosticCause?: string;
+  bypassCache?: boolean;
+  retryGet?: boolean;
+};
 type CacheEntry = { value: unknown; expiresAt: number };
 const GET_CACHE = new Map<string, CacheEntry>();
 const GET_INFLIGHT = new Map<string, Promise<unknown>>();
@@ -64,6 +98,10 @@ function isGet(init?: RequestInit): boolean {
   return !init?.method || init.method.toUpperCase() === "GET";
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function invalidateAfterMutation(path: string): void {
   const resource = path.split("?")[0];
   const prefixes = resource.startsWith("/api/tasks")
@@ -72,7 +110,7 @@ function invalidateAfterMutation(path: string): void {
       ? ["/api/projects", "/api/initiatives", "/api/work-packages", "/api/tasks", "/api/dashboard"]
       : resource.startsWith("/api/executions") || resource.startsWith("/api/company")
         ? ["/api/executions", "/api/company", "/api/dashboard"]
-        : resource.startsWith("/api/settings")
+        : resource.startsWith("/api/settings") || resource.startsWith("/api/backends")
           ? ["/api/settings", "/api/roles", "/api/company", "/api/backends"]
           : [resource];
   for (const key of GET_CACHE.keys()) {
@@ -82,26 +120,34 @@ function invalidateAfterMutation(path: string): void {
   }
 }
 
-function diagnostics(meta: {
-  method: string;
-  path: string;
-  requestId: string;
-  durationMs: number;
-  serverDurationMs: string | null;
-  responseSize: string | null;
-  cause: string;
-}): void {
-  if (process.env.NODE_ENV !== "development") return;
-  console.debug("[SceneWorks request]", meta);
+function diagnostics(meta: RequestDiagnostic): void {
+  REQUEST_DIAGNOSTICS.push(meta);
+  if (REQUEST_DIAGNOSTICS.length > MAX_REQUEST_DIAGNOSTICS) {
+    REQUEST_DIAGNOSTICS.splice(0, REQUEST_DIAGNOSTICS.length - MAX_REQUEST_DIAGNOSTICS);
+  }
+  if (process.env.NODE_ENV === "development") console.debug("[SceneWorks request]", meta);
 }
 
 async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
   const get = isGet(init);
   const cacheKey = path;
   const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
-  if (get) {
+  if (get && !options.bypassCache) {
     const cached = GET_CACHE.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+    if (cached && cached.expiresAt > Date.now()) {
+      diagnostics({
+        timestamp: new Date().toISOString(),
+        method: "GET",
+        path,
+        status: 200,
+        requestId: "cache",
+        durationMs: 0,
+        serverDurationMs: null,
+        responseSize: null,
+        cause: "cache-hit",
+      });
+      return cached.value as T;
+    }
     const inFlight = GET_INFLIGHT.get(cacheKey);
     if (inFlight) return inFlight as Promise<T>;
   }
@@ -110,22 +156,56 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   const started = now();
   const method = init?.method?.toUpperCase() ?? "GET";
   const promise = (async () => {
-    let response: Response;
-    try {
-      response = await fetch(`${API_URL}${path}`, {
-        ...init,
-        headers: { "Content-Type": "application/json", "X-Request-ID": id, ...(init?.headers ?? {}) },
-      });
-    } catch {
-      throw new ApiError(0, unreachableMessage(), id, Math.round(now() - started));
+    let response: Response | undefined;
+    let lastCause: unknown;
+    const attempts = get && options.retryGet !== false ? 2 : 1;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const headers = new Headers(init?.headers);
+        // GETs stay simple CORS requests. FastAPI creates a correlation ID when
+        // the client does not provide one, so forcing custom headers here only
+        // caused needless preflight traffic during local startup.
+        if (!get) {
+          if (init?.body !== undefined && !headers.has("Content-Type")) {
+            headers.set("Content-Type", "application/json");
+          }
+          headers.set("X-Request-ID", id);
+        }
+        response = await fetch(`${API_URL}${path}`, { ...init, headers });
+        break;
+      } catch (cause) {
+        lastCause = cause;
+        if (attempt + 1 < attempts) await sleep(250);
+      }
     }
+
+    if (!response) {
+      const durationMs = Math.round(now() - started);
+      diagnostics({
+        timestamp: new Date().toISOString(),
+        method,
+        path,
+        status: 0,
+        requestId: id,
+        durationMs,
+        serverDurationMs: null,
+        responseSize: null,
+        cause: options.diagnosticCause ?? "transport-failure",
+      });
+      throw new ApiError(0, unreachableMessage(lastCause), id, durationMs);
+    }
+
     const durationMs = Math.round(now() - started);
+    const serverDurationHeader = response.headers.get("x-process-time-ms");
     diagnostics({
+      timestamp: new Date().toISOString(),
       method,
       path,
-      requestId: id,
+      status: response.status,
+      requestId: response.headers.get("x-request-id") || id,
       durationMs,
-      serverDurationMs: response.headers.get("x-process-time-ms"),
+      serverDurationMs: serverDurationHeader ? Number(serverDurationHeader) : null,
       responseSize: response.headers.get("content-length"),
       cause: options.diagnosticCause ?? (get ? "cache-miss" : "mutation"),
     });
@@ -137,7 +217,7 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
       } catch {
         /* keep statusText */
       }
-      throw new ApiError(response.status, detail, id, durationMs);
+      throw new ApiError(response.status, detail, response.headers.get("x-request-id") || id, durationMs);
     }
     if (response.status === 204) return undefined as T;
     const value = (await response.json()) as T;
@@ -145,22 +225,34 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     return value;
   })();
 
-  if (get) {
+  if (get && !options.bypassCache) {
     GET_INFLIGHT.set(cacheKey, promise);
     promise.finally(() => GET_INFLIGHT.delete(cacheKey)).catch(() => undefined);
-  } else {
+  } else if (!get) {
     invalidateAfterMutation(path);
   }
   return promise;
 }
 
 export const api = {
+  health: () => request<ApiHealth>("/api/health", undefined, {
+    cacheTtlMs: 0,
+    bypassCache: true,
+    diagnosticCause: "diagnostics-health",
+  }),
   dashboard: () => request<Dashboard>("/api/dashboard", undefined, { diagnosticCause: "dashboard-load" }),
 
-  projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load", cacheTtlMs: 30_000 }),
+  projects: () => request<Project[]>("/api/projects", undefined, { diagnosticCause: "projects-load", cacheTtlMs: 5_000 }),
   project: (id: number) => request<Project>(`/api/projects/${id}`),
   createProject: (body: Record<string, unknown>) => request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   updateProject: (id: number, body: Record<string, unknown>) => request<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteProject: (id: number, purgeHistory = false, force = false) => {
+    const query = new URLSearchParams();
+    if (purgeHistory) query.set("purge_history", "true");
+    if (force) query.set("force", "true");
+    const suffix = query.toString();
+    return request<void>(`/api/projects/${id}${suffix ? `?${suffix}` : ""}`, { method: "DELETE" });
+  },
   projectStatus: (id: number) => request<RepoStatus>(`/api/projects/${id}/status`),
   projectProvenance: (id: number, path?: string) => {
     const query = path ? `?${new URLSearchParams({ path }).toString()}` : "";
@@ -204,7 +296,11 @@ export const api = {
   companyAsk: (body: { role: string; project_id: number | null; question: string }) => request<Execution>("/api/company/ask", { method: "POST", body: JSON.stringify(body) }),
   artifacts: () => request<Artifact[]>("/api/company/artifacts", undefined, { cacheTtlMs: 4_000 }),
 
-  backends: () => request<Backend[]>("/api/backends", undefined, { cacheTtlMs: 30_000 }),
+  backends: (refresh = false) => request<Backend[]>(`/api/backends${refresh ? "?refresh=true" : ""}`, undefined, {
+    cacheTtlMs: refresh ? 0 : 2_000,
+    bypassCache: refresh,
+    diagnosticCause: refresh ? "backend-health-refresh" : "backend-health-load",
+  }),
   settings: () => request<Settings>("/api/settings", undefined, { cacheTtlMs: 30_000 }),
   updateSettings: (body: Record<string, unknown>) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(body) }),
   mcpSettings: () => request<McpSettings>("/api/settings/mcp", undefined, { cacheTtlMs: 5_000 }),

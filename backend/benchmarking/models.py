@@ -1,8 +1,13 @@
-"""Provider-neutral productivity benchmark contracts (WP9).
+"""Provider-neutral productivity benchmark contracts.
 
 A benchmark is not a release qualification run. A task implementation may fail
 and still be valid benchmark evidence. Conversely, a trial that could not run
 must never be treated as an engineering failure or success.
+
+WP12 adds a separate adoption gate. A complete benchmark report answers
+"do we have comparable evidence?"; the adoption gate answers "is that evidence
+good enough to start dogfooding SceneWorks on PCS?". Keeping those decisions
+separate prevents a complete-but-bad benchmark from being mistaken for success.
 """
 
 from __future__ import annotations
@@ -26,6 +31,48 @@ class BenchmarkStatus(str, Enum):
     INCOMPLETE = "INCOMPLETE"
 
 
+class AdoptionVerdict(str, Enum):
+    READY_FOR_PILOT = "READY_FOR_PILOT"
+    NOT_READY = "NOT_READY"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
+class AdoptionGatePolicy(BaseModel):
+    """Explicit, configurable PCS adoption thresholds.
+
+    Defaults are intentionally conservative rather than aspirational. They are
+    suitable for the first PCS gate: at least five historical tasks, three
+    repeats, complete paired evidence, no backend failures, SceneWorks quality
+    no worse than the direct-agent baseline, and bounded orchestration overhead.
+    A project may choose stricter thresholds in its benchmark manifest.
+    """
+
+    enabled: bool = True
+    min_tasks: int = Field(default=5, ge=1, le=100)
+    min_repeats: int = Field(default=3, ge=1, le=20)
+    require_complete_pairs: bool = True
+    min_sceneworks_success_rate: float = Field(default=0.8, ge=0.0, le=1.0)
+    max_success_rate_regression: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_median_time_ratio: float = Field(default=2.0, ge=0.1, le=20.0)
+    max_mean_human_interventions: float = Field(default=1.0, ge=0.0, le=20.0)
+    max_backend_failures: int = Field(default=0, ge=0, le=1000)
+
+
+class GateCheck(BaseModel):
+    key: str
+    passed: bool
+    observed: Any = None
+    required: Any = None
+    detail: str = ""
+
+
+class AdoptionGateResult(BaseModel):
+    verdict: AdoptionVerdict
+    checks: list[GateCheck] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
 class BenchmarkTask(BaseModel):
     """One controlled engineering task executed from a pinned repository state."""
 
@@ -41,6 +88,10 @@ class BenchmarkTask(BaseModel):
     forbidden_changed_files: list[str] = Field(default_factory=list)
     engineering_contract: dict[str, list[str]] = Field(default_factory=dict)
     timeout_seconds: int = Field(default=3600, ge=60, le=21600)
+    # Human/audit provenance for historical-corpus curation. The benchmark
+    # runner never reveals this to the agent prompt and never uses it to score.
+    historical_fix_ref: str | None = None
+    historical_source: str | None = None
 
     @model_validator(mode="after")
     def _nonempty_commands(self) -> "BenchmarkTask":
@@ -55,6 +106,7 @@ class BenchmarkManifest(BaseModel):
     backend: str = Field(default="gemini_acp", min_length=1)
     repeats: int = Field(default=1, ge=1, le=20)
     tasks: list[BenchmarkTask] = Field(min_length=1)
+    adoption_gate: AdoptionGatePolicy | None = None
 
     @model_validator(mode="after")
     def _unique_keys(self) -> "BenchmarkManifest":
@@ -146,6 +198,7 @@ class BenchmarkReport(BaseModel):
     comparisons: list[PairComparison] = Field(default_factory=list)
     aggregates: list[ModeAggregate] = Field(default_factory=list)
     environment: dict[str, Any] = Field(default_factory=dict)
+    adoption_gate: AdoptionGateResult | None = None
 
     def finalize(self, expected_trials: int) -> "BenchmarkReport":
         from benchmarking.scoring import build_aggregates

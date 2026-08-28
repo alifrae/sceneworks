@@ -104,6 +104,17 @@ export interface Task {
   execution_status: string | null;
 }
 
+export interface TaskAttachment {
+  id: number;
+  task_id: number;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  source: string;
+  created_at: string;
+}
+
 export interface TaskProvenance {
   task_id: number;
   project_id: number;

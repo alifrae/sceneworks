@@ -1,9 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "@/lib/api";
-import type { EngineeringContract, Project } from "@/lib/types";
+import {
+  deleteNewTask,
+  deleteTaskAttachment,
+  uploadTaskAttachment,
+} from "@/lib/attachments";
+import type { EngineeringContract, Project, TaskAttachment } from "@/lib/types";
 
 interface ComposerProps {
   defaultProjectId?: number;
@@ -23,6 +28,11 @@ const EMPTY_CONTRACT: ContractDraft = {
   forbidden: "",
   tests: "",
 };
+
+const ATTACHMENT_ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.json,.csv";
+const MAX_ATTACHMENT_COUNT = 8;
+const MAX_ATTACHMENT_BYTES = 20_000_000;
+const MAX_TASK_ATTACHMENT_BYTES = 50_000_000;
 
 function lines(value: string): string[] {
   return value
@@ -44,11 +54,19 @@ function contractFromDraft(draft: ContractDraft): EngineeringContract {
   };
 }
 
+function sizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function Composer({ defaultProjectId, suppressError = false }: ComposerProps) {
   const router = useRouter();
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>(defaultProjectId ? String(defaultProjectId) : "");
   const [question, setQuestion] = useState("");
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [showContract, setShowContract] = useState(false);
   const [contract, setContract] = useState<ContractDraft>(EMPTY_CONTRACT);
   const [busy, setBusy] = useState(false);
@@ -87,10 +105,34 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function chooseFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const next = [...attachments, ...Array.from(files)];
+    if (next.length > MAX_ATTACHMENT_COUNT) {
+      setError(`A task can contain at most ${MAX_ATTACHMENT_COUNT} attachments.`);
+      return;
+    }
+    const tooLarge = next.find((file) => file.size > MAX_ATTACHMENT_BYTES);
+    if (tooLarge) {
+      setError(`${tooLarge.name} exceeds the 20 MB per-file limit.`);
+      return;
+    }
+    const total = next.reduce((sum, file) => sum + file.size, 0);
+    if (total > MAX_TASK_ATTACHMENT_BYTES) {
+      setError("Attachments exceed the 50 MB total task limit.");
+      return;
+    }
+    setError(null);
+    setAttachments(next);
+    if (fileInput.current) fileInput.current.value = "";
+  }
+
   async function send() {
     if (!question.trim() || !projectId) return;
     setBusy(true);
     setError(null);
+    let taskId: number | null = null;
+    const uploaded: TaskAttachment[] = [];
     try {
       const title = question.trim().slice(0, 120);
       const task = await api.createTask({
@@ -100,10 +142,29 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         priority: "medium",
         engineering_contract: contractFromDraft(contract),
       });
-      api.taskAction(task.id, "start_architecture").catch(() => undefined);
+      taskId = task.id;
+      try {
+        for (const file of attachments) {
+          uploaded.push(await uploadTaskAttachment(task.id, file));
+        }
+      } catch (attachmentError) {
+        // Attachment binding is atomic from the user's perspective: never start
+        // a task with only a subset of the context they selected.
+        for (const item of uploaded) {
+          await deleteTaskAttachment(task.id, item.id).catch(() => undefined);
+        }
+        await deleteNewTask(task.id).catch(() => undefined);
+        taskId = null;
+        throw attachmentError;
+      }
+      await api.taskAction(task.id, "start_architecture");
       router.push(`/work/${task.id}`);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(
+        taskId
+          ? `Task ${taskId} was created but could not be started: ${errorMessage(e)}`
+          : errorMessage(e),
+      );
       setBusy(false);
     }
   }
@@ -143,6 +204,47 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
         }}
         disabled={busy}
       />
+
+      {attachments.length > 0 && (
+        <div className="attachment-chips" aria-label="Task attachments">
+          {attachments.map((file, index) => (
+            <span className="attachment-chip" key={`${file.name}-${file.size}-${index}`}>
+              <span>{file.name}</span>
+              <span className="muted small">{sizeLabel(file.size)}</span>
+              <button
+                type="button"
+                className="link-btn"
+                aria-label={`Remove ${file.name}`}
+                disabled={busy}
+                onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="composer-tools">
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          accept={ATTACHMENT_ACCEPT}
+          hidden
+          onChange={(e) => chooseFiles(e.target.files)}
+          disabled={busy}
+        />
+        <button
+          className="link-btn"
+          type="button"
+          onClick={() => fileInput.current?.click()}
+          disabled={busy || attachments.length >= MAX_ATTACHMENT_COUNT}
+        >
+          Attach screenshot, PDF or context file
+        </button>
+        <span className="muted small">PNG/JPEG/WebP, PDF, TXT/MD/JSON/CSV · 20 MB/file</span>
+      </div>
 
       <div style={{ marginTop: 8 }}>
         <button className="link-btn" type="button" onClick={() => setShowContract((value) => !value)} disabled={busy}>
@@ -214,7 +316,7 @@ export default function Composer({ defaultProjectId, suppressError = false }: Co
           <span className="muted small">Project: {projects[0]?.name}</span>
         )}
         <button className="btn primary" onClick={send} disabled={busy || !question.trim() || !projectId}>
-          {busy ? "Sending…" : "Send"}
+          {busy ? (attachments.length ? "Uploading context…" : "Sending…") : "Send"}
         </button>
       </div>
       {error && <div className="notice error">{error}</div>}

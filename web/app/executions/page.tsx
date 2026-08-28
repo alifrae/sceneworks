@@ -1,22 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { api, errorMessage } from "@/lib/api";
 import type { Execution } from "@/lib/types";
 import { formatTime, shortId } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
 
-export default function ExecutionsPage() {
+const STATUSES = ["QUEUED", "STARTING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"];
+
+function ExecutionsContent() {
+  const searchParams = useSearchParams();
+  const requestedStatus = searchParams.get("status") ?? "";
   const [rows, setRows] = useState<Execution[]>([]);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(STATUSES.includes(requestedStatus) ? requestedStatus : "");
   const [error, setError] = useState<string | null>(null);
   const [pendingCancel, setPendingCancel] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setStatus(STATUSES.includes(requestedStatus) ? requestedStatus : "");
+  }, [requestedStatus]);
 
   const refresh = useCallback(() => {
     const params: Record<string, string> = { limit: "100" };
     if (status) params.status = status;
-    api.executions(params).then(setRows).catch((e) => setError(String(e)));
+    api.executions(params)
+      .then((next) => {
+        setRows(next);
+        setError(null);
+      })
+      .catch((e) => setError(errorMessage(e)));
   }, [status]);
 
   useEffect(() => {
@@ -39,7 +53,7 @@ export default function ExecutionsPage() {
       await api.cancelExecution(id);
     } catch (e) {
       setRows((current) => current.map((row) => row.id === id ? { ...row, status: "RUNNING" } : row));
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setPendingCancel((current) => {
         const next = new Set(current);
@@ -55,7 +69,7 @@ export default function ExecutionsPage() {
         <h1>Executions</h1>
         <select style={{ width: 200 }} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
-          {["QUEUED", "STARTING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].map((s) => (
+          {STATUSES.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -68,7 +82,7 @@ export default function ExecutionsPage() {
 
       <div className="panel">
         {rows.length === 0 ? (
-          <div className="empty">No executions yet.</div>
+          <div className="empty">No executions{status ? ` with status ${status}` : ""}.</div>
         ) : (
           <table className="grid">
             <thead>
@@ -114,5 +128,13 @@ export default function ExecutionsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function ExecutionsPage() {
+  return (
+    <Suspense fallback={<h1>Executions</h1>}>
+      <ExecutionsContent />
+    </Suspense>
   );
 }

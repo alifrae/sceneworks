@@ -18,13 +18,21 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agents.base import AgentBackend, AgentEventSink, AgentRequest, AgentResult, Workspace
+from app.agents.base import (
+    AgentAttachment,
+    AgentBackend,
+    AgentEventSink,
+    AgentRequest,
+    AgentResult,
+    Workspace,
+)
 from app.agents.registry import BackendRegistry
 from app.config.settings import Settings
 from app.events import types as event_types
 from app.events.bus import EventBus
 from app.events.store import EventStore
-from app.models import Execution, Task
+from app.models import Execution, Task, TaskAttachment
+from app.services.attachments import AttachmentError, read_bytes
 
 logger = logging.getLogger("sceneworks.execution")
 
@@ -154,6 +162,17 @@ class ExecutionEngine:
                 row = await self._load_execution(session, execution_id)
                 row.status = "STARTING"
                 row.started_at = datetime.now(timezone.utc)
+                attachment_rows: list[TaskAttachment] = []
+                if row.task_id is not None:
+                    attachment_rows = list(
+                        (
+                            await session.execute(
+                                select(TaskAttachment)
+                                .where(TaskAttachment.task_id == row.task_id)
+                                .order_by(TaskAttachment.created_at.asc())
+                            )
+                        ).scalars().all()
+                    )
                 await session.commit()
                 snapshot = {
                     "role": row.role,
@@ -164,7 +183,28 @@ class ExecutionEngine:
                     "workspace": dict(row.workspace or {}),
                     "system_prompt": row.system_prompt,
                     "user_prompt": row.user_prompt,
+                    "attachments": [
+                        {
+                            "id": attachment.id,
+                            "filename": attachment.filename,
+                            "mime_type": attachment.mime_type,
+                            "size_bytes": attachment.size_bytes,
+                            "sha256": attachment.sha256,
+                            "storage_key": attachment.storage_key,
+                        }
+                        for attachment in attachment_rows
+                    ],
                 }
+            public_attachments = [
+                {
+                    "id": item["id"],
+                    "filename": item["filename"],
+                    "mime_type": item["mime_type"],
+                    "size_bytes": item["size_bytes"],
+                    "sha256": item["sha256"],
+                }
+                for item in snapshot["attachments"]
+            ]
             await self._emit(
                 event_types.EXECUTION_STARTED,
                 {
@@ -172,9 +212,34 @@ class ExecutionEngine:
                     "backend": snapshot["backend"],
                     "model_profile": snapshot["model_profile"],
                     "model": snapshot["model"],
+                    "attachments": public_attachments,
                 },
                 execution_id=execution_id,
             )
+
+            try:
+                attachments = tuple(
+                    AgentAttachment(
+                        id=int(item["id"]),
+                        filename=str(item["filename"]),
+                        mime_type=str(item["mime_type"]),
+                        size_bytes=int(item["size_bytes"]),
+                        sha256=str(item["sha256"]),
+                        data=read_bytes(self._settings, str(item["storage_key"])),
+                    )
+                    for item in snapshot["attachments"]
+                )
+            except AttachmentError as exc:
+                await self._finalize(
+                    execution_id,
+                    status="FAILED",
+                    error=f"task attachment unavailable: {exc}",
+                    event_type=event_types.EXECUTION_FAILED,
+                    event_payload={"error": f"task attachment unavailable: {exc}"},
+                    event_severity="error",
+                )
+                return
+
             cwd = snapshot["workspace"].get("cwd") or snapshot["workspace"].get("repo_path")
             workspace = Workspace(
                 path=str(cwd or Path.cwd()),
@@ -190,14 +255,24 @@ class ExecutionEngine:
                 user_prompt=snapshot["user_prompt"] or "",
                 model_profile=snapshot["model_profile"],
                 model=snapshot["model"],
+                attachments=attachments,
                 metadata={"task_id": snapshot["task_id"]},
             )
             backend: AgentBackend = self._backends.get(snapshot["backend"])
             timeout = self._settings.execution_timeout_seconds + 60
             try:
-                result = await asyncio.wait_for(
-                    backend.run(request, workspace, sink), timeout=timeout
-                )
+                if attachments and snapshot["backend"] != "gemini_acp":
+                    result = AgentResult(
+                        status="failed",
+                        error=(
+                            f"backend {snapshot['backend']} does not support task attachments in V1; "
+                            "use Gemini ACP or remove the attachments before execution"
+                        ),
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        backend.run(request, workspace, sink), timeout=timeout
+                    )
             except asyncio.TimeoutError:
                 result = AgentResult(
                     status="failed",
