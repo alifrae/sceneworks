@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
+from app.runtime.base import CommandRuntimeError
+from app.runtime.native import NativeRuntime
 from app.services.engineering_evidence import EngineeringEvidenceError
 from app.services.engineering_sessions import EngineeringSessionError
 
@@ -78,3 +81,31 @@ async def test_only_one_active_turn_per_engineering_session(
         engineering.id, "next iteration"
     )
     assert second.id != first.id
+
+
+async def test_command_timeout_keeps_partial_stdout_stderr_for_evidence(tmp_path):
+    root = tmp_path / "worktree"
+    root.mkdir()
+    runtime = NativeRuntime()
+    with pytest.raises(CommandRuntimeError) as exc_info:
+        await runtime.run_command(
+            root,
+            sys.executable,
+            [
+                "-u",
+                "-c",
+                (
+                    "import sys,time; "
+                    "print('stdout-before-timeout', flush=True); "
+                    "print('stderr-before-timeout', file=sys.stderr, flush=True); "
+                    "time.sleep(10)"
+                ),
+            ],
+            timeout=1,
+        )
+    evidence = exc_info.value.evidence
+    assert evidence["timed_out"] is True
+    assert evidence["cancelled"] is False
+    assert "stdout-before-timeout" in evidence["stdout"]
+    assert "stderr-before-timeout" in evidence["stderr"]
+    assert evidence["exit_code"] is not None
