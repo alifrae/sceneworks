@@ -21,15 +21,20 @@ ADVANCED_PERMISSIONS = {
     "repository_read",
     "repository_write",
     "shell_execute",
+    "process_control",
     "git_commit",
     "network_access",
-    "subagents",
+    "agent_delegate",
+    "subagents",  # legacy Gemini provider-session capability
 }
 
 EDITABLE_KEYS = {
     "worktree_root": str,
     "gemini_executable": str,
     "gemini_model": str,
+    "opencode_executable": str,
+    "opencode_model": str,
+    "opencode_agent": str,
     "model_profile_routes": dict,
     "execution_timeout_seconds": int,
     "default_backend": str,
@@ -88,6 +93,12 @@ def apply_overrides(settings: Settings, overrides: SettingsOverrides) -> Setting
         settings.gemini_executable = str(values["gemini_executable"]) or None
     if "gemini_model" in values:
         settings.gemini_model = str(values["gemini_model"]) or None
+    if "opencode_executable" in values:
+        settings.opencode_executable = str(values["opencode_executable"]) or None
+    if "opencode_model" in values:
+        settings.opencode_model = str(values["opencode_model"]) or None
+    if "opencode_agent" in values:
+        settings.opencode_agent = str(values["opencode_agent"]) or None
     if "model_profile_routes" in values:
         raw = values["model_profile_routes"]
         if not isinstance(raw, dict):
@@ -99,7 +110,10 @@ def apply_overrides(settings: Settings, overrides: SettingsOverrides) -> Setting
     if "execution_timeout_seconds" in values:
         settings.execution_timeout_seconds = int(values["execution_timeout_seconds"])
     if "default_backend" in values:
-        settings.default_backend = str(values["default_backend"])
+        backend = str(values["default_backend"])
+        if backend not in {"gemini_acp", "opencode", "openhands", "fake"}:
+            raise ValueError(f"invalid default_backend: {backend!r}")
+        settings.default_backend = backend  # type: ignore[assignment]
     if "mcp_enabled" in values:
         settings.mcp_enabled = bool(values["mcp_enabled"])
     if "mcp_mode" in values:
