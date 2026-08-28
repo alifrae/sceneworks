@@ -20,6 +20,9 @@ web/test-results/
 web/playwright-report/
 npm-debug.log*
 
+# Local tools
+tools/tunnel-client-runtime-cloudflared.exe
+
 # Env / secrets
 .env
 .env.local
