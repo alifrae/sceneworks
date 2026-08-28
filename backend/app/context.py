@@ -1,9 +1,8 @@
 """Application composition root.
 
-Builds every service once at startup, wires the execution engine's
-continuation hook to the LangGraph WorkflowManager, and reconciles
-interrupted executions and advanced MCP-supervised agent sessions.
-API handlers access services through this context.
+Builds every service once at startup, wires the execution engine's continuation
+hook to the LangGraph WorkflowManager, and reconciles interrupted executions,
+legacy provider sessions, and provider-neutral engineering sessions.
 """
 
 from __future__ import annotations
@@ -24,8 +23,10 @@ from app.execution.engine import ExecutionEngine
 from app.git.workspace import GitWorktreeService
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
+from app.runtime.registry import RuntimeRegistry
 from app.services.agent_sessions import AgentSessionService
 from app.services.company import CompanyService
+from app.services.engineering_sessions import EngineeringSessionService
 from app.services.memory import MemoryService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
@@ -45,6 +46,7 @@ class AppContext:
     backends: BackendRegistry
     model_router: ModelRouter
     git: GitWorktreeService
+    runtimes: RuntimeRegistry
     roles: RoleRegistry
     prompt_builder: PromptBuilder
     execution_engine: ExecutionEngine
@@ -54,6 +56,7 @@ class AppContext:
     memory: MemoryService
     provenance: ProvenanceService
     agent_sessions: AgentSessionService
+    engineering_sessions: EngineeringSessionService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
     health_warmup: asyncio.Task | None = field(default=None)
@@ -66,9 +69,11 @@ class AppContext:
             except asyncio.CancelledError:
                 pass
         await self.backends.shutdown()
-        # Advanced sessions can own live Gemini ACP processes. Stop them before
-        # closing the database they use for status/audit persistence.
+        # Legacy provider sessions can own live Gemini ACP processes.
         await self.agent_sessions.shutdown()
+        # Direct EngineeringSession child processes belong to the runtime, not a
+        # model backend. Stop them independently before database shutdown.
+        await self.runtimes.shutdown()
         await self.execution_engine.shutdown()
         await self.workflow_manager.shutdown()
         await close_db(self.db_engine)
@@ -76,9 +81,6 @@ class AppContext:
 
 async def _warm_backend_health(backends: BackendRegistry) -> None:
     try:
-        # Warm the real cache while the application remains available. A normal
-        # health_all() call is intentionally stale-while-revalidate and returns
-        # immediately, so startup must force the actual provider probe here.
         await backends.health_all(force=True)
     except asyncio.CancelledError:
         raise
@@ -100,6 +102,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     backends = BackendRegistry(settings)
     model_router = ModelRouter(settings, backends.keys())
     git = GitWorktreeService(settings)
+    runtimes = RuntimeRegistry()
     roles = RoleRegistry(
         settings.roles_dir,
         default_backend=(
@@ -124,6 +127,9 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     memory = MemoryService(session_factory, event_store, bus)
     provenance = ProvenanceService(session_factory, git)
     agent_sessions = AgentSessionService(session_factory, git, event_store, settings)
+    engineering_sessions = EngineeringSessionService(
+        session_factory, git, runtimes, settings
+    )
     workflow_manager = WorkflowManager(
         session_factory,
         execution_engine,
@@ -152,6 +158,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         backends=backends,
         model_router=model_router,
         git=git,
+        runtimes=runtimes,
         roles=roles,
         prompt_builder=prompt_builder,
         execution_engine=execution_engine,
@@ -161,6 +168,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         memory=memory,
         provenance=provenance,
         agent_sessions=agent_sessions,
+        engineering_sessions=engineering_sessions,
         settings_store=settings_store,
         settings_overrides=overrides,
     )
@@ -173,8 +181,14 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     advanced_interrupted = await agent_sessions.recover_interrupted()
     if advanced_interrupted:
         logger.warning(
-            "reconciled %d interrupted advanced agent sessions from previous run",
+            "reconciled %d interrupted legacy provider sessions from previous run",
             len(advanced_interrupted),
+        )
+    engineering_interrupted = await engineering_sessions.recover_interrupted()
+    if engineering_interrupted:
+        logger.warning(
+            "reconciled %d interrupted engineering-session creations from previous run",
+            len(engineering_interrupted),
         )
     recovered = await workflow_manager.recover_workflows()
     if recovered:
