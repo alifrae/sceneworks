@@ -1,4 +1,4 @@
-"""Native SceneWorks execution runtime (WP14).
+"""Native SceneWorks execution runtime (WP14/WP15).
 
 No model or agent logic lives here. Filesystem operations are confined to the
 EngineeringSession worktree. Commands and child processes use that worktree as
@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
@@ -24,12 +25,18 @@ _MAX_COMMAND_CHARS = 240_000
 _MAX_PROCESS_EVENTS = 5000
 
 
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 @dataclass
 class _ProcessRecord:
     process_id: str
     command: list[str]
     cwd: Path
     process: asyncio.subprocess.Process
+    started_at: str
+    finished_at: str | None = None
     output: list[dict] = field(default_factory=list)
     readers: list[asyncio.Task] = field(default_factory=list)
 
@@ -161,8 +168,6 @@ class NativeRuntime:
                 continue
             try:
                 resolved = candidate.resolve()
-                # rglob can yield symlinked files. Resolve before stat/read so a
-                # symlink cannot turn search into a host-filesystem read primitive.
                 if not resolved.is_relative_to(workspace) or not resolved.is_file():
                     continue
                 if resolved.stat().st_size > _MAX_FILE_BYTES:
@@ -292,6 +297,7 @@ class NativeRuntime:
             command=[command, *[str(item) for item in args]],
             cwd=workdir,
             process=process,
+            started_at=_iso_now(),
         )
         record.readers = [
             asyncio.create_task(self._drain(record, "stdout", process.stdout)),
@@ -338,8 +344,11 @@ class NativeRuntime:
         events = record.output[start : start + max(0, max_events)] if max_events else []
         return ProcessSnapshot(
             process_id=record.process_id,
+            pid=record.process.pid,
             command=list(record.command),
             cwd=str(record.cwd),
+            started_at=record.started_at,
+            finished_at=record.finished_at,
             running=record.process.returncode is None,
             returncode=record.process.returncode,
             next_cursor=start + len(events),
@@ -352,6 +361,8 @@ class NativeRuntime:
         record = self._record(process_id)
         if record.process.returncode is not None:
             await asyncio.gather(*record.readers, return_exceptions=True)
+            if record.finished_at is None:
+                record.finished_at = _iso_now()
         return self._snapshot(record, cursor=cursor, max_events=max_events)
 
     async def stop_process(self, process_id: str) -> ProcessSnapshot:
@@ -364,6 +375,8 @@ class NativeRuntime:
                 record.process.kill()
                 await record.process.wait()
         await asyncio.gather(*record.readers, return_exceptions=True)
+        if record.finished_at is None:
+            record.finished_at = _iso_now()
         return self._snapshot(record, cursor=0, max_events=len(record.output))
 
     async def git_status(self, root: Path) -> dict:
