@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # repository. Relative paths resolve against the backend working directory.
     worktree_root: Path = Path("data/worktrees")
 
+    # SceneWorks-owned task context. Attachments are deliberately outside every
+    # managed repository/worktree and are referenced by immutable hashes.
+    attachment_root: Path = Path("data/attachments")
+    attachment_max_bytes: int = 20_000_000
+    attachment_task_max_bytes: int = 50_000_000
+    attachment_task_max_count: int = 8
+    # MCP can move attachment bytes through JSON-RPC, so keep that path smaller
+    # than the local browser upload limit to avoid enormous model/tool payloads.
+    mcp_attachment_max_bytes: int = 5_000_000
+
     # Provider-neutral role intent -> concrete backend/model mapping (WP8).
     # Example environment value:
     # SCENEWORKS_MODEL_PROFILE_ROUTES='{"strongest":{"backend":"gemini_acp","model":"<model>"}}'
