@@ -217,6 +217,35 @@ WP12 does not use:
 - a task whose acceptance command already passes at the base commit;
 - a trial blocked by provider/setup failure counted as an engineering loss.
 
+## Task context attachments
+
+Real PCS debugging work often depends on screenshots, requirements PDFs, logs,
+JSON/CSV excerpts, or similar context that cannot be represented faithfully by
+a short task description. WP12 therefore includes first-class task attachments
+before the dogfood pilot rather than evaluating a text-only workflow.
+
+The V1 boundary is intentionally narrow:
+
+- PNG/JPEG/WebP, PDF, TXT/Markdown, JSON and CSV only;
+- attachment bytes are owned by SceneWorks under `data/attachments`, never
+  copied into the managed repository or an agent worktree;
+- metadata includes an immutable SHA-256 digest;
+- attachments can be changed only while the task is `NEW`, freezing the context
+  set before workflow execution begins;
+- Gemini ACP receives images/resources through advertised prompt capabilities;
+  missing binary capabilities fail explicitly rather than dropping context;
+- text files have a safe text fallback for older ACP agents;
+- attachment contents are labelled **untrusted user context**: instructions
+  found inside a screenshot, PDF, log or Markdown file cannot override the role
+  prompt, task request, engineering contract, or project policy;
+- MCP exposes semantic attachment listing/retrieval in all modes and bounded
+  upload in Standard/Advanced mode without exposing host filesystem paths;
+- task deletion and project-history purge remove SceneWorks attachment metadata
+  and storage without modifying the registered Git repository.
+
+The complete storage, REST, MCP, ACP and trust-boundary contract is documented in
+`docs/architecture/task-attachments.md`.
+
 ## Phase C — real PCS dogfood pilot
 
 Only start this phase after `READY_FOR_PILOT`.
@@ -240,11 +269,13 @@ Avoid for the first pilot:
 For each pilot task:
 
 1. create the task through SceneWorks;
-2. use the normal workflow and isolated worktree;
-3. do not manually repair the worktree behind SceneWorks' back;
-4. inspect the contract, actual diff, tests, review result and provenance;
-5. record any human intervention not already represented in SceneWorks;
-6. merge only after normal human review.
+2. attach relevant screenshots/PDFs/log extracts before starting work when they
+   materially improve the engineering context;
+3. use the normal workflow and isolated worktree;
+4. do not manually repair the worktree behind SceneWorks' back;
+5. inspect the contract, attached-context provenance, actual diff, tests, review result and provenance;
+6. record any human intervention not already represented in SceneWorks;
+7. merge only after normal human review.
 
 The pilot is successful only when at least two tasks are completed and manually
 accepted without discovering a control-plane defect that makes SceneWorks less
@@ -292,6 +323,7 @@ WP12 is closed only when all of the following are true:
 - [x] checked-in PCS template defines the initial policy;
 - [x] repository path is portable through `${PCS_REPO}`;
 - [x] unit tests cover READY / NOT_READY / INSUFFICIENT_EVIDENCE;
+- [x] task attachments are bounded, provenance-hashed, MCP-visible and Gemini-ACP-capable before pilot use;
 - [ ] `benchmarks/pcs.json` contains 5–10 validated historical PCS tasks;
 - [ ] three paired repeats per task have been executed with the intended backend/model;
 - [ ] machine-readable benchmark evidence is retained;
