@@ -1,10 +1,9 @@
-"""SceneWorks MCP reasoning and engineering-control interface.
+"""SceneWorks MCP reasoning, engineering-control and evidence interface.
 
 Observe and Standard modes expose semantic SceneWorks concepts. Advanced mode
-adds provider-neutral EngineeringSessions: direct worktree-confined filesystem,
-command/process and Git capabilities owned by SceneWorks itself. Agent providers
-(Gemini ACP, OpenCode, OpenHands) are optional delegated workers rather than the
-execution substrate.
+adds provider-neutral EngineeringSessions and WP15 durable evidence/turn
+correlation. Agent providers are optional workers; SceneWorks-captured runtime,
+process, command, file and Git observations remain the evidence authority.
 """
 
 from __future__ import annotations
@@ -12,13 +11,13 @@ from __future__ import annotations
 from typing import Any
 
 from app.mcp.server import MCPToolError
-from app.mcp.wp14_server import ProviderNeutralMCPServer
+from app.mcp.wp15_server import EvidenceMCPServer
 
 
-class SceneWorksMCPServer(ProviderNeutralMCPServer):
-    """Canonical WP14 server with provider-neutral discovery/error guidance."""
+class SceneWorksMCPServer(EvidenceMCPServer):
+    """Canonical WP15 server with provider-neutral discovery/error guidance."""
 
-    def _wp14_instructions(self) -> str:
+    def _wp15_instructions(self) -> str:
         if self.mode == "observe":
             mode_text = "Observe mode: read-only semantic tools; no executions or mutations."
         elif self.mode == "standard":
@@ -28,14 +27,16 @@ class SceneWorksMCPServer(ProviderNeutralMCPServer):
             )
         else:
             mode_text = (
-                "Advanced mode: Standard tools plus provider-neutral EngineeringSessions "
-                "with direct workspace, command/process and Git control. Agent delegation "
-                "is optional and does not define the execution substrate."
+                "Advanced mode: Standard tools plus task-bindable EngineeringSessions, "
+                "explicit supervisor turns, direct workspace/command/process/Git control, "
+                "and a durable SceneWorks evidence ledger. Agent delegation is optional."
             )
         return (
-            "SceneWorks is the engineering control plane. Ground reasoning in project state, "
-            "accepted memory, tasks, diffs and execution evidence. Direct machine capabilities "
-            "are available only through an isolated EngineeringSession and its permission gates. "
+            "SceneWorks is the engineering control plane and evidence authority. Ground "
+            "reasoning in project state, accepted memory, task contracts, captured evidence "
+            "and Git truth. Provider/agent conclusions are inference, not authoritative "
+            "evidence. Direct machine capabilities exist only through an isolated "
+            "EngineeringSession and its permission gates. "
             + mode_text
         )
 
@@ -43,15 +44,12 @@ class SceneWorksMCPServer(ProviderNeutralMCPServer):
         if self.mode != "advanced":
             raise MCPToolError(
                 "This tool requires explicit Advanced MCP mode. Advanced mode gives the MCP "
-                "client direct SceneWorks-owned engineering control in an isolated worktree; "
-                "agent providers such as Gemini or OpenCode are optional delegated workers."
+                "client direct SceneWorks-owned engineering control and durable evidence in "
+                "an isolated worktree; Gemini/OpenCode/OpenHands are optional workers."
             )
 
     async def handle(self, payload: Any) -> tuple[Any | None, int]:
         body, status = await super().handle(payload)
-        # The WP11 base protocol handler owns JSON-RPC framing and still emits
-        # historical Gemini-specific instructions. Replace only the guidance;
-        # leave protocol negotiation and batch behavior untouched.
         if isinstance(payload, dict) and payload.get("method") in {
             "server/discover",
             "initialize",
@@ -59,7 +57,7 @@ class SceneWorksMCPServer(ProviderNeutralMCPServer):
             if isinstance(body, dict):
                 result = body.get("result")
                 if isinstance(result, dict):
-                    result["instructions"] = self._wp14_instructions()
+                    result["instructions"] = self._wp15_instructions()
         return body, status
 
 
