@@ -4,6 +4,7 @@ Schema notes:
 - Initiative and WorkPackage provide durable objective decomposition above Task.
 - Task holds workflow-scoped, coarse results; fine-grained traceability lives in
   Execution and Event rows.
+- TaskAttachment stores immutable SceneWorks-owned context outside repositories.
 - Execution is the unit of governed role invocation (one row per agent run).
 - AgentSession persists ChatGPT-supervised advanced Gemini sessions independently
   from governed Task workflows.
@@ -140,6 +141,34 @@ class Task(Base):
     project: Mapped[Project] = relationship(back_populates="tasks")
     work_package: Mapped[WorkPackage | None] = relationship(back_populates="tasks")
     executions: Mapped[list[Execution]] = relationship(back_populates="task")
+    attachments: Mapped[list[TaskAttachment]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", order_by="TaskAttachment.created_at"
+    )
+
+
+class TaskAttachment(Base):
+    """Immutable user-provided context associated with a task.
+
+    ``storage_key`` is relative to the configured attachment root. Attachment
+    bytes never live in the managed repository or an agent worktree.
+    """
+
+    __tablename__ = "task_attachments"
+    __table_args__ = (
+        UniqueConstraint("task_id", "sha256", name="uq_task_attachment_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(240))
+    mime_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_key: Mapped[str] = mapped_column(String(1000))
+    source: Mapped[str] = mapped_column(String(50), default="web")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    task: Mapped[Task] = relationship(back_populates="attachments")
 
 
 class Execution(Base):
@@ -258,6 +287,7 @@ all_models = (
     Initiative,
     WorkPackage,
     Task,
+    TaskAttachment,
     Execution,
     AgentSession,
     Event,
