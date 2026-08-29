@@ -1,6 +1,6 @@
 # SceneWorks V3.0.0
 
-SceneWorks is a local engineering control plane for governed software work. It combines a conventional task workflow with provider-neutral engineering sessions, durable evidence, semantic PCS control, and optional autonomous coding workers.
+SceneWorks is a local engineering control plane for governed software work. It combines a conventional task workflow with provider-neutral engineering sessions, durable evidence, objective verification, semantic PCS control, and optional autonomous coding workers.
 
 The current architecture deliberately separates three things that older documentation often conflated:
 
@@ -25,11 +25,11 @@ Gemini CLI remains the recommended default autonomous worker, but direct MCP eng
 ## Current product surfaces
 
 - **Home** — create work and see items that need attention, active work, and recent results.
-- **Work** — governed tasks using `task | bug | feature | idea` work-item types and `auto | change | investigate | plan | ask` execution intent.
-- **Issues** — a lightweight engineering issue view over the existing task model; there is no second Jira-like ticket database.
+- **Work** — governed tasks using `task | bug | feature | idea` work-item types and `auto | change | investigate | plan | ask` execution intent. Each task has a first-class **Verification** tab.
+- **Issues** — a lightweight engineering issue view over the existing task model; accepted issues receive an immutable Resolution snapshot instead of a second Jira-like ticket record.
 - **Projects** — register/unregister local repositories and retain registration history.
 - **Control** — read-only operational view of EngineeringSessions, managed PCS processes, and recent evidence.
-- **Settings** — backend health, default worker, model-profile routing, MCP mode and Advanced permission ceiling.
+- **Settings** — backend health, editable role→profile routing, profile→backend/model routing, MCP mode and Advanced permission ceiling.
 - **Diagnostics** — API/performance/connectivity diagnostics.
 
 ## Execution architecture
@@ -58,7 +58,7 @@ Advanced MCP exposes a provider-neutral `EngineeringSession` with a SceneWorks-o
 ```text
 EngineeringSession
   -> workspace read/search/write
-  -> command.run
+  -> command.run (+ optional criterion_ids)
   -> process start/output/stop
   -> Git status/diff/commit
   -> semantic PCS lifecycle/log/state/verification
@@ -68,6 +68,25 @@ EngineeringSession
 ```
 
 Direct engineering actions are captured in the durable WP15 evidence ledger. Agent/model conclusions are inference; SceneWorks-observed file/Git/command/process/PCS/GUI observations are evidence.
+
+## Objective verification and issue traceability
+
+WP21 projects existing evidence into task-level `PASS`, `FAIL`, or `UNVERIFIABLE` results. It does not create another verification database and it never upgrades Reviewer prose into objective proof.
+
+The Verification tab correlates:
+
+- ordered acceptance criteria (`AC1`, `AC2`, ...);
+- explicit criterion mappings on objective command evidence;
+- exact required-test command results;
+- allowed-scope and protected-path Git checks;
+- exact project go/no-go command evidence;
+- the independent Reviewer decision.
+
+Semantic requirements without a deterministic verifier remain `UNVERIFIABLE`. A Reviewer `APPROVED` result is a review boundary, not proof that every criterion passed.
+
+When an accepted work item is a `bug`, `feature`, or `idea`, SceneWorks appends one immutable `task.resolution` lifecycle event containing attributed root-cause/change/risk claims plus SceneWorks-derived commit, changed files, and the verification snapshot. The original issue description is never overwritten.
+
+MCP exposes the same projection through `sceneworks.get_task_verification`.
 
 ## PCS control
 
@@ -86,13 +105,35 @@ GUI automation is a fallback. Deterministic PCS/API control remains preferred.
 
 ## Model routing
 
-Roles declare provider-neutral model intent such as `strongest`, `coding`, or `research`. Settings maps each profile to an optional backend/model. The concrete backend/model is resolved when an `Execution` is created and persisted for provenance.
+Routing has two independent configuration edges:
 
-Current limitation: the **role -> model-profile assignment itself remains defined in `backend/app/roles/definitions.py` and is not yet editable from Settings**. See [Verification and issue traceability](docs/verification-and-issue-traceability.md) for the remaining routing/verification UX gap.
+```text
+Role -> provider-neutral profile -> backend/model
+```
+
+Role defaults still live in `backend/app/roles/definitions.py`, but Settings can now override a role's effective profile (`strongest`, `coding`, or `research`) without duplicating provider model IDs. Profile routes continue to select the optional backend/model centrally. Settings shows the role default, effective profile, resolved backend/model, and source.
+
+The concrete backend/model is resolved when an `Execution` is created and persisted for provenance, so later setting changes do not rewrite history.
 
 ## Setup
 
 Requirements: Python 3.12+, Node.js 20+, Git, and [uv](https://docs.astral.sh/uv/).
+
+### Windows launcher
+
+Normal startup:
+
+```powershell
+.\scripts\start-sceneworks.cmd
+```
+
+Restart the currently running SceneWorks API, frontend and Secure MCP tunnel and relaunch the configured stack:
+
+```powershell
+.\scripts\start-sceneworks.cmd -Restart
+```
+
+See [Windows launcher](docs/development/windows-launcher.md) for `-NoTunnel`, `-Rebuild`, `-Dev`, and restart details.
 
 ### Backend
 
@@ -143,7 +184,7 @@ The repository also contains deterministic provider-independent qualification sc
 - [Architecture](docs/architecture.md) — current component and authority boundaries.
 - [Agent backends](docs/backends.md) — provider/runtime separation and routing.
 - [Known limitations](docs/limitations.md) — current, not historical, limitations.
-- [Verification and issue traceability](docs/verification-and-issue-traceability.md) — current verification UX gap and recommended issue-resolution contract.
+- [Verification and issue traceability](docs/verification-and-issue-traceability.md) — implemented WP21 verification semantics, issue Resolution snapshots and routing overrides.
 - [ChatGPT/MCP tutorial](docs/tutorials/chatgpt-mcp-plugin.md) — direct engineering and PCS control.
 - [WP14 provider-neutral execution](docs/wp14-provider-neutral-execution.md) through [WP20 engineering control center](docs/wp20-engineering-control-center.md) — historical implementation records.
 
