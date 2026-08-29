@@ -15,9 +15,11 @@ import type {
   ProjectProvenance,
   RepoStatus,
   Role,
+  RoutingSettings,
   Settings,
   Task,
   TaskProvenance,
+  TaskVerificationView,
   WorkPackage,
 } from "./types";
 
@@ -163,9 +165,6 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         const headers = new Headers(init?.headers);
-        // GETs stay simple CORS requests. FastAPI creates a correlation ID when
-        // the client does not provide one, so forcing custom headers here only
-        // caused needless preflight traffic during local startup.
         if (!get) {
           if (init?.body !== undefined && !headers.has("Content-Type")) {
             headers.set("Content-Type", "application/json");
@@ -276,6 +275,7 @@ export const api = {
     return request<Task[]>(`/api/tasks${query ? `?${query}` : ""}`, undefined, { diagnosticCause: "tasks-load" });
   },
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
+  taskVerification: (id: number) => request<TaskVerificationView>(`/api/tasks/${id}/verification`, undefined, { cacheTtlMs: 0, bypassCache: true }),
   createTask: (body: Record<string, unknown>) => request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(body) }),
   replaceTaskContract: (id: number, contract: EngineeringContract) => request<Task>(`/api/tasks/${id}/contract`, { method: "PUT", body: JSON.stringify(contract) }),
   taskProvenance: (id: number) => request<TaskProvenance>(`/api/tasks/${id}/provenance`),
@@ -303,6 +303,9 @@ export const api = {
   }),
   settings: () => request<Settings>("/api/settings", undefined, { cacheTtlMs: 30_000 }),
   updateSettings: (body: Record<string, unknown>) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(body) }),
+  routingSettings: () => request<RoutingSettings>("/api/settings/routing", undefined, { cacheTtlMs: 0, bypassCache: true }),
+  updateRoutingSettings: (body: { role_profile_overrides: Record<string, string> }) =>
+    request<RoutingSettings>("/api/settings/routing", { method: "PATCH", body: JSON.stringify(body) }),
   mcpSettings: () => request<McpSettings>("/api/settings/mcp", undefined, { cacheTtlMs: 5_000 }),
   updateMcpSettings: (body: Record<string, unknown>) => request<McpSettings>("/api/settings/mcp", { method: "PATCH", body: JSON.stringify(body) }),
 
