@@ -15,8 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config.settings import ModelProfileRoute, Settings
 from app.models import AppSetting
+from app.roles.definitions import default_roles
 
 MCP_MODES = {"observe", "standard", "advanced"}
+ROLE_MODEL_PROFILES = {"strongest", "coding", "research"}
+ROLE_KEYS = {role.key for role in default_roles()}
 ADVANCED_PERMISSIONS = {
     "repository_read",
     "repository_write",
@@ -39,6 +42,7 @@ EDITABLE_KEYS = {
     "opencode_model": str,
     "opencode_agent": str,
     "model_profile_routes": dict,
+    "role_model_profile_overrides": dict,
     "execution_timeout_seconds": int,
     "default_backend": str,
     "mcp_enabled": bool,
@@ -110,6 +114,23 @@ def apply_overrides(settings: Settings, overrides: SettingsOverrides) -> Setting
             str(profile): ModelProfileRoute.model_validate(route)
             for profile, route in raw.items()
         }
+    if "role_model_profile_overrides" in values:
+        raw = values["role_model_profile_overrides"]
+        if not isinstance(raw, dict):
+            raise ValueError("role_model_profile_overrides must be an object")
+        overrides_map: dict[str, str] = {}
+        for raw_role, raw_profile in raw.items():
+            role = str(raw_role).strip()
+            profile = str(raw_profile).strip().lower()
+            if role not in ROLE_KEYS:
+                raise ValueError(f"unknown role_model_profile_overrides role: {role!r}")
+            if profile not in ROLE_MODEL_PROFILES:
+                raise ValueError(
+                    f"invalid model profile {profile!r} for role {role!r}; expected one of: "
+                    + ", ".join(sorted(ROLE_MODEL_PROFILES))
+                )
+            overrides_map[role] = profile
+        settings.role_model_profile_overrides = overrides_map
     if "execution_timeout_seconds" in values:
         settings.execution_timeout_seconds = int(values["execution_timeout_seconds"])
     if "default_backend" in values:
