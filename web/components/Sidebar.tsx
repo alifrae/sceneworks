@@ -10,14 +10,16 @@ import { useTasks } from "@/lib/useTasks";
 const NAV = [
   { href: "/", label: "Home" },
   { href: "/work", label: "Work" },
+  { href: "/issues", label: "Issues" },
+  { href: "/control", label: "Control" },
   { href: "/projects", label: "Projects" },
-  { href: "/company", label: "Team" },
+  { href: "/settings", label: "Settings" },
 ];
 
 const SECONDARY_NAV = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/diagnostics", label: "Diagnostics" },
-  { href: "/settings", label: "Settings" },
+  { href: "/company", label: "Team" },
 ];
 
 const PREFETCH_ROUTES = [...NAV, ...SECONDARY_NAV].map((item) => item.href);
@@ -31,20 +33,14 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
-  // Shared with the page-level snapshot: the sidebar never issues its own
-  // task-list request, so a mounted page triggers exactly one list poll.
   const { tasks } = useTasks();
-  const recent = (tasks ?? []).slice(0, 6);
+  const recent = (tasks ?? []).slice(0, 5);
 
   useEffect(() => {
     setPendingHref(null);
   }, [pathname]);
 
   useEffect(() => {
-    // Explicitly warm the small set of top-level routes after the shell mounts.
-    // Next's automatic prefetch is production-oriented and first navigation in
-    // `next dev` can otherwise feel like the menu itself is slow while a route
-    // bundle is compiled on demand.
     const warm = () => PREFETCH_ROUTES.forEach((href) => router.prefetch(href));
     const idleWindow = window as IdleWindow;
     if (idleWindow.requestIdleCallback) {
@@ -73,14 +69,12 @@ export default function Sidebar() {
         <BrandMark size={34} />
         <div className="brand-wordmark">
           <div className="brand-name">SceneWorks</div>
-          <div className="brand-sub">AI engineering control plane</div>
+          <div className="brand-sub">engineering runtime</div>
         </div>
       </div>
 
       {pendingHref && (
-        <div className="nav-progress" role="status" aria-live="polite">
-          Opening…
-        </div>
+        <div className="nav-progress" role="status" aria-live="polite">Opening…</div>
       )}
 
       <Link
@@ -91,7 +85,7 @@ export default function Sidebar() {
         onFocus={warm("/")}
         onClick={go("/", pathname === "/")}
       >
-        + New request
+        + New work
       </Link>
 
       {NAV.map((item) => {
@@ -115,7 +109,7 @@ export default function Sidebar() {
 
       {recent.length > 0 && (
         <div className="sidebar-section">
-          <div className="sidebar-section-title">Recent</div>
+          <div className="sidebar-section-title">Recent work</div>
           {recent.map((task) => (
             <Link
               key={task.id}
@@ -157,9 +151,7 @@ export default function Sidebar() {
 
       <div className="sidebar-footer-tools">
         <ThemeToggle />
-        <div className="side-note">
-          Agents work in isolated worktrees. You decide what gets integrated.
-        </div>
+        <div className="side-note">Local worktrees, runtime state and evidence.</div>
       </div>
     </aside>
   );
