@@ -173,6 +173,8 @@ class WorkflowControl:
         async with owner._session_factory() as session:
             task = await owner._get_task(session, task_id)
             await owner._transition(task, "accept", "founder", session)
+        if owner._verification is not None:
+            await owner._verification.capture_resolution(task_id)
 
     async def reject(self, task_id: int, reason: str = "") -> None:
         owner = self._owner
