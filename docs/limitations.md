@@ -1,6 +1,6 @@
 # Known Limitations
 
-This file describes the **current** SceneWorks boundary after WP20. Historical V2/V3/WP documents should not be used as the current limitations list.
+This file describes the **current** SceneWorks boundary after WP21. Historical V2/V3/WP documents should not be used as the current limitations list.
 
 ## Deployment and trust
 
@@ -42,47 +42,41 @@ This file describes the **current** SceneWorks boundary after WP20. Historical V
 - **Reviewer approval is a review claim, not objective verification.** The Reviewer is independent and evidence-oriented, but its prose verdict remains model output.
 - **A task can still be under-specified.** If acceptance criteria, required tests, allowed scope or project policy are absent, SceneWorks cannot manufacture objective verification requirements.
 
-## Verification UX gap
+## Verification limits
 
-SceneWorks has substantial verification infrastructure but does not yet expose the complete task-level synthesis originally envisioned:
+WP21 now exposes criterion/test/scope/policy synthesis and an overall `PASS | FAIL | UNVERIFIABLE` result in a dedicated Verification tab. The remaining boundary is semantic verification, not missing UX.
 
-- acceptance criterion -> objective test/evidence -> result;
-- required test PASS/FAIL presentation;
-- allowed-scope/protected-path policy compliance presentation;
-- explicit overall `PASS | FAIL | UNVERIFIABLE` result;
-- dedicated **Verification** tab on the task page.
-
-WP15–WP18 make this feasible because evidence is now durable and correlated. The missing work is the synthesis/UX layer, not another evidence store.
+- Acceptance criteria are free-form text. SceneWorks only treats a criterion as objectively verified when evidence is **explicitly mapped** to its `ACn` identifier and that evidence has deterministic pass/fail semantics.
+- Advanced MCP `command.run` supports explicit `criterion_ids`; SceneWorks deliberately does not use fuzzy similarity or agent prose to guess mappings.
+- Required tests and project go/no-go commands are matched against attributable command evidence by exact normalized command. Provider prose saying "tests passed" is insufficient.
+- `allowed_scope` and `protected_paths` are deterministic only to the extent that changed-file provenance is available and the configured scope is path-like.
+- Architecture invariants, dependency directions, documentation requirements, performance constraints, required review checks and release requirements remain `UNVERIFIABLE` until dedicated deterministic verifiers exist.
+- A completed screenshot or visual-diff observation is evidence that pixels changed; it does not by itself prove the semantic acceptance criterion represented by the image.
 
 See [verification-and-issue-traceability.md](verification-and-issue-traceability.md).
 
-## Routing UX gap
+## Routing limits
 
-Settings already supports:
+Settings now supports both routing edges:
 
-- selecting the default autonomous worker;
-- backend health/status;
-- `strongest | coding | research` profile -> backend/model mapping;
-- persisted concrete backend/model on each `Execution`;
-- explicit no-silent-fallback behavior.
+- role -> provider-neutral profile override;
+- `strongest | coding | research` profile -> backend/model mapping.
 
-The remaining routing gap is that **role -> profile assignment is still code configuration** in `backend/app/roles/definitions.py`. For example, Engineer defaults to `coding`, while Architect and Reviewer default to `strongest`. It is not currently editable from Settings.
+Settings also shows each role's default/effective profile and resolved backend/model. Remaining limits:
 
-Settings also does not yet present one compact per-role row containing default profile, effective profile, resolved backend, resolved concrete model and source of inheritance/override.
+- the available profile vocabulary (`strongest`, `coding`, `research`) is still code-defined rather than user-extensible;
+- provider model availability remains external and may change independently;
+- changing Settings affects future Executions only. Existing Executions retain the concrete model/backend persisted at creation time.
 
-## Issue traceability gap
+## Issue traceability limits
 
-The WP20 Issues page correctly reuses the existing Task domain (`bug | feature | idea`) instead of creating a second Jira-like database. However, closed issues do not yet have a first-class structured resolution snapshot.
+Accepted `bug`, `feature`, and `idea` tasks now receive one immutable `task.resolution` lifecycle snapshot. It preserves the authority distinction rather than pretending all fields are facts:
 
-Recommended fields are:
+- resolved commit / changed files are Git-derived;
+- the embedded Verification snapshot is SceneWorks-derived;
+- root-cause, change-summary and remaining-risk prose are attributed Engineer/Reviewer claims.
 
-- root-cause claim;
-- fix/change summary;
-- objective verification result and evidence references;
-- changed commit/files;
-- remaining risk / unverifiable areas.
-
-The root-cause text is an engineering claim unless supported by evidence. Fix/verification metadata should be re-derived from SceneWorks Git/evidence rather than copied blindly from an agent response.
+A root-cause claim can therefore still be wrong even when the fix passes deterministic checks. SceneWorks records its provenance rather than promoting it to authoritative project knowledge.
 
 ## PCS limits
 
@@ -105,6 +99,7 @@ The root-cause text is an engineering claim unless supported by evidence. Fix/ve
 - **SQLite only.** There is no PostgreSQL/multi-instance deployment today.
 - **Versioned migrations do exist.** Alembic migrations under `backend/migrations/versions/` are the schema-evolution mechanism. Older documentation claiming that SceneWorks has no migration tooling is obsolete.
 - Workflow checkpoints use a separate SQLite checkpoint store.
+- WP21 issue Resolution snapshots reuse the existing durable Event stream; there is no separate issue-resolution database.
 
 ## Project memory
 
@@ -116,7 +111,7 @@ The root-cause text is an engineering claim unless supported by evidence. Fix/ve
 
 - The web UI is desktop-oriented. Mobile/responsive behavior is not a primary qualification target.
 - No internationalization.
-- The WP20 Control page is observational; engineering mutations remain in governed task/MCP/runtime paths.
+- The Control page is observational; engineering mutations remain in governed task/MCP/runtime paths.
 
 ## Deliberate non-goals for the current architecture
 
@@ -126,12 +121,12 @@ The root-cause text is an engineering claim unless supported by evidence. Fix/ve
 - silent autonomous-provider failover after mutation;
 - automatic merge into the user's main branch;
 - treating agent/model prose as evidence;
+- guessing semantic verification from textual similarity;
 - duplicating provider-native capabilities without a SceneWorks governance/evidence reason.
 
 ## Highest-value next hardening
 
 1. Real Windows PCS host qualification of WP16–WP18.
-2. First-class task Verification synthesis/UX.
-3. Structured issue-resolution snapshots backed by SceneWorks evidence.
-4. Editable role -> model-profile mapping plus explicit resolved-routing display.
-5. OS-level process/resource/network containment where a true security boundary is required.
+2. Add dedicated deterministic verifiers for important semantic PCS/project acceptance criteria rather than expanding heuristic inference.
+3. Harden the known restart-recovery qualification timing race so the deterministic suite itself is deterministic under runner scheduling variance.
+4. OS-level process/resource/network containment where a true security boundary is required.

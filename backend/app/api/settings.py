@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.agents.model_routing import ModelRouter
+from app.agents.model_routing import ModelRouter, ModelRoutingError
 from app.agents.registry import BackendRegistry
 from app.api.deps import get_context
 from app.context import AppContext
 from app.git.workspace import GitWorktreeService
 from app.schemas import BackendOut, RoleOut, SettingsOut, SettingsUpdate
 from app.services.engineering_sessions import EngineeringSessionService
-from app.services.settings import ADVANCED_PERMISSIONS, MCP_MODES, apply_overrides
+from app.services.settings import (
+    ADVANCED_PERMISSIONS,
+    MCP_MODES,
+    ROLE_KEYS,
+    ROLE_MODEL_PROFILES,
+    apply_overrides,
+)
 
 backends_router = APIRouter(prefix="/api/backends", tags=["backends"])
 roles_router = APIRouter(prefix="/api/roles", tags=["roles"])
@@ -44,6 +50,41 @@ async def list_roles(ctx: AppContext = Depends(get_context)) -> list[RoleOut]:
         )
         for r in ctx.roles.all()
     ]
+
+
+def _routing_state(ctx: AppContext) -> dict:
+    roles = []
+    for effective in ctx.roles.all():
+        base = ctx.roles.get(effective.key)
+        try:
+            resolved = ctx.model_router.resolve(effective)
+            resolved_backend = resolved.backend
+            resolved_model = resolved.model
+            routing_source = resolved.source
+            routing_error = None
+        except ModelRoutingError as exc:
+            resolved_backend = effective.backend
+            resolved_model = None
+            routing_source = "error"
+            routing_error = str(exc)
+        roles.append(
+            {
+                "key": effective.key,
+                "display_name": effective.display_name,
+                "default_profile": base.model_profile,
+                "effective_profile": effective.model_profile,
+                "profile_source": ctx.roles.profile_source(effective.key),
+                "resolved_backend": resolved_backend,
+                "resolved_model": resolved_model,
+                "routing_source": routing_source,
+                "routing_error": routing_error,
+            }
+        )
+    return {
+        "profiles": sorted(ROLE_MODEL_PROFILES),
+        "role_profile_overrides": dict(ctx.settings.role_model_profile_overrides),
+        "roles": roles,
+    }
 
 
 @settings_router.get("")
@@ -80,6 +121,46 @@ async def update_settings(
     if patch:
         await _apply_patch(ctx, patch)
     return await get_settings(ctx)
+
+
+@settings_router.get("/routing")
+async def get_routing_settings(ctx: AppContext = Depends(get_context)) -> dict:
+    """Return role -> profile -> concrete backend/model resolution."""
+    return _routing_state(ctx)
+
+
+@settings_router.patch("/routing")
+async def update_routing_settings(
+    body: dict, ctx: AppContext = Depends(get_context)
+) -> dict:
+    unknown_keys = set(body) - {"role_profile_overrides"}
+    if unknown_keys:
+        raise HTTPException(
+            status_code=422,
+            detail="unknown routing settings: " + ", ".join(sorted(unknown_keys)),
+        )
+    raw = body.get("role_profile_overrides", {})
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=422, detail="role_profile_overrides must be an object")
+    normalized: dict[str, str] = {}
+    for raw_role, raw_profile in raw.items():
+        role = str(raw_role).strip()
+        profile = str(raw_profile).strip().lower()
+        if role not in ROLE_KEYS:
+            raise HTTPException(status_code=422, detail=f"unknown role: {role}")
+        if not profile:
+            continue
+        if profile not in ROLE_MODEL_PROFILES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid profile {profile!r}; expected one of: " + ", ".join(sorted(ROLE_MODEL_PROFILES)),
+            )
+        normalized[role] = profile
+    try:
+        await _apply_patch(ctx, {"role_model_profile_overrides": normalized})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _routing_state(ctx)
 
 
 @settings_router.get("/mcp")
@@ -234,3 +315,4 @@ async def _apply_patch(ctx: AppContext, patch: dict) -> None:
         if ctx.settings.default_backend != "gemini_acp"
         else None
     )
+    ctx.roles.set_model_profile_overrides(ctx.settings.role_model_profile_overrides)

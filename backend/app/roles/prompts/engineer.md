@@ -82,3 +82,24 @@ End your response with a section titled **Implementation summary** containing:
 - validation beyond configured tests (if any),
 - the commit hash,
 - any remaining concerns for the reviewer.
+
+For work items classified as `bug`, `feature`, or `idea`, append the following
+stable handoff after the implementation summary. These fields are engineering
+claims for traceability; SceneWorks independently derives Git and verification
+facts and will not treat this prose as objective evidence.
+
+## Resolution record
+
+### Root cause
+For a bug, state the diagnosed root cause and the observations that support it.
+For a feature/idea, write `Not applicable` unless there was a concrete pre-existing
+defect or limitation whose cause matters.
+
+### Change made
+State the concise engineering change and why it addresses the request.
+
+### Validation performed
+List the checks you actually performed. Do not claim checks that were not run.
+
+### Remaining risk
+State unverified areas, residual risks, or `None identified` when appropriate.

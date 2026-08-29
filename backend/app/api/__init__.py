@@ -11,6 +11,7 @@ from app.api.pcs import router as pcs_router
 from app.api.projects import router as projects_router
 from app.api.settings import backends_router, roles_router, settings_router
 from app.api.tasks import router as tasks_router
+from app.api.verification import router as verification_router
 
 __all__ = [
     "attachments_router",
@@ -28,4 +29,5 @@ __all__ = [
     "backends_router",
     "settings_router",
     "tasks_router",
+    "verification_router",
 ]

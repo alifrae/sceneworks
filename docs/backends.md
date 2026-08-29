@@ -37,15 +37,13 @@ Gemini CLI is the recommended default autonomous worker. A Gemini authentication
 
 ## Current routing model
 
-Roles declare a provider-neutral model profile, currently using:
+Routing has two configuration edges:
 
 ```text
-strongest
-coding
-research
+Role -> provider-neutral profile -> backend/model
 ```
 
-Examples from the current role definitions:
+Default role profiles remain part of role definitions:
 
 | Role | Default profile |
 |---|---|
@@ -58,7 +56,9 @@ Examples from the current role definitions:
 | Reviewer / QA | `strongest` |
 | GTM | `research` |
 
-`ModelRouter` then resolves the profile to an optional concrete backend/model from Settings.
+WP21 adds persisted **role -> profile overrides** in Settings. An override changes only the provider-neutral profile; it does not duplicate a raw provider/model identifier on the role. Clearing the override restores the code-defined default.
+
+`ModelRouter` then resolves the effective profile to an optional concrete backend/model from Settings.
 
 Example profile routes:
 
@@ -70,28 +70,15 @@ Example profile routes:
 }
 ```
 
-The concrete backend/model is persisted on the `Execution` when the execution is created. Later Settings changes therefore do not rewrite provenance.
-
-### What is editable today
-
-The Settings page currently allows:
-
-- default worker selection;
-- backend health/status inspection;
-- `strongest | coding | research` -> backend/model overrides;
-- Gemini/OpenCode executable/model configuration.
-
-### Remaining routing UX gap
-
-The **role -> profile assignment itself is still hard-coded in `backend/app/roles/definitions.py`**. It is not yet editable in Settings.
-
-A useful follow-up is a per-role routing table showing:
+The Settings page shows:
 
 ```text
 Role | default profile | effective profile | resolved backend | resolved model | source
 ```
 
-with an optional profile override per role. That would complete the original routing UI intent without introducing a second routing engine.
+The concrete backend/model is persisted on the `Execution` when the execution is created. Later Settings changes therefore do not rewrite provenance.
+
+The current profile vocabulary (`strongest`, `coding`, `research`) is still code-defined. User-extensible arbitrary profile creation is not part of WP21.
 
 ## No-silent-fallback policy
 
@@ -165,7 +152,7 @@ ChatGPT / supervisor
            -> Git
 ```
 
-PCS lifecycle, GUI evidence and controlled UI Automation are SceneWorks services layered on the same governed session/evidence model; they are not autonomous backends either.
+PCS lifecycle, GUI evidence, controlled UI Automation and WP21 task-verification projection are SceneWorks services layered on the same governed session/evidence model; they are not autonomous backends either.
 
 When autonomous coding is useful, `sceneworks.agent.delegate` can invoke a configured `AgentBackend` inside the already-governed EngineeringSession worktree.
 

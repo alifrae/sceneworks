@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { API_URL, api } from "@/lib/api";
-import type { McpMode, McpSettings, ModelProfileRoute, Settings } from "@/lib/types";
+import type { McpMode, McpSettings, ModelProfileRoute, RoutingSettings, Settings } from "@/lib/types";
 import LoadingShell from "@/components/LoadingShell";
 
 const MODE_HELP: Record<McpMode, string> = {
@@ -38,6 +38,8 @@ function routeValue(routes: Record<string, ModelProfileRoute>, profile: string):
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [mcp, setMcp] = useState<McpSettings | null>(null);
+  const [routing, setRouting] = useState<RoutingSettings | null>(null);
+  const [roleProfiles, setRoleProfiles] = useState<Record<string, string>>({});
   const [form, setForm] = useState({
     worktree_root: "",
     default_backend: "gemini_acp",
@@ -62,10 +64,12 @@ export default function SettingsPage() {
   const [mcpProbe, setMcpProbe] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    Promise.all([api.settings(), api.mcpSettings()])
-      .then(([s, m]) => {
+    Promise.all([api.settings(), api.mcpSettings(), api.routingSettings()])
+      .then(([s, m, r]) => {
         setSettings(s);
         setMcp(m);
+        setRouting(r);
+        setRoleProfiles({ ...r.role_profile_overrides });
         setForm({
           worktree_root: s.worktree_root,
           default_backend: s.default_backend,
@@ -96,6 +100,15 @@ export default function SettingsPage() {
     }));
   }
 
+  function updateRoleProfile(role: string, profile: string) {
+    setRoleProfiles((current) => {
+      const next = { ...current };
+      if (profile) next[role] = profile;
+      else delete next[role];
+      return next;
+    });
+  }
+
   async function save() {
     setBusy(true);
     setError(null);
@@ -104,10 +117,7 @@ export default function SettingsPage() {
       const normalizedRoutes = Object.fromEntries(
         Object.entries(routes).map(([profile, route]) => [
           profile,
-          {
-            backend: route.backend || null,
-            model: route.model || null,
-          },
+          { backend: route.backend || null, model: route.model || null },
         ]),
       );
       await api.updateSettings({
@@ -121,7 +131,8 @@ export default function SettingsPage() {
         model_profile_routes: normalizedRoutes,
         execution_timeout_seconds: Number(form.execution_timeout_seconds),
       });
-      setSaved("Agent, model-routing and operational settings saved.");
+      await api.updateRoutingSettings({ role_profile_overrides: roleProfiles });
+      setSaved("Agent, role/profile routing and operational settings saved.");
       refresh();
     } catch (e) {
       setError(String(e));
@@ -183,7 +194,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (!settings || !mcp) return <LoadingShell title="Settings" />;
+  if (!settings || !mcp || !routing) return <LoadingShell title="Settings" />;
 
   const selectableBackends = settings.backends.filter((backend) => backend.key !== "fake");
 
@@ -201,37 +212,18 @@ export default function SettingsPage() {
         <h2>Agent backends</h2>
         <label className="field">
           Default worker
-          <select
-            value={form.default_backend}
-            onChange={(e) => setForm({ ...form, default_backend: e.target.value })}
-          >
-            {selectableBackends.map((backend) => (
-              <option key={backend.key} value={backend.key}>{backend.label}</option>
-            ))}
+          <select value={form.default_backend} onChange={(e) => setForm({ ...form, default_backend: e.target.value })}>
+            {selectableBackends.map((backend) => <option key={backend.key} value={backend.key}>{backend.label}</option>)}
           </select>
           <small>Gemini CLI is the recommended default. This is independent from ChatGPT/MCP direct execution.</small>
         </label>
         <table className="grid">
-          <thead>
-            <tr>
-              <th>Backend</th>
-              <th>Status</th>
-              <th>Version</th>
-              <th>Detail</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Backend</th><th>Status</th><th>Version</th><th>Detail</th></tr></thead>
           <tbody>
             {settings.backends.map((backend) => (
               <tr key={backend.key}>
-                <td>
-                  <strong>{backend.label}</strong>{" "}
-                  <span className="mono small muted">({backend.key})</span>
-                </td>
-                <td>
-                  <span className={`badge ${backend.available ? "success" : "error"}`}>
-                    {backend.available ? "Available" : "Unavailable"}
-                  </span>
-                </td>
+                <td><strong>{backend.label}</strong>{" "}<span className="mono small muted">({backend.key})</span></td>
+                <td><span className={`badge ${backend.available ? "success" : "error"}`}>{backend.available ? "Available" : "Unavailable"}</span></td>
                 <td className="mono small">{backend.version ?? "—"}</td>
                 <td className="small muted">{backend.detail ?? "—"}</td>
               </tr>
@@ -243,16 +235,11 @@ export default function SettingsPage() {
       <div className="panel">
         <h2>Model routing</h2>
         <p className="small muted">
-          Roles request provider-neutral profiles. A route may select a different backend and model without changing role definitions. Empty values inherit the role/backend defaults.
+          Routing remains two-level: each role selects a provider-neutral profile; each profile resolves to an optional backend/model. This keeps provider IDs centralized instead of duplicating them per role.
         </p>
+        <h3>Profiles → backend/model</h3>
         <table className="grid">
-          <thead>
-            <tr>
-              <th>Profile</th>
-              <th>Backend</th>
-              <th>Model override</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Profile</th><th>Backend</th><th>Model override</th></tr></thead>
           <tbody>
             {Object.keys(PROFILE_LABELS).map((profile) => {
               const route = routeValue(routes, profile);
@@ -260,204 +247,93 @@ export default function SettingsPage() {
                 <tr key={profile}>
                   <td><strong>{PROFILE_LABELS[profile]}</strong><br /><span className="mono small muted">{profile}</span></td>
                   <td>
-                    <select
-                      value={route.backend ?? ""}
-                      onChange={(e) => updateRoute(profile, { backend: e.target.value || null })}
-                    >
+                    <select value={route.backend ?? ""} onChange={(e) => updateRoute(profile, { backend: e.target.value || null })}>
                       <option value="">Inherit role/default</option>
-                      {selectableBackends.map((backend) => (
-                        <option key={backend.key} value={backend.key}>{backend.label}</option>
-                      ))}
+                      {selectableBackends.map((backend) => <option key={backend.key} value={backend.key}>{backend.label}</option>)}
                     </select>
                   </td>
-                  <td>
-                    <input
-                      value={route.model ?? ""}
-                      onChange={(e) => updateRoute(profile, { model: e.target.value || null })}
-                      placeholder="inherit backend default"
-                    />
-                  </td>
+                  <td><input value={route.model ?? ""} onChange={(e) => updateRoute(profile, { model: e.target.value || null })} placeholder="inherit backend default" /></td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+
+        <h3 style={{ marginTop: 20 }}>Roles → profile</h3>
+        <table className="grid">
+          <thead><tr><th>Role</th><th>Default</th><th>Effective profile</th><th>Resolved backend</th><th>Resolved model</th><th>Source</th></tr></thead>
+          <tbody>
+            {routing.roles.map((role) => {
+              const selected = roleProfiles[role.key] ?? "";
+              return (
+                <tr key={role.key}>
+                  <td><strong>{role.display_name}</strong><br /><span className="mono small muted">{role.key}</span></td>
+                  <td className="mono small">{role.default_profile ?? "—"}</td>
+                  <td>
+                    <select value={selected} onChange={(e) => updateRoleProfile(role.key, e.target.value)}>
+                      <option value="">Default ({role.default_profile ?? "none"})</option>
+                      {routing.profiles.map((profile) => <option key={profile} value={profile}>{PROFILE_LABELS[profile] ?? profile}</option>)}
+                    </select>
+                  </td>
+                  <td className="mono small">{role.resolved_backend}</td>
+                  <td className="mono small">{role.resolved_model ?? "provider default"}</td>
+                  <td className="small muted">{selected ? "role override" : role.routing_source}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="small muted">Resolved backend/model values above reflect the last saved routing state. Save to apply edited role profiles and refresh the concrete resolution.</p>
       </div>
 
       <div className="panel">
         <h2>Gemini CLI — default ACP worker</h2>
-        <label className="field">
-          Executable
-          <input
-            value={form.gemini_executable}
-            onChange={(e) => setForm({ ...form, gemini_executable: e.target.value })}
-            placeholder="gemini"
-          />
-          <small>Leave empty to auto-discover on PATH. Authentication remains owned by Gemini CLI.</small>
-        </label>
-        <label className="field">
-          Default model override (optional)
-          <input
-            value={form.gemini_model}
-            onChange={(e) => setForm({ ...form, gemini_model: e.target.value })}
-            placeholder="leave empty for Gemini CLI selection"
-          />
-        </label>
-        <p className="small muted">
-          Gemini-specific web/search/subagent capabilities remain inside this backend. SceneWorks does not duplicate them in the native runtime.
-        </p>
+        <label className="field">Executable<input value={form.gemini_executable} onChange={(e) => setForm({ ...form, gemini_executable: e.target.value })} placeholder="gemini" /><small>Leave empty to auto-discover on PATH. Authentication remains owned by Gemini CLI.</small></label>
+        <label className="field">Default model override (optional)<input value={form.gemini_model} onChange={(e) => setForm({ ...form, gemini_model: e.target.value })} placeholder="leave empty for Gemini CLI selection" /></label>
+        <p className="small muted">Gemini-specific web/search/subagent capabilities remain inside this backend. SceneWorks does not duplicate them in the native runtime.</p>
       </div>
 
       <div className="panel">
         <h2>OpenCode — non-ACP backup worker</h2>
-        <label className="field">
-          Executable
-          <input
-            value={form.opencode_executable}
-            onChange={(e) => setForm({ ...form, opencode_executable: e.target.value })}
-            placeholder="opencode"
-          />
-          <small>Leave empty to auto-discover on PATH. SceneWorks uses OpenCode headless CLI, not ACP.</small>
-        </label>
-        <label className="field">
-          Default provider/model (optional)
-          <input
-            value={form.opencode_model}
-            onChange={(e) => setForm({ ...form, opencode_model: e.target.value })}
-            placeholder="provider/model"
-          />
-          <small>OpenCode owns provider credentials and provider configuration.</small>
-        </label>
-        <label className="field">
-          Agent profile (optional)
-          <input
-            value={form.opencode_agent}
-            onChange={(e) => setForm({ ...form, opencode_agent: e.target.value })}
-            placeholder="OpenCode default agent"
-          />
-        </label>
-        <p className="small muted">
-          WP14 qualifies this adapter for write-capable coding/delegation work. Read-only roles stay on backends with enforceable read-only tooling until an OpenCode policy adapter is added.
-        </p>
+        <label className="field">Executable<input value={form.opencode_executable} onChange={(e) => setForm({ ...form, opencode_executable: e.target.value })} placeholder="opencode" /><small>Leave empty to auto-discover on PATH. SceneWorks uses OpenCode headless CLI, not ACP.</small></label>
+        <label className="field">Default provider/model (optional)<input value={form.opencode_model} onChange={(e) => setForm({ ...form, opencode_model: e.target.value })} placeholder="provider/model" /><small>OpenCode owns provider credentials and provider configuration.</small></label>
+        <label className="field">Agent profile (optional)<input value={form.opencode_agent} onChange={(e) => setForm({ ...form, opencode_agent: e.target.value })} placeholder="OpenCode default agent" /></label>
+        <p className="small muted">WP14 qualifies this adapter for write-capable coding/delegation work. Read-only roles stay on backends with enforceable read-only tooling until an OpenCode policy adapter is added.</p>
       </div>
 
       <div className="panel">
         <h2>ChatGPT / MCP</h2>
-        <label className="field">
-          <span>
-            <input
-              type="checkbox"
-              checked={mcpForm.enabled}
-              onChange={(e) => setMcpForm({ ...mcpForm, enabled: e.target.checked })}
-            />{" "}
-            Enable SceneWorks MCP server
-          </span>
-          <small>Endpoint: <span className="mono">{API_URL}/mcp</span></small>
-        </label>
-
-        <label className="field">
-          Operating mode
-          <select
-            value={mcpForm.mode}
-            onChange={(e) => setMcpForm({ ...mcpForm, mode: e.target.value as McpMode })}
-          >
-            <option value="observe">Observe — read only</option>
-            <option value="standard">Standard — governed SceneWorks actions</option>
-            <option value="advanced">Advanced — direct engineering control</option>
-          </select>
-          <small>{MODE_HELP[mcpForm.mode]}</small>
-        </label>
+        <label className="field"><span><input type="checkbox" checked={mcpForm.enabled} onChange={(e) => setMcpForm({ ...mcpForm, enabled: e.target.checked })} />{" "}Enable SceneWorks MCP server</span><small>Endpoint: <span className="mono">{API_URL}/mcp</span></small></label>
+        <label className="field">Operating mode<select value={mcpForm.mode} onChange={(e) => setMcpForm({ ...mcpForm, mode: e.target.value as McpMode })}><option value="observe">Observe — read only</option><option value="standard">Standard — governed SceneWorks actions</option><option value="advanced">Advanced — direct engineering control</option></select><small>{MODE_HELP[mcpForm.mode]}</small></label>
 
         {mcpForm.mode === "advanced" && (
           <div className="panel">
             <h3>Direct engineering capability ceiling</h3>
-            <p className="small muted">
-              Maximum permissions an MCP EngineeringSession may request. Runtime: {mcp.available_runtimes.join(", ") || "none"}. Delegated workers: {mcp.available_backends.join(", ") || "none"}.
-            </p>
+            <p className="small muted">Maximum permissions an MCP EngineeringSession may request. Runtime: {mcp.available_runtimes.join(", ") || "none"}. Delegated workers: {mcp.available_backends.join(", ") || "none"}.</p>
             {mcp.available_advanced_permissions.map((permission) => (
-              <label className="field" key={permission}>
-                <span>
-                  <input
-                    type="checkbox"
-                    checked={mcpForm.permissions.includes(permission)}
-                    onChange={() => togglePermission(permission)}
-                  />{" "}
-                  {PERMISSION_LABELS[permission] ?? permission}
-                </span>
-              </label>
+              <label className="field" key={permission}><span><input type="checkbox" checked={mcpForm.permissions.includes(permission)} onChange={() => togglePermission(permission)} />{" "}{PERMISSION_LABELS[permission] ?? permission}</span></label>
             ))}
-            <p className="small muted">
-              GUI observation and GUI automation are separate permissions. Automation requires both, is restricted to accessibility controls inside the live SceneWorks-managed PCS window, and should be used only when a deterministic PCS API is unavailable.
-            </p>
+            <p className="small muted">GUI observation and GUI automation are separate permissions. Automation requires both, is restricted to accessibility controls inside the live SceneWorks-managed PCS window, and should be used only when a deterministic PCS API is unavailable.</p>
             <div className="notice error">{mcp.advanced_warning}</div>
           </div>
         )}
 
-        <label className="field">
-          Maximum text returned by one MCP tool
-          <input
-            type="number"
-            min={10000}
-            max={1000000}
-            value={mcpForm.toolMaxChars}
-            onChange={(e) => setMcpForm({ ...mcpForm, toolMaxChars: e.target.value })}
-          />
-        </label>
-
-        <div>
-          <button className="btn primary" onClick={saveMcp} disabled={mcpBusy}>
-            {mcpBusy ? "Saving…" : "Save ChatGPT / MCP settings"}
-          </button>{" "}
-          <button className="btn" onClick={testMcp}>Test MCP endpoint</button>{" "}
-          <button className="btn" onClick={copyEndpoint}>Copy endpoint</button>
-        </div>
+        <label className="field">Maximum text returned by one MCP tool<input type="number" min={10000} max={1000000} value={mcpForm.toolMaxChars} onChange={(e) => setMcpForm({ ...mcpForm, toolMaxChars: e.target.value })} /></label>
+        <div><button className="btn primary" onClick={saveMcp} disabled={mcpBusy}>{mcpBusy ? "Saving…" : "Save ChatGPT / MCP settings"}</button>{" "}<button className="btn" onClick={testMcp}>Test MCP endpoint</button>{" "}<button className="btn" onClick={copyEndpoint}>Copy endpoint</button></div>
         {mcpProbe && <p className="small muted">{mcpProbe}</p>}
-        <p className="small muted">
-          Standard mode can register a host-visible repository and control governed work. Advanced mode lets ChatGPT create its own isolated worktree and operate it directly; Gemini authentication is not required for those native tools.
-        </p>
+        <p className="small muted">Standard mode can register a host-visible repository and control governed work. Advanced mode lets ChatGPT create its own isolated worktree and operate it directly; Gemini authentication is not required for those native tools.</p>
       </div>
 
       <div className="panel">
         <h2>Workspace & limits</h2>
-        <label className="field">
-          Worktree root
-          <input
-            value={form.worktree_root}
-            onChange={(e) => setForm({ ...form, worktree_root: e.target.value })}
-          />
-          <small>Where SceneWorks creates isolated task and MCP EngineeringSession worktrees. Must be outside managed repositories.</small>
-        </label>
-        <label className="field">
-          Execution timeout (seconds)
-          <input
-            type="number"
-            value={form.execution_timeout_seconds}
-            onChange={(e) => setForm({ ...form, execution_timeout_seconds: e.target.value })}
-          />
-        </label>
-        <button className="btn primary" onClick={save} disabled={busy}>
-          {busy ? "Saving…" : "Save agent & operational settings"}
-        </button>
+        <label className="field">Worktree root<input value={form.worktree_root} onChange={(e) => setForm({ ...form, worktree_root: e.target.value })} /><small>Where SceneWorks creates isolated task and MCP EngineeringSession worktrees. Must be outside managed repositories.</small></label>
+        <label className="field">Execution timeout (seconds)<input type="number" value={form.execution_timeout_seconds} onChange={(e) => setForm({ ...form, execution_timeout_seconds: e.target.value })} /></label>
+        <button className="btn primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save agent & operational settings"}</button>
       </div>
 
       <div className="panel">
         <h3>Read-only environment values</h3>
-        <table className="grid">
-          <tbody>
-            <tr>
-              <td className="muted">Log level</td>
-              <td className="mono">{settings.log_level}</td>
-            </tr>
-            <tr>
-              <td className="muted">Context limit</td>
-              <td className="mono">{settings.context_max_bytes} bytes</td>
-            </tr>
-            <tr>
-              <td className="muted">Database</td>
-              <td className="mono">{settings.database_url}</td>
-            </tr>
-          </tbody>
-        </table>
+        <table className="grid"><tbody><tr><td className="muted">Log level</td><td className="mono">{settings.log_level}</td></tr><tr><td className="muted">Context limit</td><td className="mono">{settings.context_max_bytes} bytes</td></tr><tr><td className="muted">Database</td><td className="mono">{settings.database_url}</td></tr></tbody></table>
       </div>
     </div>
   );

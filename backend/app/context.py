@@ -35,6 +35,7 @@ from app.services.memory import MemoryService
 from app.services.pcs_control import PcsControlService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
+from app.services.verification import TaskVerificationService
 from app.services.workflow import TaskWorkflowService
 from app.workflows import WorkflowManager
 
@@ -60,6 +61,7 @@ class AppContext:
     company: CompanyService
     memory: MemoryService
     provenance: ProvenanceService
+    verification: TaskVerificationService
     agent_sessions: AgentSessionService
     engineering_sessions: EngineeringSessionService
     engineering_evidence: EngineeringEvidenceService
@@ -122,6 +124,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         default_backend=(
             settings.default_backend if settings.default_backend != "gemini_acp" else None
         ),
+        model_profile_overrides=settings.role_model_profile_overrides,
     )
     prompt_builder = PromptBuilder(settings, roles)
     execution_engine = ExecutionEngine(
@@ -140,6 +143,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     )
     memory = MemoryService(session_factory, event_store, bus)
     provenance = ProvenanceService(session_factory, git)
+    verification = TaskVerificationService(session_factory, event_store)
     agent_sessions = AgentSessionService(session_factory, git, event_store, settings)
     engineering_sessions = EngineeringSessionService(
         session_factory, git, runtimes, settings
@@ -174,6 +178,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         max_review_iterations=settings.max_review_iterations,
         memory_service=memory,
         model_router=model_router,
+        verification_service=verification,
     )
     execution_engine.on_execution_finished = workflow_manager.on_execution_finished
     company = CompanyService(
@@ -198,6 +203,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         company=company,
         memory=memory,
         provenance=provenance,
+        verification=verification,
         agent_sessions=agent_sessions,
         engineering_sessions=engineering_sessions,
         engineering_evidence=engineering_evidence,

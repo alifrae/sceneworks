@@ -8,6 +8,7 @@ class preserves the WorkflowManager API used by FastAPI, evaluation and tests.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -52,6 +53,7 @@ class WorkflowManager(GraphWorkflowManager):
         max_review_iterations: int = MAX_REVIEW_ITERATIONS_DEFAULT,
         memory_service: MemoryService | None = None,
         model_router: ModelRouter | None = None,
+        verification_service: Any | None = None,
     ) -> None:
         super().__init__(
             session_factory,
@@ -61,6 +63,7 @@ class WorkflowManager(GraphWorkflowManager):
         self._engine = engine
         self._git = git
         self._settings = settings
+        self._verification = verification_service
         model_router = model_router or ModelRouter(
             settings, ("gemini_acp", "openhands", "fake")
         )
