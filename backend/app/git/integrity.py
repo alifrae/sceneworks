@@ -21,6 +21,22 @@ def _exception_text(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
+def _redact_paths(text: str, *paths: Path | str | None) -> str:
+    """Remove internal/registered host roots from diagnostics before MCP exposure."""
+    redacted = text
+    for path in paths:
+        if path is None:
+            continue
+        raw = str(path)
+        if not raw:
+            continue
+        variants = {raw, raw.replace("\\", "/"), raw.replace("/", "\\")}
+        for variant in sorted(variants, key=len, reverse=True):
+            if variant:
+                redacted = redacted.replace(variant, "<registered-repository>")
+    return redacted
+
+
 def _classify_git_error(exc: BaseException) -> str:
     text = str(exc).lower()
     if isinstance(exc, GitError) and (
@@ -64,17 +80,19 @@ class IntegrityGitWorktreeService(GitWorktreeService):
     """Git service that reports probe failure as data instead of fabricating state."""
 
     async def repo_info(self, repo_path: Path) -> RepoInfo:
+        original_path = repo_path
         try:
             repo_path = repo_path.expanduser().resolve()
             exists = repo_path.exists()
             is_dir = repo_path.is_dir()
         except OSError as exc:
+            detail = _redact_paths(_exception_text(exc), original_path)
             return RepoInfo(
-                repo_path,
+                original_path,
                 False,
                 None,
                 None,
-                _encoded_error("repository_unreadable", _exception_text(exc)),
+                _encoded_error("repository_unreadable", detail),
             )
 
         if not exists:
@@ -108,12 +126,13 @@ class IntegrityGitWorktreeService(GitWorktreeService):
             commit = await self._run(repo_path, "rev-parse", "HEAD")
         except Exception as exc:  # noqa: BLE001 - Git availability is returned as data
             code = _classify_git_error(exc)
+            detail = _redact_paths(_exception_text(exc), repo_path)
             return RepoInfo(
                 repo_path,
                 False,
                 None,
                 None,
-                _encoded_error(code, _exception_text(exc)),
+                _encoded_error(code, detail),
             )
 
         branch = head.strip() if head.strip() != "HEAD" else None
@@ -145,16 +164,15 @@ class IntegrityGitWorktreeService(GitWorktreeService):
         try:
             status = await self._run(info.path, "status", "--porcelain")
         except Exception as exc:  # noqa: BLE001 - partial Git truth remains useful
+            detail = _redact_paths(_exception_text(exc), info.path)
             diagnostic = {
                 "code": "git_status_probe_failed",
                 "exception_type": type(exc).__name__,
-                "detail": _exception_text(exc)[:1000],
+                "detail": detail[:1000],
             }
             snapshot["availability"] = {"state": "degraded"}
             snapshot["diagnostic"] = diagnostic
-            snapshot["error"] = _encoded_error(
-                "git_status_probe_failed", _exception_text(exc)
-            )
+            snapshot["error"] = _encoded_error("git_status_probe_failed", detail)
             return snapshot
 
         dirty = bool(status.strip())
@@ -180,8 +198,9 @@ class IntegrityGitWorktreeService(GitWorktreeService):
             try:
                 await self._run(repo_path, "cat-file", "-e", f"{commit}^{{commit}}")
             except Exception as exc:  # noqa: BLE001
+                detail = _redact_paths(_exception_text(exc), repo_path)
                 raise GitError(
-                    f"{label} commit {commit!r} is unavailable: {_exception_text(exc)}"
+                    f"{label} commit {commit!r} is unavailable: {detail}"
                 ) from exc
 
         stat = await self._run(repo_path, "diff", "--stat", f"{base_commit}..{result_commit}")
