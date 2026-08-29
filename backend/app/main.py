@@ -146,11 +146,17 @@ def main() -> None:
 
     Running the module keeps the configured backend port and the web client in
     agreement; invoking uvicorn without a port would otherwise use 8000.
+
+    The operational launcher deliberately disables Uvicorn auto-reload.
+    SceneWorks relies on ``asyncio`` subprocesses for Git, ACP/CLI workers and
+    managed processes. On Windows, Uvicorn reload/subprocess supervision can
+    select an event loop that does not implement asyncio subprocess support,
+    causing those core operations to fail with ``NotImplementedError``.
     """
     import uvicorn
 
     settings = get_settings()
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=True)
+    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
 
 
 if __name__ == "__main__":
