@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { AppEvent, Diff, Execution, Task } from "@/lib/types";
+import type { AppEvent, Diff, Execution, Task, TaskVerificationView } from "@/lib/types";
 import { ROLE_LABELS, getWorkView, meaningfulActions } from "@/lib/workStages";
 import { firstParagraph, filesChangedCount, reviewVerdictLabel } from "@/lib/textSummary";
 import Composer from "@/components/Composer";
@@ -16,10 +16,11 @@ import Markdown from "@/components/Markdown";
 import ProgressSteps from "@/components/ProgressSteps";
 import RoleStatusPanel from "@/components/RoleStatusPanel";
 import TaskAttachments from "@/components/TaskAttachments";
+import VerificationPanel from "@/components/VerificationPanel";
 
-type TabKey = "plan" | "changes" | "results" | "activity" | "advanced";
+type TabKey = "plan" | "changes" | "results" | "verification" | "activity" | "advanced";
 
-const TAB_KEYS: TabKey[] = ["plan", "changes", "results", "activity", "advanced"];
+const TAB_KEYS: TabKey[] = ["plan", "changes", "results", "verification", "activity", "advanced"];
 
 export default function WorkThreadPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +29,7 @@ export default function WorkThreadPage() {
   const [diff, setDiff] = useState<Diff | null>(null);
   const [taskEvents, setTaskEvents] = useState<AppEvent[]>([]);
   const [executions, setExecutions] = useState<Execution[]>([]);
+  const [verificationView, setVerificationView] = useState<TaskVerificationView | null>(null);
   const [tab, setTab] = useState<TabKey>("plan");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,12 +51,15 @@ export default function WorkThreadPage() {
       setDiff(null);
     }
     api.taskEvents(taskId).then((rows) => setTaskEvents(rows)).catch(() => undefined);
+    if (tab === "verification" || t.status === "ACCEPTED") {
+      api.taskVerification(taskId).then(setVerificationView).catch(() => undefined);
+    }
     return t;
-  }, [taskId]);
+  }, [taskId, tab]);
 
   const handleEvent = useCallback(
     (event: { type: string }) => {
-      if (event.type === "task.transitioned" || event.type.startsWith("workflow.")) {
+      if (event.type === "task.transitioned" || event.type === "task.resolution" || event.type.startsWith("workflow.")) {
         refresh().catch(() => undefined);
       }
     },
@@ -79,6 +84,9 @@ export default function WorkThreadPage() {
     if (tab === "advanced") {
       api.executions({ task_id: String(taskId) }).then(setExecutions).catch(() => undefined);
     }
+    if (tab === "verification") {
+      api.taskVerification(taskId).then(setVerificationView).catch((e) => setError(String(e)));
+    }
   }, [tab, taskId]);
 
   async function onAction(action: string, body?: Record<string, string>) {
@@ -89,6 +97,9 @@ export default function WorkThreadPage() {
       const authoritative = await api.taskAction(taskId, action, body);
       setTask(authoritative);
       diffKey.current = null;
+      if (action === "accept") {
+        api.taskVerification(taskId).then(setVerificationView).catch(() => undefined);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -104,11 +115,6 @@ export default function WorkThreadPage() {
   const isTerminalDone = task.status === "ACCEPTED" || task.status === "REJECTED";
   const isCancelled = task.status === "CANCELLED";
   const meaningful = meaningfulActions(task.allowed_actions);
-  // An in-flight execution (including an auto-repair loop that never left
-  // CHANGES_REQUESTED) must never offer "start implementation" as a
-  // follow-up — the state machine allows it, but clicking it would race a
-  // second graph run against the one already active. Only "cancel" is safe
-  // to expose while something is actively running.
   const activeExecution = !!task.current_execution_id && ["QUEUED", "STARTING", "RUNNING"].includes(task.execution_status || "");
   const runningNoDecision = view.exceptional === "none" && (activeExecution || meaningful.every((a) => a === "cancel"));
 
@@ -149,9 +155,7 @@ export default function WorkThreadPage() {
                 <div className="turn-author">{ROLE_LABELS.architect}</div>
                 <div className="turn-content">
                   {firstParagraph(task.architecture_result)}{" "}
-                  <button className="link-btn" onClick={() => setTab("plan")}>
-                    View full plan →
-                  </button>
+                  <button className="link-btn" onClick={() => setTab("plan")}>View full plan →</button>
                 </div>
               </div>
             )}
@@ -161,9 +165,7 @@ export default function WorkThreadPage() {
                 <div className="turn-author">{ROLE_LABELS.engineer}</div>
                 <div className="turn-content">
                   {firstParagraph(task.implementation_summary)}{" "}
-                  <button className="link-btn" onClick={() => setTab("changes")}>
-                    View changes →
-                  </button>
+                  <button className="link-btn" onClick={() => setTab("changes")}>View changes →</button>
                 </div>
               </div>
             )}
@@ -173,9 +175,7 @@ export default function WorkThreadPage() {
                 <div className="turn-author">{ROLE_LABELS.reviewer}</div>
                 <div className="turn-content">
                   <strong>{reviewVerdictLabel(task.review_result)}.</strong> {firstParagraph(task.review_result)}{" "}
-                  <button className="link-btn" onClick={() => setTab("results")}>
-                    View results →
-                  </button>
+                  <button className="link-btn" onClick={() => setTab("results")}>View results →</button>
                 </div>
               </div>
             )}
@@ -198,9 +198,7 @@ export default function WorkThreadPage() {
               followUp ? (
                 <Composer defaultProjectId={task.project_id} />
               ) : (
-                <button className="btn" onClick={() => setFollowUp(true)}>
-                  Ask a follow-up
-                </button>
+                <button className="btn" onClick={() => setFollowUp(true)}>Ask a follow-up</button>
               )
             ) : runningNoDecision ? (
               <div className="row space-between">
@@ -209,12 +207,7 @@ export default function WorkThreadPage() {
                   {view.ownerLabel} is working — SceneWorks will ask you here when your input is needed.
                 </span>
                 {meaningful.includes("cancel") && (
-                  <DecisionCard
-                    allowedActions={["cancel"]}
-                    busy={busy}
-                    pendingAction={pendingAction}
-                    onAction={onAction}
-                  />
+                  <DecisionCard allowedActions={["cancel"]} busy={busy} pendingAction={pendingAction} onAction={onAction} />
                 )}
               </div>
             ) : (
@@ -263,11 +256,7 @@ export default function WorkThreadPage() {
 
         {tab === "plan" && (
           <div className="tab-panel" role="tabpanel" id="tabpanel-plan" aria-labelledby="tab-plan">
-            {task.architecture_result ? (
-              <Markdown text={task.architecture_result} />
-            ) : (
-              <div className="empty">No architecture plan yet.</div>
-            )}
+            {task.architecture_result ? <Markdown text={task.architecture_result} /> : <div className="empty">No architecture plan yet.</div>}
           </div>
         )}
 
@@ -275,23 +264,11 @@ export default function WorkThreadPage() {
           <div className="tab-panel" role="tabpanel" id="tabpanel-changes" aria-labelledby="tab-changes">
             <p className="small muted">
               Analyzed commit: <code>{task.base_commit?.slice(0, 12) || "—"}</code>
-              {task.task_branch && (
-                <>
-                  {" "}
-                  · Implementation branch: <code>{task.task_branch}</code>
-                </>
-              )}
-              {task.result_commit && (
-                <>
-                  {" "}
-                  · Result commit: <code>{task.result_commit.slice(0, 12)}</code>
-                </>
-              )}
+              {task.task_branch && <> · Implementation branch: <code>{task.task_branch}</code></>}
+              {task.result_commit && <> · Result commit: <code>{task.result_commit.slice(0, 12)}</code></>}
             </p>
             {diff?.commits?.length ? (
-              <p className="small muted">
-                Commits: {diff.commits.map((c) => `${c.sha.slice(0, 7)} ${c.subject}`).join(" · ")}
-              </p>
+              <p className="small muted">Commits: {diff.commits.map((c) => `${c.sha.slice(0, 7)} ${c.subject}`).join(" · ")}</p>
             ) : null}
             <DiffView diff={diff} />
           </div>
@@ -305,11 +282,7 @@ export default function WorkThreadPage() {
               <div className="result-summary">
                 {task.review_result && (
                   <div className="result-outcome">
-                    <span
-                      className={`stage-badge ${
-                        reviewVerdictLabel(task.review_result) === "Approved" ? "stage-completed" : "stage-needs_input"
-                      }`}
-                    >
+                    <span className={`stage-badge ${reviewVerdictLabel(task.review_result) === "Approved" ? "stage-completed" : "stage-needs_input"}`}>
                       {reviewVerdictLabel(task.review_result)}
                     </span>
                     <span className="muted small">Reviewer verdict</span>
@@ -320,11 +293,7 @@ export default function WorkThreadPage() {
                   <div>
                     <div className="result-section-title">Summary</div>
                     {diff?.commits?.length ? (
-                      <ul>
-                        {diff.commits.map((c) => (
-                          <li key={c.sha}>{c.subject}</li>
-                        ))}
-                      </ul>
+                      <ul>{diff.commits.map((c) => <li key={c.sha}>{c.subject}</li>)}</ul>
                     ) : (
                       <Markdown text={firstParagraph(task.implementation_summary!, 800)} />
                     )}
@@ -332,15 +301,20 @@ export default function WorkThreadPage() {
                 )}
 
                 <div className="row result-meta">
-                  {task.result_commit && (
-                    <span>
-                      Commit <code>{task.result_commit.slice(0, 12)}</code>
-                    </span>
-                  )}
-                  {diff?.stat && filesChangedCount(diff.stat) !== null && (
-                    <span>Files changed: {filesChangedCount(diff.stat)}</span>
-                  )}
+                  {task.result_commit && <span>Commit <code>{task.result_commit.slice(0, 12)}</code></span>}
+                  {diff?.stat && filesChangedCount(diff.stat) !== null && <span>Files changed: {filesChangedCount(diff.stat)}</span>}
+                  {verificationView && <span>Verification: <strong>{verificationView.verification.overall}</strong></span>}
                 </div>
+
+                {verificationView?.resolution && (
+                  <div>
+                    <div className="result-section-title">Resolution</div>
+                    {verificationView.resolution.root_cause && <p><strong>Root cause:</strong> {verificationView.resolution.root_cause.text}</p>}
+                    {verificationView.resolution.change_made && <p><strong>Change made:</strong> {verificationView.resolution.change_made.text}</p>}
+                    {verificationView.resolution.remaining_risk && <p><strong>Remaining risk:</strong> {verificationView.resolution.remaining_risk.text}</p>}
+                    <p className="small muted">Claims above remain attributed engineering conclusions; commit/files/verification are SceneWorks-derived.</p>
+                  </div>
+                )}
 
                 {task.review_result && (
                   <div>
@@ -350,17 +324,22 @@ export default function WorkThreadPage() {
                 )}
 
                 <div className="row">
-                  <button className="btn small" onClick={() => setTab("changes")}>
-                    View changes
-                  </button>
-                  <button className="btn small" onClick={() => setTab("plan")}>
-                    View plan
-                  </button>
-                  <button className="btn small" onClick={() => setTab("activity")}>
-                    Open activity
-                  </button>
+                  <button className="btn small" onClick={() => setTab("verification")}>Open verification</button>
+                  <button className="btn small" onClick={() => setTab("changes")}>View changes</button>
+                  <button className="btn small" onClick={() => setTab("plan")}>View plan</button>
+                  <button className="btn small" onClick={() => setTab("activity")}>Open activity</button>
                 </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {tab === "verification" && (
+          <div className="tab-panel" role="tabpanel" id="tabpanel-verification" aria-labelledby="tab-verification">
+            {verificationView ? (
+              <VerificationPanel view={verificationView} />
+            ) : (
+              <div className="empty">Loading objective verification…</div>
             )}
           </div>
         )}
@@ -381,14 +360,8 @@ export default function WorkThreadPage() {
               <div className="advanced-group-title">Task</div>
               <table className="grid">
                 <tbody>
-                  <tr>
-                    <td className="muted">Task ID</td>
-                    <td className="mono">{task.id}</td>
-                  </tr>
-                  <tr>
-                    <td className="muted">Raw status</td>
-                    <td className="mono">{task.status}</td>
-                  </tr>
+                  <tr><td className="muted">Task ID</td><td className="mono">{task.id}</td></tr>
+                  <tr><td className="muted">Raw status</td><td className="mono">{task.status}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -397,33 +370,21 @@ export default function WorkThreadPage() {
               <div className="advanced-group-title">Execution</div>
               <table className="grid">
                 <tbody>
-                  <tr>
-                    <td className="muted">Current execution</td>
-                    <td className="mono">{task.current_execution_id || "—"}</td>
-                  </tr>
+                  <tr><td className="muted">Current execution</td><td className="mono">{task.current_execution_id || "—"}</td></tr>
                 </tbody>
               </table>
               {executions.length === 0 ? (
                 <div className="empty">No executions recorded.</div>
               ) : (
                 <table className="grid" style={{ marginTop: 8 }}>
-                  <thead>
-                    <tr>
-                      <th>Role</th>
-                      <th>Backend</th>
-                      <th>Status</th>
-                      <th></th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>Role</th><th>Backend</th><th>Status</th><th></th></tr></thead>
                   <tbody>
                     {executions.map((ex) => (
                       <tr key={ex.id}>
                         <td>{ex.role}</td>
                         <td className="mono small">{ex.backend}</td>
                         <td><span className="status-chip">{ex.status}</span></td>
-                        <td>
-                          <Link href={`/executions/${ex.id}`}>details</Link>
-                        </td>
+                        <td><Link href={`/executions/${ex.id}`}>details</Link></td>
                       </tr>
                     ))}
                   </tbody>
@@ -435,27 +396,16 @@ export default function WorkThreadPage() {
               <div className="advanced-group-title">Git / worktree</div>
               <table className="grid">
                 <tbody>
-                  <tr>
-                    <td className="muted">Worktree</td>
-                    <td className="mono">{task.worktree_path || "—"}</td>
-                  </tr>
-                  <tr>
-                    <td className="muted">Base commit</td>
-                    <td className="mono">{task.base_commit || "—"}</td>
-                  </tr>
-                  <tr>
-                    <td className="muted">Task branch</td>
-                    <td className="mono">{task.task_branch || "—"}</td>
-                  </tr>
+                  <tr><td className="muted">Worktree</td><td className="mono">{task.worktree_path || "—"}</td></tr>
+                  <tr><td className="muted">Base commit</td><td className="mono">{task.base_commit || "—"}</td></tr>
+                  <tr><td className="muted">Task branch</td><td className="mono">{task.task_branch || "—"}</td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="advanced-group">
               <div className="advanced-group-title">Links</div>
-              <p className="small muted">
-                <Link href={`/tasks/${task.id}`}>Open raw task view →</Link>
-              </p>
+              <p className="small muted"><Link href={`/tasks/${task.id}`}>Open raw task view →</Link></p>
             </div>
           </div>
         )}
