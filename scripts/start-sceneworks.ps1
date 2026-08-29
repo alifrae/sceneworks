@@ -2,6 +2,7 @@
 param(
     [switch]$Dev,
     [switch]$Rebuild,
+    [switch]$Restart,
     [switch]$NoBrowser,
     [switch]$NoTunnel,
     [string]$TunnelClientPath,
@@ -48,6 +49,18 @@ function Wait-Http([string]$Url, [int]$TimeoutSec, [string]$Label) {
     throw "$Label did not become reachable at $Url within $TimeoutSec seconds."
 }
 
+function Wait-HttpDown([string]$Url, [int]$TimeoutSec, [string]$Label) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-Http $Url 1)) {
+            Write-Host "$Label stopped."
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "$Label remained reachable at $Url after restart stop request."
+}
+
 function Quote-PowerShellPath([string]$Path) {
     return "'" + $Path.Replace("'", "''") + "'"
 }
@@ -57,6 +70,66 @@ function Start-Terminal([string]$Title, [string]$WorkingDirectory, [string]$Comm
     $escapedTitle = $Title.Replace("'", "''")
     $full = "`$Host.UI.RawUI.WindowTitle = '$escapedTitle'; Set-Location $dir; $Command"
     Start-Process powershell.exe -ArgumentList @("-NoExit", "-NoProfile", "-Command", $full) | Out-Null
+}
+
+function Find-SceneWorksTerminalAncestor([int]$ProcessId) {
+    $currentId = $ProcessId
+    for ($depth = 0; $depth -lt 8 -and $currentId -gt 0; $depth++) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $currentId" -ErrorAction SilentlyContinue
+        if ($null -eq $proc) {
+            return $null
+        }
+
+        $name = [string]$proc.Name
+        $commandLine = [string]$proc.CommandLine
+        if (
+            $name -ieq "powershell.exe" -and
+            $commandLine -match "SceneWorks (API|Web|MCP Tunnel)"
+        ) {
+            return [int]$proc.ProcessId
+        }
+
+        $currentId = [int]$proc.ParentProcessId
+    }
+    return $null
+}
+
+function Stop-SceneWorksEndpoint(
+    [string]$Label,
+    [string]$HealthUrl,
+    [int]$Port
+) {
+    if (-not (Test-Http $HealthUrl 1)) {
+        Write-Host "$Label is not running; nothing to restart."
+        return
+    }
+
+    $connections = @(
+        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique
+    )
+    if ($connections.Count -eq 0) {
+        throw "$Label is reachable at $HealthUrl but no listening process could be identified on port $Port."
+    }
+
+    Write-Host "Stopping $Label for restart..." -ForegroundColor Yellow
+    foreach ($pidValue in $connections) {
+        $terminalPid = Find-SceneWorksTerminalAncestor ([int]$pidValue)
+        if ($null -ne $terminalPid) {
+            & taskkill.exe /PID $terminalPid /T /F | Out-Null
+            continue
+        }
+
+        Stop-Process -Id ([int]$pidValue) -Force -ErrorAction Stop
+    }
+
+    Wait-HttpDown $HealthUrl 15 $Label
+}
+
+function Restart-SceneWorksStack {
+    Stop-SceneWorksEndpoint "Secure MCP tunnel" $TunnelReadyUrl 8080
+    Stop-SceneWorksEndpoint "Frontend" $WebUrl 3000
+    Stop-SceneWorksEndpoint "Backend" $ApiUrl 8010
 }
 
 function Test-FrontendBuildFresh {
@@ -164,11 +237,21 @@ if ([string]::IsNullOrWhiteSpace($McpServerUrl)) {
 
 Require-Command "uv"
 Require-Command "npm"
+if ($Restart) {
+    Require-Command "Get-NetTCPConnection"
+    Require-Command "Get-CimInstance"
+    Require-Command "taskkill.exe"
+}
 
 Write-Host "SceneWorks launcher" -ForegroundColor Cyan
 Write-Host "  root: $Root"
 Write-Host "  frontend: $(if ($Dev) { 'development' } else { 'production' })"
 Write-Host "  MCP: $McpServerUrl"
+Write-Host "  restart: $Restart"
+
+if ($Restart) {
+    Restart-SceneWorksStack
+}
 
 if (-not (Test-Path (Join-Path $WebDir "node_modules"))) {
     Write-Host "Installing frontend dependencies..."
@@ -220,4 +303,5 @@ if (-not $NoBrowser) {
 }
 
 Write-Host "SceneWorks is running: $WebUrl" -ForegroundColor Green
+Write-Host "Use -Restart to stop and relaunch the current SceneWorks API, web server, and MCP tunnel."
 Write-Host "Use -Dev only while changing the UI. Normal use should stay in production mode for fast route switching."
