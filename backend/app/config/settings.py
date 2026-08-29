@@ -58,6 +58,9 @@ class Settings(BaseSettings):
 
     # Provider-neutral role intent -> concrete backend/model mapping (WP8).
     model_profile_routes: dict[str, ModelProfileRoute] = Field(default_factory=dict)
+    # Optional first edge of the routing chain: role -> provider-neutral profile.
+    # Concrete provider model identifiers remain centralized in model_profile_routes.
+    role_model_profile_overrides: dict[str, str] = Field(default_factory=dict)
 
     # Gemini CLI (ACP backend). None -> discover "gemini" on PATH.
     gemini_executable: str | None = None
