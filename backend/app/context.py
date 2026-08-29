@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from app.agents.integrity import IntegrityBackendRegistry
 from app.agents.model_routing import ModelRouter
 from app.agents.registry import BackendRegistry
 from app.config.settings import Settings, get_settings
@@ -21,6 +22,7 @@ from app.db.session import close_db, create_engine_and_sessionmaker, init_db
 from app.events.bus import EventBus
 from app.events.store import EventStore
 from app.execution.engine import ExecutionEngine
+from app.git.integrity import IntegrityGitWorktreeService
 from app.git.workspace import GitWorktreeService
 from app.roles.prompts import PromptBuilder
 from app.roles.registry import RoleRegistry
@@ -33,6 +35,7 @@ from app.services.gui_automation import GuiAutomationService
 from app.services.gui_evidence import GuiEvidenceService
 from app.services.memory import MemoryService
 from app.services.pcs_control import PcsControlService
+from app.services.pcs_integrity import IntegrityPcsControlService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
 from app.services.workflow import TaskWorkflowService
@@ -113,9 +116,9 @@ async def build_context(settings: Settings | None = None) -> AppContext:
 
     bus = EventBus()
     event_store = EventStore(session_factory)
-    backends = BackendRegistry(settings)
+    backends = IntegrityBackendRegistry(settings)
     model_router = ModelRouter(settings, backends.keys())
-    git = GitWorktreeService(settings)
+    git = IntegrityGitWorktreeService(settings)
     runtimes = RuntimeRegistry()
     roles = RoleRegistry(
         settings.roles_dir,
@@ -145,7 +148,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         session_factory, git, runtimes, settings
     )
     engineering_evidence = EngineeringEvidenceService(session_factory)
-    pcs_control = PcsControlService(
+    pcs_control = IntegrityPcsControlService(
         session_factory, engineering_sessions, engineering_evidence
     )
     gui_evidence = GuiEvidenceService(
