@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.mcp.integrity import ControlPlaneIntegrityMCPServer
 from app.mcp.server import MCPToolError
-from app.mcp.wp18_server import GuiAutomationMCPServer
 
 
-class SceneWorksMCPServer(GuiAutomationMCPServer):
-    """Canonical WP18 server with provider-neutral PCS/GUI control guidance."""
+class SceneWorksMCPServer(ControlPlaneIntegrityMCPServer):
+    """Canonical server with provider-neutral PCS/GUI and integrity guidance."""
 
     def _wp18_instructions(self) -> str:
         if self.mode == "observe":

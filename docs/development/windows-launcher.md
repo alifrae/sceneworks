@@ -20,12 +20,25 @@ The launcher:
 - verifies `uv` and `npm` are available;
 - installs frontend dependencies when `node_modules` is missing;
 - builds the Next.js production frontend when the existing build is missing or older than frontend source;
+- before starting a stopped backend, runs `uv sync --frozen --extra openhands` so the normal SceneWorks environment contains the repository-pinned OpenHands SDK/tools pair;
 - starts/reuses the FastAPI backend and waits for `/api/health`;
 - starts/reuses the frontend and waits for port 3000;
 - optionally verifies `/mcp` and starts the Secure MCP tunnel in its own PowerShell window;
 - waits for the tunnel readiness endpoint at `http://127.0.0.1:8080/readyz`;
 - can explicitly stop and relaunch the current SceneWorks API, frontend and MCP tunnel with `-Restart`;
 - opens SceneWorks in the default browser unless `-NoBrowser` is used.
+
+The operational backend entry point is `uv run python -m app.main`. It deliberately
+starts Uvicorn with reload disabled. On Windows, Uvicorn's reload/subprocess
+supervision can select an event-loop path without functional
+`asyncio.create_subprocess_exec`; Git registration and Gemini/OpenCode health
+probes require asyncio subprocess support. UI development still uses `-Dev` for
+the Next.js frontend; it does not change the backend into an auto-reload server.
+
+OpenHands remains an optional worker and is not made the default by the launcher.
+The existing OpenHands server URL and executable override modes remain valid; the
+launcher only ensures that the pinned local SDK mode is available in a normal
+fresh startup environment.
 
 Normal use should stay in production mode because Next.js development mode can
 compile a route the first time it is visited, which makes navigation look slower
