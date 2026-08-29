@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.agents.registry import BackendRegistry
+from app.agents.integrity import IntegrityBackendRegistry
 from app.models import Artifact, Execution, ProjectMemory, Task
-from app.workflows.recovery import WorkflowRecovery
+from app.workflows.integrity import IntegrityWorkflowRecovery
 
 
 async def _register_project(client, git_repo: Path, **overrides) -> dict:
@@ -23,7 +23,7 @@ async def _register_project(client, git_repo: Path, **overrides) -> dict:
         "architecture_context_paths": ["docs/architecture.md"],
         "test_commands": ["pytest -q"],
         "build_commands": ["python -m build"],
-        "capability_profile": {"requires_repository": True},
+        "capability_profile": {"skills": ["repository"]},
         **overrides,
     }
     response = await client.post("/api/projects", json=payload)
@@ -80,7 +80,9 @@ class _EmptyFailureBackend:
 
 
 async def test_backend_health_preserves_empty_exception_type(settings) -> None:
-    registry = BackendRegistry(settings, include_fake=False, include_openhands=False)
+    registry = IntegrityBackendRegistry(
+        settings, include_fake=False, include_openhands=False
+    )
     registry._backends = {"broken": _EmptyFailureBackend()}
 
     health = await registry.health_all(force=True)
@@ -167,7 +169,7 @@ async def test_project_context_exposes_persisted_config_and_typed_snapshot(
     assert persisted["test_commands"] == ["pytest -q"]
     assert persisted["build_commands"] == ["python -m build"]
     assert persisted["engineering_policy"]["protected_paths"] == ["backend/app/models.py"]
-    assert persisted["capability_profile"]["requires_repository"] is True
+    assert persisted["capability_profile"]["skills"] == ["repository"]
     assert [row["title"] for row in result["accepted_memory"]] == ["accepted truth"]
 
     snapshot = result["repository_snapshot"]
@@ -268,7 +270,7 @@ async def test_rehydrating_approval_wait_is_idempotent(context, git_repo: Path) 
         await session.refresh(task)
 
     owner = _RecoveryOwner(context.engine_factory)
-    recovery = WorkflowRecovery(owner)
+    recovery = IntegrityWorkflowRecovery(owner)
     await recovery.recover()
     await recovery.recover()
 
