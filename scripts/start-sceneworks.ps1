@@ -277,6 +277,11 @@ if (Test-Http $ApiUrl 1) {
     Write-Host "Backend already running at $ApiUrl."
 }
 else {
+    Write-Host "Syncing backend dependencies, including the pinned OpenHands SDK..."
+    Push-Location $BackendDir
+    try { uv sync --frozen --extra openhands }
+    finally { Pop-Location }
+
     Write-Host "Starting backend..."
     Start-Terminal "SceneWorks API" $BackendDir "uv run python -m app.main"
     Wait-Http $ApiUrl 45 "Backend"
