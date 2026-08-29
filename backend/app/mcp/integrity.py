@@ -20,8 +20,27 @@ from app.mcp.wp18_server import GuiAutomationMCPServer
 from app.models import Event, Execution, Project, Task
 
 
-def _diagnostic(prefix: str, exc: BaseException) -> dict[str, Any]:
-    message = str(exc).strip()
+def _redact_paths(text: str, *paths: str | Path | None) -> str:
+    redacted = text
+    for path in paths:
+        if path is None:
+            continue
+        raw = str(path)
+        if not raw:
+            continue
+        variants = {raw, raw.replace("\\", "/"), raw.replace("/", "\\")}
+        for variant in sorted(variants, key=len, reverse=True):
+            if variant:
+                redacted = redacted.replace(variant, "<internal-path>")
+    return redacted
+
+
+def _diagnostic(
+    prefix: str,
+    exc: BaseException,
+    *redacted_paths: str | Path | None,
+) -> dict[str, Any]:
+    message = _redact_paths(str(exc).strip(), *redacted_paths)
     return {
         "code": prefix,
         "exception_type": type(exc).__name__,
@@ -67,6 +86,7 @@ class ControlPlaneIntegrityMCPServer(GuiAutomationMCPServer):
                 persisted_root, project.default_branch
             )
         except Exception as exc:  # noqa: BLE001 - never fabricate an empty snapshot
+            diagnostic = _diagnostic("git_probe_failed", exc, persisted_root)
             repo_snapshot = {
                 "is_git": False,
                 "current_branch": None,
@@ -75,8 +95,11 @@ class ControlPlaneIntegrityMCPServer(GuiAutomationMCPServer):
                 "clean": None,
                 "dirty": None,
                 "availability": {"state": "unavailable"},
-                "diagnostic": _diagnostic("git_probe_failed", exc),
-                "error": f"git_probe_failed: {type(exc).__name__}: {str(exc).strip()}".rstrip(": "),
+                "diagnostic": diagnostic,
+                "error": (
+                    f"git_probe_failed: {diagnostic['exception_type']}: "
+                    f"{diagnostic['detail']}"
+                )[:1000],
             }
 
         return {
@@ -160,7 +183,12 @@ class ControlPlaneIntegrityMCPServer(GuiAutomationMCPServer):
             }
             provenance_availability = {
                 "state": "degraded",
-                "diagnostic": _diagnostic("live_provenance_unavailable", exc),
+                "diagnostic": _diagnostic(
+                    "live_provenance_unavailable",
+                    exc,
+                    task.worktree_path,
+                    project.repository_path if project else None,
+                ),
             }
 
         return {
@@ -219,7 +247,9 @@ class ControlPlaneIntegrityMCPServer(GuiAutomationMCPServer):
                     "diagnostics": [],
                 }
             except Exception as exc:  # noqa: BLE001 - immutable fallback may still answer
-                diagnostics.append(_diagnostic("live_worktree_unavailable", exc))
+                diagnostics.append(
+                    _diagnostic("live_worktree_unavailable", exc, task.worktree_path)
+                )
 
         if project is not None and base and result_commit:
             try:
@@ -241,7 +271,11 @@ class ControlPlaneIntegrityMCPServer(GuiAutomationMCPServer):
                     "diagnostics": diagnostics,
                 }
             except Exception as exc:  # noqa: BLE001 - persisted provenance is final fallback
-                diagnostics.append(_diagnostic("immutable_diff_unavailable", exc))
+                diagnostics.append(
+                    _diagnostic(
+                        "immutable_diff_unavailable", exc, project.repository_path
+                    )
+                )
 
         if changed_files:
             return {
