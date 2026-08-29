@@ -1,6 +1,7 @@
 import "./globals.css";
 import "./modern.css";
 import "./attachments.css";
+import "./wp20.css";
 import type { Metadata } from "next";
 import Sidebar from "@/components/Sidebar";
 
@@ -9,7 +10,7 @@ export const metadata: Metadata = {
     default: "SceneWorks",
     template: "%s · SceneWorks",
   },
-  description: "AI engineering control plane for governed agentic software work",
+  description: "Local engineering control, execution and evidence",
 };
 
 const themeBootstrap = `

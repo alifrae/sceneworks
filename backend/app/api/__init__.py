@@ -1,5 +1,6 @@
 from app.api.attachments import router as attachments_router
 from app.api.company import router as company_router
+from app.api.control_center import router as control_center_router
 from app.api.dashboard import router as dashboard_router
 from app.api.events import router as events_router
 from app.api.executions import router as executions_router
@@ -14,6 +15,7 @@ from app.api.tasks import router as tasks_router
 __all__ = [
     "attachments_router",
     "company_router",
+    "control_center_router",
     "dashboard_router",
     "events_router",
     "executions_router",

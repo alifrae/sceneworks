@@ -28,6 +28,7 @@ from app.api import (
     attachments_router,
     backends_router,
     company_router,
+    control_center_router,
     dashboard_router,
     events_router,
     executions_router,
@@ -86,7 +87,7 @@ def create_app(settings=None, context=None) -> FastAPI:
         title="SceneWorks",
         version=__version__,
         lifespan=lifespan,
-        description="AI-native software company control plane.",
+        description="Local engineering control, execution and evidence.",
     )
     app.add_middleware(
         CORSMiddleware,
@@ -112,6 +113,7 @@ def create_app(settings=None, context=None) -> FastAPI:
         app.state.context = context
     app.include_router(projects_router)
     app.include_router(pcs_router)
+    app.include_router(control_center_router)
     app.include_router(initiatives_router)
     app.include_router(tasks_router)
     app.include_router(attachments_router)
