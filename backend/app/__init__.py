@@ -15,4 +15,4 @@ left `main.py` reporting 2.5.2 after the V3 baseline (commit 4cc41ac) had
 already moved the project to 3.0.0.
 """
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"

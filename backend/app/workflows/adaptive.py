@@ -12,14 +12,39 @@ import json
 from typing import Any
 
 from langgraph.graph import END, StateGraph
+from sqlalchemy import select
 
 from app.domain.task_states import TaskStatus
+from app.models import Artifact, Execution
+from app.services.workflow import ASK_ALLOWED_ROLES
+from app.workflows.integrity import IntegrityWorkflowRecovery
 from app.workflows.orchestrator import WorkflowManager as BaseWorkflowManager
 from app.workflows.state import InitiativeState
 
 
 class WorkflowManager(BaseWorkflowManager):
     """Public manager with conservative risk/latency and intent routing."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._recovery = IntegrityWorkflowRecovery(self)
+
+    async def on_execution_finished(self, execution_id: str) -> None:
+        """Persist task-less role artifacts exactly once per execution."""
+        async with self._session_factory() as session:
+            execution = await session.get(Execution, execution_id)
+            if execution is not None and execution.task_id is None:
+                if execution.role in ASK_ALLOWED_ROLES:
+                    existing = (
+                        await session.execute(
+                            select(Artifact.id).where(
+                                Artifact.source_execution_id == execution_id
+                            ).limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if existing is not None:
+                        return
+        await super().on_execution_finished(execution_id)
 
     def _build_graph(self) -> StateGraph:
         """Build the base graph with Engineer as a legal post-advisor target."""

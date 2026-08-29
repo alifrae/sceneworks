@@ -1,4 +1,4 @@
-# SceneWorks V3.0.0
+# SceneWorks V4.0.0
 
 SceneWorks is a local engineering control plane for governed software work. It combines a conventional task workflow with provider-neutral engineering sessions, durable evidence, semantic PCS control, and optional autonomous coding workers.
 

@@ -30,6 +30,8 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+      - name: Verify lock matches project constraints
+        run: uv lock --check
       - name: Install backend dependencies
         run: uv sync --frozen
       - name: Run non-live backend suite
@@ -51,15 +53,8 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
-      - name: Regenerate lock from the pinned project constraints
-        run: uv lock
-      - name: Upload regenerated lock for the repair commit
-        uses: actions/upload-artifact@v4
-        with:
-          name: repaired-uv-lock
-          path: backend/uv.lock
-          if-no-files-found: error
-          retention-days: 1
+      - name: Verify lock matches project constraints
+        run: uv lock --check
       - name: Install backend plus pinned OpenHands SDK
         run: uv sync --frozen --extra openhands
       - name: Run Windows runtime/control-plane regressions
