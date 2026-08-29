@@ -35,6 +35,27 @@ jobs:
       - name: Run non-live backend suite
         run: uv run pytest -m "not live"
 
+  windows-runtime:
+    name: Windows runtime integrity
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install backend plus pinned OpenHands SDK
+        run: uv sync --frozen --extra openhands
+      - name: Run Windows runtime/control-plane regressions
+        run: uv run pytest tests/test_main_startup.py tests/test_backend_health_registry.py tests/test_runtime_control_plane_integrity.py -m "not live"
+
   qualification:
     name: Deterministic qualification
     runs-on: ubuntu-latest
