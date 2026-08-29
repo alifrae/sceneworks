@@ -223,6 +223,24 @@ export interface Settings {
   backends: Backend[];
 }
 
+export interface RoleRoutingRow {
+  key: string;
+  display_name: string;
+  default_profile: string | null;
+  effective_profile: string | null;
+  profile_source: "role_default" | "role_override" | string;
+  resolved_backend: string;
+  resolved_model: string | null;
+  routing_source: string;
+  routing_error: string | null;
+}
+
+export interface RoutingSettings {
+  profiles: string[];
+  role_profile_overrides: Record<string, string>;
+  roles: RoleRoutingRow[];
+}
+
 export type McpMode = "observe" | "standard" | "advanced";
 
 export interface McpSettings {
@@ -257,6 +275,66 @@ export interface Diff {
   commits: { sha: string; subject: string; author: string }[];
   status: string;
   error: string | null;
+}
+
+export type VerificationStatus = "PASS" | "FAIL" | "UNVERIFIABLE" | "NOT_APPLICABLE";
+
+export interface VerificationEvidenceRef {
+  source: string;
+  id: string | null;
+  label: string;
+  status: string | null;
+}
+
+export interface VerificationCheck {
+  key: string;
+  label: string;
+  status: VerificationStatus;
+  detail: string;
+  evidence: VerificationEvidenceRef[];
+}
+
+export interface TaskVerification {
+  task_id: number;
+  project_id: number;
+  task_status: string;
+  overall: Exclude<VerificationStatus, "NOT_APPLICABLE">;
+  acceptance_criteria: VerificationCheck[];
+  required_tests: VerificationCheck[];
+  scope: VerificationCheck[];
+  policy: VerificationCheck[];
+  reviewer: VerificationCheck;
+  summary: { pass: number; fail: number; unverifiable: number; not_applicable: number };
+  evidence_count: number;
+  base_commit: string | null;
+  result_commit: string | null;
+  changed_files: string[];
+  authority_note: string;
+}
+
+export interface ResolutionClaim {
+  text: string;
+  authority: string;
+  source_execution_id: string | null;
+}
+
+export interface IssueResolution {
+  schema_version: number;
+  captured_at: string;
+  task_id: number;
+  work_item_type: WorkItemType;
+  root_cause: ResolutionClaim | null;
+  change_made: ResolutionClaim | null;
+  resolved_commit: string | null;
+  changed_files: string[];
+  verification: TaskVerification;
+  remaining_risk: ResolutionClaim | null;
+  authority_note: string;
+}
+
+export interface TaskVerificationView {
+  verification: TaskVerification;
+  resolution: IssueResolution | null;
 }
 
 export interface ProjectMemory {
