@@ -40,6 +40,7 @@ from app.api import (
     roles_router,
     settings_router,
     tasks_router,
+    verification_router,
 )
 from app.config.settings import get_settings
 from app.context import build_context
@@ -116,6 +117,7 @@ def create_app(settings=None, context=None) -> FastAPI:
     app.include_router(control_center_router)
     app.include_router(initiatives_router)
     app.include_router(tasks_router)
+    app.include_router(verification_router)
     app.include_router(attachments_router)
     app.include_router(executions_router)
     app.include_router(company_router)
