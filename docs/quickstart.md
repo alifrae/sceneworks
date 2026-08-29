@@ -1,26 +1,23 @@
 # Quick Start
 
-First 10 minutes guide from zero to running SceneWorks.
+A short path from a clean checkout to useful SceneWorks work.
 
 ## Prerequisites
 
-- **Python 3.12+** and **[uv](https://docs.astral.sh/uv/)**
-- **Node.js >= 20** with `npm`
-- **Git** (on PATH)
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- Node.js 20+ with `npm`
+- Git on PATH
+- Optional autonomous worker: Gemini CLI (recommended/default), OpenCode, or OpenHands
 
 ## Start SceneWorks
 
-### Windows launcher (recommended)
+### Windows launcher
 
 From the repository root:
 
 ```powershell
 .\scripts\start-sceneworks.cmd
 ```
-
-The launcher starts the backend, waits for it to become healthy, starts the
-frontend, optionally starts the Secure MCP tunnel, and opens the web UI. It is
-idempotent: already-running services are reused instead of duplicated.
 
 Useful options:
 
@@ -29,37 +26,21 @@ Useful options:
 .\scripts\start-sceneworks.cmd -Rebuild
 .\scripts\start-sceneworks.cmd -NoBrowser
 .\scripts\start-sceneworks.cmd -NoTunnel
-.\scripts\start-sceneworks.cmd -TunnelClientPath C:\path\to\tunnel-client-runtime-cloudflared.exe
 ```
 
-For the ChatGPT MCP tunnel, the launcher expects the tunnel client at:
-
-```text
-tools\tunnel-client-runtime-cloudflared.exe
-```
-
-Override that location with `-TunnelClientPath` or the
-`SCENEWORKS_TUNNEL_CLIENT_PATH` environment variable. The tunnel starts only
-when `CONTROL_PLANE_TUNNEL_ID` and `CONTROL_PLANE_API_KEY` are present. The
-local MCP target defaults to `http://127.0.0.1:8010/mcp` and can be overridden
-with `MCP_SERVER_URL` or `-McpServerUrl`.
-
-Do not commit tunnel credentials or the tunnel executable. The executable is
-ignored by Git and is intentionally a local tool.
+If a ChatGPT MCP tunnel is configured, the launcher can also start it. Keep tunnel credentials local and do not expose the bare FastAPI service publicly.
 
 ### Manual startup
 
-Terminal 1 — backend:
+Backend:
 
 ```bash
 cd backend
 uv sync
-uv run uvicorn app.main:app --reload
+uv run python -m app.main
 ```
 
-The API is at **http://127.0.0.1:8010** (docs at `/docs`).
-
-Terminal 2 — frontend:
+Frontend, in a second terminal:
 
 ```bash
 cd web
@@ -67,80 +48,122 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**.
+Open `http://localhost:3000`. The API defaults to `http://127.0.0.1:8010`.
 
-## First example
+## 1. Register a repository
 
-1. **Register a repository** — go to Projects, click Add Repository,
-   enter an absolute path to a local Git repo.
+Open **Projects -> Add existing repository**.
 
-2. **Create a task** — go to Tasks, click New Task, for example:
+Enter:
 
-   > Add a `multiply(a, b)` function to `calc.py`, add tests, and preserve
-   > all existing behavior.
+- a friendly project name;
+- the absolute path to a local Git repository;
+- optional description;
+- optional test commands.
 
-3. **Start the workflow** — click "Start Architecture" on the task detail page.
+SceneWorks registers configuration only. It does not add SceneWorks files to the repository and does not modify your human working tree.
 
-4. **Observe automatic role routing** — the triage node analyzes the task,
-   then the Architect inspects your codebase (read-only).
+## 2. Create work
 
-   > **Agents read committed state, not your working tree.** At triage,
-   > SceneWorks resolves the head of the project's default branch and pins the
-   > whole workflow to that commit; every role reads a worktree checked out at
-   > it. Uncommitted or staged edits in your checkout are invisible to the
-   > agents, and nothing they do can modify your checkout. **Commit work you
-   > want the analysis to consider.** The pinned commit is shown as the task's
-   > base commit.
+The quickest path is the composer on **Home**.
 
-5. **Review the architecture proposal** — read the analysis on the task page.
+Describe the outcome, choose the project, and optionally choose:
 
-6. **Approve it** — click "Approve Architecture". The workflow runs
-   Engineer -> Reviewer automatically.
+- type: `task`, `bug`, `feature`, or `idea`;
+- mode: `auto`, `change`, `investigate`, `plan`, or `ask`;
+- attachments;
+- an engineering contract with acceptance criteria, allowed scope and required tests.
 
-7. **Watch Engineer execution** — files are edited in an isolated worktree
-   (`sw-task-<id>`). You can follow live events in the Event Log.
+Choose **Save to backlog** or **Start now**.
 
-8. **Watch Reviewer validation** — the Reviewer inspects the diff, runs tests,
-   and either approves or requests changes.
+For lightweight defect/feature tracking, use **Issues**. Issues are normal SceneWorks Tasks, so diagnosis, implementation, Git provenance and verification stay attached to the same work item.
 
-9. **Inspect the result** — view the diff, tests, implementation summary,
-   and review verdict on the task detail page.
+## 3. Follow governed work
 
-10. **Accept/reject/send back** — Accept marks the task done but **does not
-    merge into your human branch**. You decide what to integrate.
+Open the item under **Work**.
 
-## Ask a company role
+For a normal code change SceneWorks may run:
 
-Go to Company, pick a role (CEO, CTO, Product, GTM, Technical Expert or
-Architect), connect to a project, and ask a question. The answer is stored as
-a company artifact.
+```text
+triage / optional advisors
+ -> Architect when required
+ -> Engineer
+ -> Reviewer
+ -> human acceptance/rejection
+```
 
-When you attach a project, the ask is repository-grounded: it runs against a
-commit-pinned snapshot of that repository — never your working tree — and the
-stored decision records the commit that was analyzed. Asks with no project
-attached are conversational and read no repository at all.
+Repository-grounded roles operate on commit-pinned isolated worktrees. Uncommitted edits in your human checkout are not part of the pinned snapshot.
 
-## Inspect Project Memory
+The current task tabs are:
 
-Projects page -> click a project -> Memory tab.
-Create architecture decisions, technology choices, product decisions,
-initiative summaries, or constraints. Edit, archive, or supersede them.
-Memory items are automatically injected into relevant workflow nodes.
+- **Plan**
+- **Changes**
+- **Results**
+- **Activity**
+- **Advanced**
 
-## Choose Gemini ACP vs OpenHands
+A dedicated criterion-level **Verification** tab is not implemented yet; see [Verification and Issue Traceability](verification-and-issue-traceability.md). Reviewer approval should not be confused with objective verification.
 
-- **Gemini ACP** (default, validated): Ensure `gemini` is on PATH or set
-  `SCENEWORKS_GEMINI_EXECUTABLE` in `backend/.env`.
-  The model is selected by the Gemini CLI (`auto` by default). Override
-  with `SCENEWORKS_GEMINI_MODEL` if needed.
-- **OpenHands** (experimental): Set `SCENEWORKS_OPENHANDS_URL` in
-  `backend/.env` pointing to a running OpenHands Agent Server.
+## 4. Inspect operational state
 
-Check Settings page to verify backend health.
+Open **Control** to see a bounded operational view of:
+
+- active EngineeringSessions;
+- managed PCS runs;
+- recent SceneWorks evidence;
+- work/issue counts.
+
+Control is observational. Engineering mutations continue through governed task actions or MCP/EngineeringSession tools.
+
+## 5. Configure workers and ChatGPT/MCP
+
+Open **Settings**.
+
+You can:
+
+- select the default autonomous worker;
+- inspect backend health/version/detail;
+- map `strongest`, `coding`, and `research` profiles to a backend/model;
+- configure Gemini/OpenCode operational values;
+- enable SceneWorks MCP and choose Observe/Standard/Advanced mode;
+- set the Advanced-session permission ceiling.
+
+Current routing limitation: role -> profile assignment is still code configuration in `backend/app/roles/definitions.py`; only profile -> backend/model is editable today.
+
+## 6. Direct engineering control
+
+In Advanced MCP mode, ChatGPT can supervise a provider-neutral `EngineeringSession` using SceneWorks-owned tools for:
+
+- workspace read/search/write;
+- commands and persistent processes;
+- Git status/diff/commit;
+- semantic PCS lifecycle/log/state/verification;
+- managed PCS screenshot evidence;
+- controlled PCS UI Automation fallback;
+- optional delegation to an autonomous worker.
+
+Gemini is therefore optional labor for direct engineering control, not the execution gateway.
+
+See [ChatGPT MCP Plugin](tutorials/chatgpt-mcp-plugin.md) for the full flow.
+
+## 7. Accepting work
+
+When work reaches the human decision boundary:
+
+1. inspect the diff and result commit;
+2. inspect Reviewer notes;
+3. inspect available objective evidence;
+4. accept, reject, or send back.
+
+**Accept does not merge into your main branch.** SceneWorks preserves the isolated branch/commit and the human decides how to integrate it.
+
+For an issue-type work item, the recommended next traceability improvement is a durable Resolution snapshot containing root-cause claim, Git-derived fix/commit/files, verification evidence, and remaining risk. This is documented but not yet implemented.
 
 ## Next steps
 
-- [ChatGPT MCP Plugin](tutorials/chatgpt-mcp-plugin.md) — connect ChatGPT to SceneWorks
-- [Web UI Tutorial](tutorials/web-ui.md) — detailed step-by-step
-- [Architecture](architecture.md) — component responsibilities
-- [Development](development.md) — developer setup
+- [Web UI Tutorial](tutorials/web-ui.md)
+- [ChatGPT MCP Plugin](tutorials/chatgpt-mcp-plugin.md)
+- [Architecture](architecture.md)
+- [Agent Backends and Model Routing](backends.md)
+- [Verification and Issue Traceability](verification-and-issue-traceability.md)
+- [Known Limitations](limitations.md)

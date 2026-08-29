@@ -1,332 +1,250 @@
 # Web UI Tutorial
 
-Step-by-step guide from installation to accepting a task result.
+This guide covers the current WP20 web application. For direct ChatGPT/MCP engineering control, use the separate [ChatGPT MCP tutorial](chatgpt-mcp-plugin.md).
 
-## 1. Prerequisites
+## 1. Start SceneWorks
 
-- **Python 3.12+** (via `uv`, the included Python dependency manager)
-- **Node.js >= 20** with `npm`
-- **Git** (must be on PATH)
-- **Windows:** PowerShell or Windows Terminal
-- **macOS/Linux:** Terminal
+Requirements:
 
-For Gemini ACP backend (optional): [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-installed and authenticated.
+- Python 3.12+ with `uv`
+- Node.js 20+ with `npm`
+- Git
 
-For OpenHands backend (optional):
-[OpenHands Agent Server](https://github.com/OpenHands/openhands) running
-and accessible.
-
-## 2. Backend installation
+Backend:
 
 ```bash
 cd backend
 uv sync
+uv run python -m app.main
 ```
 
-## 3. Frontend installation
+Frontend, in another terminal:
 
 ```bash
 cd web
 npm install
-```
-
-## 4. Configuration
-
-Copy the example env file to `backend/.env`:
-
-```bash
-# Windows
-copy .env.example backend\.env
-
-# macOS/Linux
-cp .env.example backend/.env
-```
-
-Edit `backend/.env` to customize:
-
-```env
-SCENEWORKS_HOST=127.0.0.1
-SCENEWORKS_PORT=8010
-SCENEWORKS_DATABASE_URL=sqlite+aiosqlite:///./data/sceneworks.db
-SCENEWORKS_WORKTREE_ROOT=C:/Users/you/sceneworks-worktrees   # Windows
-# SCENEWORKS_WORKTREE_ROOT=/home/you/sceneworks-worktrees    # Linux/macOS
-SCENEWORKS_EXECUTION_TIMEOUT_SECONDS=1800
-SCENEWORKS_LOG_LEVEL=INFO
-SCENEWORKS_CORS_ORIGINS=["http://localhost:3000"]
-```
-
-### Gemini ACP configuration (default backend)
-
-By default, SceneWorks auto-discovers `gemini` on PATH. Optional overrides:
-
-```env
-SCENEWORKS_GEMINI_EXECUTABLE=gemini
-# SCENEWORKS_GEMINI_MODEL=auto          # let Gemini CLI pick (recommended)
-# SCENEWORKS_GEMINI_MODEL=<model/alias> # explicit override
-```
-
-### OpenHands configuration (optional)
-
-```env
-SCENEWORKS_OPENHANDS_URL=http://localhost:8000
-# or for CLI mode:
-# SCENEWORKS_OPENHANDS_EXECUTABLE=openhands
-# SCENEWORKS_OPENHANDS_MODEL=claude-sonnet-4-20250514  # example; set per your LLM provider
-```
-
-### Default backend selection
-
-```env
-SCENEWORKS_DEFAULT_BACKEND=gemini_acp   # default
-# SCENEWORKS_DEFAULT_BACKEND=openhands  # use OpenHands
-# SCENEWORKS_DEFAULT_BACKEND=fake       # tests/demos only
-```
-
-## 5. Starting the FastAPI backend
-
-```bash
-cd backend
-uv run uvicorn app.main:app --reload
-```
-
-The API is available at **http://127.0.0.1:8010**
-API documentation at **http://127.0.0.1:8010/docs**
-
-## 6. Starting the Next.js frontend
-
-Open a **second terminal**:
-
-```bash
-cd web
 npm run dev
 ```
 
-The web UI is available at **http://localhost:3000**
+Open `http://localhost:3000`.
 
-## 7. Opening SceneWorks in the browser
+## 2. Understand the navigation
 
-Navigate to **http://localhost:3000**
+The primary navigation is intentionally small:
 
-You should see the SceneWorks dashboard with navigation:
-- **Dashboard** — Overview of projects, tasks, active executions
-- **Projects** — Manage registered repositories
-- **Tasks** — Create and manage tasks
-- **Executions** — View past agent executions
-- **Company** — View the virtual company org chart
-- **Settings** — Configure backends and view system settings
-- **Docs** — API documentation (links to `/docs`)
+- **Home** — create work and see attention/active/recent items.
+- **Work** — all governed SceneWorks work items.
+- **Issues** — lightweight bug/feature/idea tracking over the same Task records.
+- **Projects** — registered repositories and project actions.
+- **Control** — active EngineeringSessions, managed PCS runs and recent evidence.
+- **Settings** — backend/model/MCP configuration.
 
-## 8. Registering a repository
+Diagnostics and other operational pages remain secondary surfaces.
 
-1. Navigate to **Projects**
-2. Click **Add Repository**
-3. Enter:
-   - **Name**: A friendly name (e.g. "my-app")
-   - **Description**: Optional description
-   - **Repository path**: Absolute path to a local Git repository
-     - Windows: `C:\Users\you\projects\my-app`
-     - macOS/Linux: `/home/you/projects/my-app`
-4. Click **Register**
+## 3. Register a project
 
-SceneWorks validates that the path exists and is a valid Git repository.
-It captures the current branch and HEAD commit. **Your repository files
-are never modified.**
+Open **Projects -> Add existing repository** and enter:
 
-## 9. Creating a task
+- name;
+- absolute repository path;
+- optional description;
+- optional test commands.
 
-1. Navigate to **Tasks**
-2. Click **New Task**
-3. Select the registered project
-4. Enter a **title** (e.g. "Fix incorrect calculation in component X")
-5. Enter a **description** (what should be changed or built)
-6. Optionally set priority (low/medium/high)
-7. Click **Create**
+Successful registrations are remembered in browser registration history so familiar repositories can be reused without retyping every field.
 
-The task appears with status **NEW**.
+The repository remains yours. SceneWorks does not add project files or modify the human checkout simply by registering it.
 
-## 10. Running the workflow
+### Unregistering
 
-### Option A: Full workflow (recommended)
+Each project card contains **Unregister from SceneWorks** in the same project action area.
 
-1. Open the task detail page
-2. Click **Start Architecture**
-   - The Architect inspects your repository (read-only)
-   - Watch live events in the **Event Log** panel
-3. Wait for the task to reach **Awaiting Architecture Approval**
-4. Review the architecture analysis
-5. Click **Approve Architecture**
-   - The LangGraph workflow automatically runs:
-     1. Engineer implements changes in an isolated worktree
-     2. (Optional) Tests are executed
-     3. Reviewer inspects the diff and approves or requests changes
-     4. If changes requested, Engineer is auto-reinvoked (repair loop)
-6. Wait for **Ready for Human Review**
+Unregister removes SceneWorks-owned records/configuration when safe. It never deletes the Git repository or external PCS assets. If a live EngineeringSession or managed PCS process exists, SceneWorks refuses deletion until that authority/process is closed or stopped.
 
-### Option B: Step-by-step manual
+## 4. Create a work item
 
-1. Click **Start Architecture** → Architecture analysis runs
-2. Review analysis → Click **Approve** (or Reject / Request Revision)
-3. Click **Start Implementation** → Engineer implements in worktree
-4. Click **Start Review** → Reviewer inspects diff/tests
-5. Arrive at **Ready for Human Review**
+Use the composer on **Home**.
 
-## 11. Approving architecture
+Enter the request and choose a project. Optional controls include:
 
-After architecture analysis completes:
+- type: `task | bug | feature | idea`;
+- mode: `auto | change | investigate | plan | ask`;
+- attachments;
+- engineering-contract fields such as acceptance criteria, allowed scope, forbidden changes and required tests.
 
-1. Read the architecture analysis on the task detail page
-2. Choose:
-   - **Approve** — Proceed to implementation
-   - **Reject** — Cancel the task
-   - **Request Revision** — Send back to Architect with feedback
+Choose:
 
-## 12. Following live execution
+- **Save to backlog** — create the item without starting workflow execution;
+- **Start now** — create it and begin the governed workflow.
 
-During execution, the **Event Log** panel streams events in real-time:
+## 5. Use Issues without turning SceneWorks into Jira
 
-- `execution.started` — Agent invocation began
-- `agent.text_delta` — Agent's text output (streaming)
-- `agent.thought_summary` — Agent's reasoning summary
-- `tool.started` / `tool.completed` — Tool usage (file reads, commands)
-- `file.changed` — File was modified
-- `git.commit` — Commit was created
-- `execution.completed` — Agent finished
+The **Issues** page is a focused view over existing Tasks whose type is `bug`, `feature`, or `idea`.
 
-## 13. Inspecting diff, tests, and review
+You can:
 
-When the task reaches **Ready for Human Review**:
+- capture a new bug/feature/idea quickly;
+- filter Open/Closed/All;
+- change type/priority while the item is still editable;
+- open the same item in the normal Work thread when investigation or implementation begins.
 
-1. View the **diff** — All changes made by the Engineer
-2. View the **implementation summary** — What was done
-3. View the **review result** — Reviewer verdict (APPROVED or feedback)
-4. View **test results** if tests were configured for the project
+There is no separate issue database, sprint board, story-point model or duplicate lifecycle. The same task ID owns the request, implementation, Git provenance and later evidence.
 
-## 14. Accepting or rejecting the final result
+A structured issue Resolution snapshot (root cause, fix, verification, remaining risk) is recommended but not implemented yet; see [Verification and Issue Traceability](../verification-and-issue-traceability.md).
 
-1. Review the diff, summary, and review verdict
-2. Choose:
-   - **Accept** — Mark the task as accepted. SceneWorks **does not merge**
-     automatically. You decide what to integrate from the worktree branch
-     (`sw-task-<id>`).
-   - **Reject** — Reject the implementation. The task enters `REJECTED`.
-   - **Send back to Engineer** — Request additional changes.
+## 6. Follow the governed workflow
 
-## 15. Selecting/configuring an agent backend
+For code-changing work, SceneWorks may route through:
 
-SceneWorks distinguishes between two concepts:
-
-| Layer | Meaning | Examples |
-|---|---|---|
-| **Model Provider** | The AI model that generates text | DeepSeek, Gemini, OpenAI, Claude |
-| **Agent Backend** | The runtime that executes the agent (repo access, shell, permissions) | Gemini CLI ACP, OpenHands |
-
-A raw model API is not an engineering agent by itself — SceneWorks also
-needs repository tools, shell control, cancellation, and event streaming.
-
-### Per-role backend selection
-
-Each role can use a different backend. Edit
-`backend/app/roles/definitions.py`:
-
-```python
-RoleDefinition(
-    key="engineer",
-    backend="openhands",  # Use OpenHands for implementation
-    ...
-)
+```text
+Triage / optional advisors
+ -> Architect when required
+ -> human architecture decision when required
+ -> Engineer
+ -> Reviewer
+ -> human acceptance/rejection
 ```
 
-Or via the Settings page in the web UI.
+The exact path depends on execution intent and deterministic routing rules. Bounded lower-risk bugs can skip redundant architecture when the required contract fields are present.
 
-### Global default
+Agent repository access uses commit-pinned isolated worktrees. The human checkout is not the agent workspace.
 
-Set `SCENEWORKS_DEFAULT_BACKEND` in `backend/.env`:
+## 7. Read a Work thread
 
-```env
-SCENEWORKS_DEFAULT_BACKEND=openhands
-```
+A Work item combines the conversation/decision boundary with detailed technical views.
 
-Available backends:
-- `gemini_acp` — Gemini CLI via ACP (default, validated)
-- `openhands` — OpenHands Agent Server (experimental)
-- `fake` — Scripted fake backend (tests/demos only)
+Current tabs:
 
-### Model selection
+### Plan
 
-Each backend selects its model independently:
+Architecture/advisory output when available.
 
-- **Gemini ACP**: `SCENEWORKS_GEMINI_MODEL` (unset = CLI auto)
-- **OpenHands**: `SCENEWORKS_OPENHANDS_MODEL` (falls back to server default)
-- **Fake**: No model (scripted)
+### Changes
 
-The `model_profile` field on role definitions (`strongest`, `coding`,
-`research`) is metadata only in V2 — it describes the recommended reasoning
-depth but does not influence model selection. A profile→model mapping is
-a V3 candidate.
+Base/result commit information and the implementation diff.
 
-### Verifying backend health
+### Results
 
-Navigate to **Settings** in the web UI. Each backend shows its availability
-status, version, and details including the configured model selector where
-applicable.
+Implementation summary and Reviewer verdict/notes.
 
-## 16. Common troubleshooting
+### Activity
 
-### "Gemini CLI not found on PATH"
+Structured task/execution events.
 
-- Install Gemini CLI: `npm install -g @google/gemini-cli`
-- Or set `SCENEWORKS_GEMINI_EXECUTABLE` to the full path of the gemini
-  executable
+### Advanced
 
-### "OpenHands not configured"
+Raw operational identifiers/execution details useful for debugging.
 
-- Set `SCENEWORKS_OPENHANDS_URL` for HTTP mode or
-  `SCENEWORKS_OPENHANDS_EXECUTABLE` for CLI mode
-- For HTTP mode, ensure the OpenHands Agent Server is running
+### Verification status
 
-### Backend starts but task stays "NEW"
+A dedicated **Verification** tab does **not** exist yet. SceneWorks already stores acceptance criteria, required tests, Git provenance and engineering evidence, but the criterion-level `PASS | FAIL | UNVERIFIABLE` synthesis is a remaining product gap.
 
-- Check that a backend is available (Settings page)
-- Check the backend health status
-- Ensure the default backend matches your configuration
+Do not interpret a visible Reviewer `APPROVED` verdict as equivalent to every acceptance criterion being objectively verified.
 
-### "Port 8010 already in use"
+## 8. Human decisions
 
-- Change `SCENEWORKS_PORT` in `backend/.env`
-- Update `NEXT_PUBLIC_API_URL` in the frontend accordingly
+When an item reaches a human boundary, the page presents only valid actions for that state. Depending on the workflow this can include:
 
-### "CORS error" in the browser
+- approve/reject/request architecture revision;
+- accept/reject final work;
+- send back to Engineer;
+- cancel/retry.
 
-- Ensure `SCENEWORKS_CORS_ORIGINS` includes `http://localhost:3000`
-- Restart the backend after changing CORS settings
+Accepting a task marks the SceneWorks work item accepted. **It does not merge the task branch into your main branch.**
 
-### Task stuck in "ARCHITECTURE_ANALYSIS"
+## 9. Control page
 
-- The backend may have crashed. Check the terminal running the FastAPI
-  server for errors.
-- On Windows: Gemini CLI sometimes needs a console window. Ensure
-  `SCENEWORKS_GEMINI_EXECUTABLE` points to the correct executable.
-- Try using the fake backend (`SCENEWORKS_DEFAULT_BACKEND=fake`) to verify
-  the workflow machinery works.
+Open **Control** for current operational truth rather than workflow prose.
 
-### Windows-specific issues
+It shows a bounded read-only projection of:
 
-- Gemini CLI is spawned with `CREATE_NEW_PROCESS_GROUP` and
-  `CREATE_NEW_CONSOLE` flags. A console window may briefly appear.
-- Paths use backslashes but SceneWorks handles both `\` and `/`.
-- Worktree paths must be on the same drive as the repository.
-- If `git` is not on PATH, add it or use full paths.
+- active EngineeringSessions;
+- session runtime/branch/task correlation;
+- managed PCS processes/profile/status/PID;
+- recent evidence operation/category/status;
+- counts for active work, attention items and issues.
 
-### macOS/Linux-specific notes
+The page deliberately does not expose raw evidence payloads or host worktree paths and does not introduce a second mutation API.
 
-- All commands use `uv run` — no manual virtual environment activation needed
-- Path separators are forward slashes `/`
-- No extra console windows appear for subprocesses
+## 10. Settings
 
-### Worktree errors
+Settings contains three distinct concepts.
 
-- `SCENEWORKS_WORKTREE_ROOT` must be on the same filesystem/drive as the
-  repository (Git worktree limitation)
-- The worktree root must not be inside a managed repository
-- If a worktree already exists for a task (duplicate start), it is reused
+### Autonomous agent backends
+
+You can select the default worker and inspect availability/version/detail for configured backends.
+
+Current choices include:
+
+- `gemini_acp` — recommended/default autonomous worker;
+- `opencode` — non-ACP backup for write-capable coding/delegation;
+- `openhands` — optional/experimental;
+- `fake` — tests only.
+
+### Model-profile routing
+
+Roles request provider-neutral profiles such as `strongest`, `coding`, and `research`. Settings can map each profile to a backend and optional concrete model.
+
+The concrete target is persisted on each Execution for provenance.
+
+Current limitation: role -> profile assignment is still code configuration. For example Engineer defaults to `coding`, while Architect and Reviewer default to `strongest`. This edge is not editable in Settings yet.
+
+### ChatGPT / MCP
+
+MCP can run in:
+
+- **Observe** — read-only semantic/project/evidence access;
+- **Standard** — governed SceneWorks task/workflow actions;
+- **Advanced** — direct EngineeringSession control plus the configured permission ceiling.
+
+Advanced mode can expose SceneWorks-owned workspace/command/process/Git/PCS/GUI capabilities. It is powerful but is not an OS sandbox.
+
+## 11. PCS-specific control
+
+When a project has PCS run profiles configured, direct SceneWorks control can provide:
+
+- start/stop/restart/status;
+- durable logs/errors;
+- health and explicit runtime state;
+- governed external recording aliases;
+- deterministic verification runbooks;
+- managed window/dialog discovery;
+- screenshot/visual comparison evidence;
+- controlled Windows UI Automation fallback.
+
+These are primarily MCP/engineering-control capabilities; the WP20 Control page observes their state rather than duplicating all mutations in the browser.
+
+## 12. Troubleshooting
+
+### API offline
+
+The UI reports when `http://127.0.0.1:8010` cannot be reached. Confirm the backend is running and that `NEXT_PUBLIC_API_URL` matches any custom port.
+
+### Backend unavailable
+
+Open **Settings** and inspect backend health. A failed Gemini/OpenCode/OpenHands backend does not remove SceneWorks' direct NativeRuntime capabilities, but governed autonomous workflow steps requiring that backend cannot run until a usable worker is selected.
+
+### Project cannot be unregistered
+
+Stop any managed PCS run and close active EngineeringSessions for that project first. SceneWorks deliberately refuses to delete the authority record of a live process/session.
+
+### Task appears stuck
+
+Check:
+
+- Work -> Activity;
+- Control for session/PCS state;
+- Diagnostics for API problems;
+- backend terminal logs.
+
+### Windows GUI automation unavailable
+
+WP18 uses Windows UI Automation patterns exposed by the managed PCS application. If a Qt/control does not expose a usable accessibility pattern, SceneWorks fails explicitly; it does not silently fall back to coordinate clicking.
+
+## 13. What to look at next
+
+- [Quick Start](../quickstart.md)
+- [Architecture](../architecture.md)
+- [Agent Backends and Model Routing](../backends.md)
+- [Verification and Issue Traceability](../verification-and-issue-traceability.md)
+- [Known Limitations](../limitations.md)
+- [ChatGPT MCP tutorial](chatgpt-mcp-plugin.md)

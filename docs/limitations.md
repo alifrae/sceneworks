@@ -1,223 +1,137 @@
 # Known Limitations
 
-## Current limitations (V2.5)
+This file describes the **current** SceneWorks boundary after WP20. Historical V2/V3/WP documents should not be used as the current limitations list.
 
-### Deployment
+## Deployment and trust
 
-- **Single-machine**: API + worker + SQLite run together on one machine. No
-  distributed execution support.
-- **Localhost only**: The API binds to localhost by default — not designed
-  for remote access without a reverse proxy and authentication.
+- **Single-machine control plane.** FastAPI, workflow execution, SQLite, local runtimes and agent processes run on one host. There is no distributed worker scheduler.
+- **Trusted local API.** SceneWorks binds to loopback by default and has no end-user login/RBAC. Do not publish the bare FastAPI service directly to an untrusted network.
+- **Remote MCP requires a trusted boundary.** Use an authenticated tunnel/reverse proxy and keep the SceneWorks API itself private.
 
-### Security
+## Execution security
 
-- **No user authentication**: The API is a trusted local control plane with
-  no login, accounts, or teams.
-- **No OS-level sandboxing**: Agent commands run with the SceneWorks
-  process's user permissions. Isolation is through Git worktrees and
-  backend-enforced path boundaries, not OS containers.
-- **OpenHands**: workspace confinement is directory scoping by the agent's own
-  tools, not an OS or container boundary, and SceneWorks cannot enforce file
-  boundaries per-request as it does over ACP. For a remote Agent Server the
-  `working_dir` is a path in the *server's* filesystem, so it does not even refer
-  to the SceneWorks worktree. See the OpenHands section below.
+- **No OS sandbox.** Worktrees/path validation are engineering guard rails, not a security boundary against a hostile process. A permitted shell command runs with the authority of the OS user running SceneWorks.
+- **`network_access=false` is not hard egress enforcement.** A shell-capable process can use host networking unless an OS/container/firewall boundary prevents it.
+- **NativeRuntime process handles are in-memory.** `EngineeringSession` and managed PCS run metadata persist, but an OS process handle does not survive SceneWorks restart. Persisted managed PCS runs are therefore reconciled to `LOST` after restart rather than pretending control was retained.
+- **External assets are read-only by contract, not a filesystem sandbox.** SceneWorks only exposes declared asset aliases through the PCS API/MCP surface; a separately permitted arbitrary shell process still has the OS user's filesystem authority.
 
-### Execution
+## Agent backend limits
 
-- **Sequential ACP backends**: Two Gemini ACP instances may not run
-  concurrently on Windows due to Gemini's single-instance lock. Multiple
-  executions queue up on the single worker.
-- **No parallel Engineers**: Only one Engineer execution runs at a time
-  per task.
-- **No competing Architects**: Architecture analysis runs once.
+### Gemini ACP
 
-### Workflow
+- Gemini CLI authentication/model availability is external to SceneWorks.
+- ACP permission mediation is stronger than prompt-only policy, but the provider runtime can have native capabilities that do not all route through the SceneWorks client proxy.
+- Shell execution, once permitted, is still a real local process.
 
-- **Project memory retrieval is term-based, not semantic**: scoring matches
-  *terms* against title, content and tags, with an exact-phrase bonus. No
-  embeddings, no vector database, no semantic search — so a memory phrased
-  entirely in synonyms of the task description will not be retrieved
-  ("point cloud" will not find a decision that only says "LiDAR scan"). The
-  tradeoff is deliberate: retrieval is reproducible and every result explains
-  why it was selected. SQLite FTS5 is the documented upgrade path if the term
-  bound becomes the limit; see [memory.md](memory.md).
-- **A memory cannot record the commit its decision was made against**: that
-  needs a schema column, and schema changes are unsafe until migrations exist.
-  Deferred to WP3 (migrations) and WP6 (Git provenance).
-- **No knowledge graph**: No persistent semantic understanding between
-  sessions beyond explicit memory items.
-- **No CrewAI integration**: SceneWorks uses its own LangGraph-based
-  orchestration.
-- **No automatic merging**: SceneWorks never merges agent branches into
-  the human tree. All integration is manual.
-- **Recovery limitations**: Workflows with in-flight agent executions
-  (`ARCHITECTURE_ANALYSIS`, `IMPLEMENTING`, `REVIEWING`) cannot be
-  recovered on restart — the in-progress agent work is unrecoverable.
-  These tasks are marked `FAILED`. Workflows in human-waiting or
-  between-node states can auto-resume. See `backend/app/execution/recovery.py`
-  for the full state-by-state contract.
+### OpenCode
 
-### Accepted V2 limitations carried into the V3.0 baseline
+- The headless backup is intended for write-capable coding/delegation.
+- SceneWorks does not claim Gemini-ACP-equivalent per-tool read-only mediation for OpenCode headless mode.
+- Provider/model credentials and catalogs remain owned by OpenCode.
 
-These were found during the V3.0 audit, judged not worth changing now, and
-are deliberately carried forward.
+### OpenHands
 
-- **Mediation is partial, and shell access is not confined.** SceneWorks
-  confines `fs/read_text_file` / `fs/write_text_file` to the pinned worktree,
-  gates `session/request_permission` on the role, and validates the working
-  directory of any terminal the agent opens. Measured over the V3.0 live runs,
-  28 of 191 observed tool calls actually reached the permission gate — the
-  rest were reported as `session/update` notifications for tools the agent ran
-  through its own runtime rather than asking the client. The gate does work
-  when used (it refused `git reflog`, `git remote -v` and
-  `python -m pytest --version` for read-only roles), but coverage depends on
-  the agent asking. Separately, a role holding `shell_execute` (Engineer,
-  Reviewer, Technical Expert) runs real commands, and a command can `cd`
-  anywhere the OS permits. Treat this as a guard rail and an audit trail,
-  **not a sandbox against a hostile agent**. Registered repositories are
-  trusted inputs; an agent with shell access has the privileges of the user
-  running SceneWorks.
-- **Large repositories are slow and can exhaust the timeouts.** Creating a
-  worktree checks out the entire tree (minutes on a ~30k-file repository), and
-  an Engineer run spends most of its wall time in the project's own test and
-  lint commands. The V3.0 defaults (`SCENEWORKS_GIT_TIMEOUT_SECONDS=900`,
-  `SCENEWORKS_EXECUTION_TIMEOUT_SECONDS=5400`) were raised after real runs hit
-  the old ceilings. If an Engineer execution does time out, the task goes
-  `FAILED` with its work left **uncommitted in the isolated worktree** — it is
-  not lost, but it is not captured as a commit either, and `retry` starts a
-  fresh execution rather than resuming that one. Scoping the task ("run only
-  this test file, do not run repository-wide lint") materially reduces the
-  risk.
-- **`worktree_root_override` is stored but never honoured.** The field exists
-  on `Project`, is accepted by the API and returned by it, but
-  `GitWorktreeService` only reads the global `worktree_root`. Per-project
-  worktree roots are not implemented.
-- **Settings changes are partly runtime, partly restart-only.** Values read
-  live from the shared `Settings` object (worktree root, Gemini executable and
-  model, execution timeout) and the default backend now take effect
-  immediately. Anything captured at construction time elsewhere still needs a
-  restart.
-- **No authentication or authorisation.** Anyone who can reach the API can
-  approve architecture and accept work. Bind to localhost only.
-- **A failed triage degrades to default routing.** If the triage execution does
-  not complete, the workflow proceeds with `architect` selected and
-  `requires_implementation=true`. This is surfaced as a
-  `workflow.triage.degraded` event and a task note rather than failing the
-  task, because the architecture approval gate still stands between that guess
-  and any code change — but the participant selection was not actually
-  decided by triage.
-- **Agents sometimes finish without committing.** Observed with a live model:
-  the Engineer edited files and ended its turn without running `git commit`.
-  SceneWorks now commits leftover worktree changes on the Engineer's behalf,
-  using `git add -A`. If the repository lacks a `.gitignore`, build artefacts
-  produced during the run can be swept into that safety-net commit. The human
-  reviews the diff before integrating.
-- **Worktrees previously leaked `fsmonitor` daemons.** If a managed repository had
-  `core.fsmonitor=true`, git started a long-lived `git fsmonitor--daemon` for
-  each worktree, and removing the worktree did not reliably reap it. Across
-  one afternoon of testing on a repository with fsmonitor enabled, **308**
-  orphaned `git.exe` processes accumulated and slowed every git operation.
-  **Fixed in V2.5.2:** SceneWorks git operations and agent terminal commands
-  now suppress fsmonitor per-process via `GIT_CONFIG_PARAMETERS`. The user's
-  global and repository-level `core.fsmonitor` configuration is never modified.
-  A stress test of 20 worktree create/destroy cycles confirms no unbounded
-  daemon accumulation.
-- **Concurrent live agents are resource-hungry.** Two Gemini CLI processes
-  starting simultaneously exceeded the previous 30 s ACP `initialize` timeout
-  on this machine. The default is now 120 s, but throughput remains bounded by
-  agent process startup, which is slow on Windows.
+- Optional and experimental.
+- Existing SDK/version and Windows shell limitations remain; OpenHands is not the SceneWorks execution substrate.
+- Remote/HTTP/CLI variants are not the primary qualified backup path.
 
-### OpenHands backend specifics
+## Governed workflow limits
 
-Status **EXPERIMENTAL**. `local` mode is live-validated for read-only roles;
-full evidence in [wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
+- **No automatic merge.** SceneWorks produces isolated branches/commits and evidence; a human remains the final integration authority.
+- **In-flight autonomous executions cannot be resumed byte-for-byte after process loss.** SceneWorks records interrupted/failed state and preserves durable workflow/Git evidence rather than claiming an agent process resumed.
+- **Reviewer approval is a review claim, not objective verification.** The Reviewer is independent and evidence-oriented, but its prose verdict remains model output.
+- **A task can still be under-specified.** If acceptance criteria, required tests, allowed scope or project policy are absent, SceneWorks cannot manufacture objective verification requirements.
 
-- **No shell on Windows — the Engineer cannot run.** The OpenHands V1 terminal
-  tool raises `NotImplementedError` on Windows
-  (`openhands/tools/terminal/terminal/factory.py`). Roles needing shell are
-  refused up front with the reason. Only read-only roles are usable on this
-  platform. Gemini ACP is unaffected and remains the default.
-- **No OS-level sandbox.** In `local` mode the agent runs inside the SceneWorks
-  process with the worktree as its working directory. Confinement is the tools'
-  own path handling, not a container, chroot or user boundary. The runtime and
-  the model are trusted not to write outside the working directory — verified
-  empirically for the validated runs, not enforced structurally.
-- **No per-request permission mediation.** Unlike Gemini ACP, where every file
-  read/write and every shell command passes through the ACP proxy and can be
-  refused individually, OpenHands offers directory scoping only. This is strictly
-  weaker enforcement.
-- **`remote` mode is unvalidated and has a path-domain problem.** `working_dir` is
-  a path in the *Agent Server's* filesystem. A server in Docker or WSL cannot see
-  a Windows SceneWorks worktree, so commit-pinned isolation cannot be established
-  that way. Making remote mode work needs design (shipping or mounting the
-  worktree), not configuration.
-- **`http` and `cli` modes are implemented but unvalidated.**
-- **A model is mandatory.** `SCENEWORKS_OPENHANDS_MODEL` must be set (litellm
-  form); the SDK rejects an unspecified model and health reports unavailable.
-- **Version pinning is not optional.** `openhands-sdk` and `openhands-tools` must
-  be the same version: a mismatched pair installs cleanly and then fails at
-  import. The extra pins the validated 1.17.0 pair.
-- **Newer SDK releases currently cannot be installed.** `openhands-sdk` pulls
-  `lmnr`, which pins `opentelemetry-semantic-conventions==0.60b1` while
-  `opentelemetry-instrumentation` pins its own matching version; no combination
-  satisfies both (pip: `ResolutionImpossible`). Upstream issue.
-- **Installing the extra moves shared pins.** It adds ~150 packages and downgrades
-  pydantic (2.13.4 → 2.12.5) among others. The suite passes afterwards, but this
-  is why OpenHands is an optional extra rather than a default dependency.
-- **A hung run can outlive its timeout.** The SDK is synchronous and runs in a
-  worker thread, which cannot be forcibly killed; `pause()` is cooperative and is
-  observed between turns. A single LLM call with litellm's retry policy can take
-  minutes. `SCENEWORKS_OPENHANDS_MAX_ITERATIONS` (default 40) bounds the turn
-  count so a non-converging model finishes with partial output.
-- **No structured test results.** OpenHands reports no test outcome, so
-  `test.result` events are not produced rather than fabricated.
+## Verification UX gap
 
-### Gemini ACP backend specifics
+SceneWorks has substantial verification infrastructure but does not yet expose the complete task-level synthesis originally envisioned:
 
-- **Single-user profile**: On Windows, two Gemini instances may conflict
-  when run from the same user profile simultaneously.
-- **Console window**: On Windows, Gemini CLI requires a console window
-  for its shell tool. A window may briefly appear during execution.
-- **ACP v1 only**: The backend implements ACP protocol v1. Newer
-  protocol versions would require adapter updates.
+- acceptance criterion -> objective test/evidence -> result;
+- required test PASS/FAIL presentation;
+- allowed-scope/protected-path policy compliance presentation;
+- explicit overall `PASS | FAIL | UNVERIFIABLE` result;
+- dedicated **Verification** tab on the task page.
 
-### Git worktrees
+WP15–WP18 make this feasible because evidence is now durable and correlated. The missing work is the synthesis/UX layer, not another evidence store.
 
-- **Same filesystem**: Git worktrees must be on the same filesystem/drive
-  as the main repository (Git limitation).
-- **Windows path length**: Very deep worktree paths may exceed Windows
-  MAX_PATH (260 characters). Use `SCENEWORKS_WORKTREE_ROOT` with short paths.
+See [verification-and-issue-traceability.md](verification-and-issue-traceability.md).
 
-### Database
+## Routing UX gap
 
-- **SQLite only**: No PostgreSQL, MySQL, or other database backends.
-- **No migration tooling**: Database schema is created from SQLAlchemy
-  models with no versioned migrations.
+Settings already supports:
 
-### Frontend
+- selecting the default autonomous worker;
+- backend health/status;
+- `strongest | coding | research` profile -> backend/model mapping;
+- persisted concrete backend/model on each `Execution`;
+- explicit no-silent-fallback behavior.
 
-- **No major UI redesign**: The current UI is functional but not heavily
-  styled — it prioritizes correctness over visual design.
-- **No responsive mobile layout**: Designed for desktop browser use.
-- **No internationalization**: English only.
+The remaining routing gap is that **role -> profile assignment is still code configuration** in `backend/app/roles/definitions.py`. For example, Engineer defaults to `coding`, while Architect and Reviewer default to `strongest`. It is not currently editable from Settings.
 
-## Non-goals (not planned for V2)
+Settings also does not yet present one compact per-role row containing default profile, effective profile, resolved backend, resolved concrete model and source of inheritance/override.
 
-- RAG / embeddings / vector DB
-- Knowledge graph
-- CrewAI integration
-- PostgreSQL or other database backends
-- Remote worker infrastructure
-- GitHub PR / auto-merge
-- Parallel Engineers or competing Architects
-- Major UI redesign
-- User authentication / multi-tenancy
+## Issue traceability gap
 
-## Future directions
+The WP20 Issues page correctly reuses the existing Task domain (`bug | feature | idea`) instead of creating a second Jira-like database. However, closed issues do not yet have a first-class structured resolution snapshot.
 
-- Remote workers for distributed execution
-- OCI container-based sandboxing
-- Broker-backed event bus (Redis, NATS)
-- PostgreSQL for multi-instance deployments
-- User accounts and team sharing
-- GitHub/GitLab PR integration
+Recommended fields are:
+
+- root-cause claim;
+- fix/change summary;
+- objective verification result and evidence references;
+- changed commit/files;
+- remaining risk / unverifiable areas.
+
+The root-cause text is an engineering claim unless supported by evidence. Fix/verification metadata should be re-derived from SceneWorks Git/evidence rather than copied blindly from an agent response.
+
+## PCS limits
+
+- PCS semantic control depends on project-specific run profiles/configuration being defined.
+- Runtime semantic fields are only authoritative when PCS exposes them through a configured deterministic API. SceneWorks does not infer frame/playback/view state from logs.
+- Health probes are intentionally loopback-only in the current PCS control contract.
+- Binary crash dumps are not archived in the evidence ledger; SceneWorks stores bounded metadata/hash information.
+- Large NativeRuntime output bursts can eventually stress bounded incremental output buffers; long-lived high-volume logging should use durable PCS log evidence rather than treating process-output cursors as an infinite stream.
+
+## GUI limits
+
+- WP17/18 are restricted to the SceneWorks-managed PCS process; they are not generic desktop automation.
+- UI Automation only works for controls that expose usable Windows accessibility/UIA patterns.
+- Real Windows PCS/Qt control coverage must be qualified on the actual host; Linux CI verifies the provider-neutral contract, not real Windows control accessibility.
+- There is no fallback to arbitrary coordinate clicking or generic keyboard injection.
+- Pixel comparison is objective visual change evidence; interpreting what a screenshot *means* is still inference unless a deterministic image verifier exists.
+
+## Persistence
+
+- **SQLite only.** There is no PostgreSQL/multi-instance deployment today.
+- **Versioned migrations do exist.** Alembic migrations under `backend/migrations/versions/` are the schema-evolution mechanism. Older documentation claiming that SceneWorks has no migration tooling is obsolete.
+- Workflow checkpoints use a separate SQLite checkpoint store.
+
+## Project memory
+
+- Project Memory retrieval is deterministic term-based retrieval, not semantic embeddings/vector search.
+- It intentionally distinguishes accepted memory from proposals; model output does not become authoritative project knowledge automatically.
+- It is not a general knowledge graph.
+
+## Frontend
+
+- The web UI is desktop-oriented. Mobile/responsive behavior is not a primary qualification target.
+- No internationalization.
+- The WP20 Control page is observational; engineering mutations remain in governed task/MCP/runtime paths.
+
+## Deliberate non-goals for the current architecture
+
+- generic desktop remote control;
+- CrewAI or another orchestration framework solely to add agent roles;
+- a second Jira-like ticket lifecycle;
+- silent autonomous-provider failover after mutation;
+- automatic merge into the user's main branch;
+- treating agent/model prose as evidence;
+- duplicating provider-native capabilities without a SceneWorks governance/evidence reason.
+
+## Highest-value next hardening
+
+1. Real Windows PCS host qualification of WP16–WP18.
+2. First-class task Verification synthesis/UX.
+3. Structured issue-resolution snapshots backed by SceneWorks evidence.
+4. Editable role -> model-profile mapping plus explicit resolved-routing display.
+5. OS-level process/resource/network containment where a true security boundary is required.
