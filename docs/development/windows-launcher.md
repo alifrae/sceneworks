@@ -24,6 +24,7 @@ The launcher:
 - starts/reuses the frontend and waits for port 3000;
 - optionally verifies `/mcp` and starts the Secure MCP tunnel in its own PowerShell window;
 - waits for the tunnel readiness endpoint at `http://127.0.0.1:8080/readyz`;
+- can explicitly stop and relaunch the current SceneWorks API, frontend and MCP tunnel with `-Restart`;
 - opens SceneWorks in the default browser unless `-NoBrowser` is used.
 
 Normal use should stay in production mode because Next.js development mode can
@@ -31,6 +32,28 @@ compile a route the first time it is visited, which makes navigation look slower
 than the API actually is.
 
 ## Options
+
+Restart the currently running SceneWorks stack and relaunch it:
+
+```powershell
+.\scripts\start-sceneworks.ps1 -Restart
+```
+
+The `.cmd` wrapper forwards the same option:
+
+```powershell
+.\scripts\start-sceneworks.cmd -Restart
+```
+
+Restart checks the SceneWorks health/readiness endpoints first, resolves the
+listener process on ports `8010`, `3000` and `8080`, terminates the corresponding
+SceneWorks terminal/process tree, waits for the endpoint to go down, then follows
+the normal startup path. It does not blindly terminate an unrelated process just
+because it owns one of those ports.
+
+`-Restart -NoTunnel` stops an existing SceneWorks tunnel but does not start a new
+one. `-Restart -Rebuild` also forces a fresh production frontend build before the
+web server is relaunched.
 
 For UI development:
 
@@ -98,7 +121,8 @@ already reachable, the existing tunnel is reused instead of starting another
 one.
 
 The launcher likewise does not duplicate existing SceneWorks services: if the
-API or frontend health URL is already reachable, that service is reused.
+API or frontend health URL is already reachable, that service is reused unless
+`-Restart` was requested.
 
 See [the ChatGPT MCP plugin tutorial](../tutorials/chatgpt-mcp-plugin.md) for
 first-time tunnel creation and plugin configuration.
