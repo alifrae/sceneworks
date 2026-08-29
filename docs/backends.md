@@ -1,53 +1,43 @@
-# Agent Backends
+# Agent Backends and Model Routing
 
-## Three separate layers
-
-SceneWorks deliberately separates model inference, autonomous agent workers and
-machine execution:
+SceneWorks separates **model inference**, **autonomous agent workers**, and **machine execution**. These are different layers and should not be treated as interchangeable.
 
 ```text
-Model Provider
-Gemini / OpenAI / Anthropic / local / other provider
+Model provider
+Gemini / OpenAI / Anthropic / local / other
         |
         v
 AgentBackend
-Gemini ACP / OpenCode headless / OpenHands
+Gemini ACP / OpenCode / OpenHands
         |
         v
-SceneWorks-owned ExecutionRuntime
-filesystem / command / process / Git inside an EngineeringSession
+SceneWorks control plane
+Task workflow or EngineeringSession
+        |
+        v
+ExecutionRuntime / Git / PCS / evidence
 ```
 
-These layers are not interchangeable.
-
 - A **model provider** produces inference.
-- An **AgentBackend** is an autonomous worker implementing `run()`, `cancel()`
-  and `health()`.
-- An **ExecutionRuntime** provides model-free machine primitives used by direct
-  MCP EngineeringSessions.
+- An **AgentBackend** is an optional autonomous worker implementing `run()`, `cancel()` and `health()`.
+- An **ExecutionRuntime** is SceneWorks-owned, model-free machine execution for direct engineering sessions.
 
-A raw model API is therefore not automatically a SceneWorks coding agent, and an
-agent protocol such as ACP is not required by SceneWorks as a platform.
-
-See [WP14 provider-neutral execution](wp14-provider-neutral-execution.md) for the
-direct runtime/MCP architecture.
+A model API is not automatically a coding agent. ACP is one adapter transport, not a SceneWorks platform requirement.
 
 ## Current backends
 
 | Key | Transport | Status | Intended use |
 |---|---|---|---|
-| `gemini_acp` | Gemini CLI ACP over stdio | **Supported / default** | Primary worker; strongest permission mediation and current qualification baseline |
-| `opencode` | `opencode run` headless CLI | **Backup** | Write-capable coding/delegation using providers configured in OpenCode; no ACP dependency |
-| `openhands` | OpenHands SDK / Agent Server / CLI | **Experimental** | Optional alternative; current SceneWorks pin/qualification remains limited |
+| `gemini_acp` | Gemini CLI ACP over stdio | Supported / default | Primary autonomous worker and strongest current per-request mediation |
+| `opencode` | `opencode run` headless CLI | Backup | Write-capable coding/delegation using providers configured in OpenCode |
+| `openhands` | OpenHands SDK / Agent Server / CLI | Experimental | Optional alternative; not the execution substrate |
 | `fake` | in-process scripted backend | Tests only | Deterministic provider-independent qualification |
 
-Gemini CLI remains the recommended default. The important WP14 change is that a
-Gemini model/authentication failure no longer removes SceneWorks' direct MCP
-workspace, command/process or Git capabilities.
+Gemini CLI is the recommended default autonomous worker. A Gemini authentication/model failure does **not** remove direct MCP workspace, command/process, Git, PCS or GUI-evidence capabilities because those belong to SceneWorks' runtime/services.
 
-## Model routing
+## Current routing model
 
-Roles carry provider-neutral intent profiles such as:
+Roles declare a provider-neutral model profile, currently using:
 
 ```text
 strongest
@@ -55,11 +45,22 @@ coding
 research
 ```
 
-`ModelRouter` resolves a profile to an optional concrete backend/model when an
-Execution is created. That concrete selection is persisted on the Execution so
-later setting changes cannot rewrite provenance.
+Examples from the current role definitions:
 
-Example:
+| Role | Default profile |
+|---|---|
+| CEO | `strongest` |
+| CTO | `strongest` |
+| Chief Architect | `strongest` |
+| Technical Expert | `strongest` |
+| Product | `strongest` |
+| Engineer | `coding` |
+| Reviewer / QA | `strongest` |
+| GTM | `research` |
+
+`ModelRouter` then resolves the profile to an optional concrete backend/model from Settings.
+
+Example profile routes:
 
 ```json
 {
@@ -69,21 +70,51 @@ Example:
 }
 ```
 
-Routes can be configured from the Settings page or
-`SCENEWORKS_MODEL_PROFILE_ROUTES`.
+The concrete backend/model is persisted on the `Execution` when the execution is created. Later Settings changes therefore do not rewrite provenance.
+
+### What is editable today
+
+The Settings page currently allows:
+
+- default worker selection;
+- backend health/status inspection;
+- `strongest | coding | research` -> backend/model overrides;
+- Gemini/OpenCode executable/model configuration.
+
+### Remaining routing UX gap
+
+The **role -> profile assignment itself is still hard-coded in `backend/app/roles/definitions.py`**. It is not yet editable in Settings.
+
+A useful follow-up is a per-role routing table showing:
+
+```text
+Role | default profile | effective profile | resolved backend | resolved model | source
+```
+
+with an optional profile override per role. That would complete the original routing UI intent without introducing a second routing engine.
+
+## No-silent-fallback policy
+
+SceneWorks does not silently hand a partially mutated worktree from one autonomous provider to another.
+
+Safe rules:
+
+1. Before an agent starts, a configured backend may be selected normally.
+2. Direct MCP/runtime work remains independent of autonomous provider health.
+3. If an autonomous worker fails after mutation, preserve the worktree and inspect the SceneWorks/Git evidence.
+4. Delegating the partially changed worktree to another provider must be an explicit decision.
+
+This prevents hidden provider failover from compounding an unknown partial implementation.
 
 ## Gemini ACP
 
-`backend/app/agents/gemini_acp.py` remains the primary adapter.
-
-Characteristics:
+`backend/app/agents/gemini_acp.py` is the primary autonomous adapter.
 
 - Gemini CLI is launched in ACP mode.
-- SceneWorks mediates ACP file/shell requests according to role policy.
-- ACP/session updates map to the generic SceneWorks event vocabulary.
-- Gemini provider-native capabilities such as web/search/subagents stay inside
-  this backend; SceneWorks does not duplicate them in the native runtime.
-- Gemini authentication/model availability is external to SceneWorks.
+- SceneWorks mediates ACP client-side file/shell requests according to role policy.
+- ACP updates map into SceneWorks' generic execution event vocabulary.
+- Provider-native features such as search or subagents remain inside the adapter/provider rather than being cloned into NativeRuntime.
+- Provider authentication/model availability remains external to SceneWorks.
 
 Configuration:
 
@@ -92,21 +123,19 @@ SCENEWORKS_GEMINI_EXECUTABLE=gemini
 SCENEWORKS_GEMINI_MODEL=
 ```
 
-An empty model value leaves model selection to Gemini CLI unless a profile route
-or execution-specific model overrides it.
+An empty model means the backend/provider default is used unless a profile route overrides it.
 
 ## OpenCode backup
 
-WP14 adds `backend/app/agents/opencode.py` as an independent non-ACP worker.
-
-SceneWorks invokes the documented headless form:
+SceneWorks invokes OpenCode headlessly rather than requiring ACP:
 
 ```text
 opencode run --auto --dir <worktree> [--model provider/model] [--agent name] <prompt>
 ```
 
-Provider credentials and provider catalog configuration remain owned by
-OpenCode. SceneWorks persists only non-sensitive operational choices.
+Provider credentials and catalog configuration remain owned by OpenCode.
+
+Current policy boundary: the headless OpenCode adapter is intended for write-capable coding/delegation. SceneWorks does not claim the same per-tool read-only mediation as Gemini ACP for this adapter.
 
 Configuration:
 
@@ -116,148 +145,44 @@ SCENEWORKS_OPENCODE_MODEL=<provider/model>
 SCENEWORKS_OPENCODE_AGENT=
 ```
 
-### Current OpenCode policy boundary
+## OpenHands
 
-WP14 intentionally restricts this adapter to workspaces that grant
-`repository_write`.
+OpenHands remains optional and experimental. It is not required for direct SceneWorks execution and is not the preferred backup path for the current architecture.
 
-Headless `--auto` does not provide the same SceneWorks-controlled per-tool
-read-only mediation as the Gemini ACP proxy. SceneWorks therefore does not use
-this adapter for read-only roles and does not claim permission parity.
-
-This makes OpenCode a useful coding/delegation backup without weakening a role
-that is supposed to be read-only.
-
-## OpenHands status
-
-OpenHands remains optional and **experimental** in WP14. WP14 does not upgrade or
-requalify it; the existing pinned integration is kept intact while the new native
-ExecutionRuntime removes any need to make OpenHands the SceneWorks execution
-substrate.
-
-Current SceneWorks qualification baseline:
-
-- `openhands-sdk==1.17.0`
-- `openhands-tools==1.17.0`
-- local mode previously validated for read-only roles on the original Windows
-  qualification environment;
-- remote/http/cli modes implemented but not qualified as production backups;
-- current dependency/version limitations remain documented in
-  [limitations.md](limitations.md) and
-  [wp2.5-openhands-validation.md](wp2.5-openhands-validation.md).
-
-Configuration remains:
-
-```env
-SCENEWORKS_OPENHANDS_MODEL=<litellm-model>
-SCENEWORKS_OPENHANDS_BASE_URL=<model-endpoint>
-SCENEWORKS_OPENHANDS_URL=<optional-agent-server>
-SCENEWORKS_OPENHANDS_MODE=local
-```
-
-Do not confuse `OPENHANDS_BASE_URL` (model endpoint) with `OPENHANDS_URL`
-(OpenHands Agent Server).
+Existing dependency/platform limitations are recorded in [limitations.md](limitations.md) and the historical [WP2.5 OpenHands validation](wp2.5-openhands-validation.md).
 
 ## Direct execution is not an AgentBackend
 
-WP14's `backend/app/runtime/native.py` is intentionally not another autonomous
-agent. It contains no prompt/model loop.
-
-Direct MCP flow:
+`backend/app/runtime/native.py` contains no model or prompt loop.
 
 ```text
-ChatGPT
-  |
-  v
-SceneWorks MCP
-  |
-  v
-EngineeringSession
-  |
-  v
-NativeRuntime
-  +-- workspace read/search/write
-  +-- command.run
-  +-- process start/output/stop
-  +-- Git status/diff/commit
+ChatGPT / supervisor
+  -> SceneWorks MCP
+     -> EngineeringSession
+        -> NativeRuntime
+           -> workspace
+           -> commands/processes
+           -> Git
 ```
 
-This path remains functional if every configured agent model is unavailable.
+PCS lifecycle, GUI evidence and controlled UI Automation are SceneWorks services layered on the same governed session/evidence model; they are not autonomous backends either.
 
-When autonomous implementation is useful, `sceneworks.agent.delegate` invokes a
-registered AgentBackend in the already-created EngineeringSession worktree.
-
-## Fallback policy
-
-SceneWorks does not silently transfer partially mutated work between autonomous
-providers.
-
-Safe rules:
-
-1. Before an autonomous execution starts, the operator/router may select another
-   configured backend.
-2. Direct MCP runtime work can continue independently of provider health.
-3. If an agent fails after mutating the worktree, preserve the worktree, inspect
-   the actual Git diff, and deliberately decide whether to resume or delegate to
-   another backend.
-
-This avoids compounding an unknown partial change through invisible failover.
+When autonomous coding is useful, `sceneworks.agent.delegate` can invoke a configured `AgentBackend` inside the already-governed EngineeringSession worktree.
 
 ## Adding an AgentBackend
 
-Implement `AgentBackend` from `backend/app/agents/base.py` in one adapter module.
-The adapter must:
+A new backend adapter should:
 
-- implement `run()`, `cancel()` and `health()`;
-- receive only generic `AgentRequest`, `Workspace`, and `AgentEventSink` types;
+- implement the common `run / cancel / health` contract;
+- receive generic SceneWorks request/workspace/event types;
 - keep provider/protocol-specific objects inside the adapter;
-- emit only SceneWorks event vocabulary;
-- respect the provided worktree and clearly document its actual confinement and
-  permission strength;
-- return failed/cancelled `AgentResult`s rather than leaking routine provider
-  failures through the engine;
-- include deterministic tests that do not need a paid/live provider;
-- update Settings/operator documentation when selectable.
+- respect the supplied worktree and state its real confinement strength accurately;
+- return explicit failed/cancelled results rather than silently switching providers;
+- have deterministic non-live tests;
+- expose operator settings only when they are actually useful.
 
-ACP, HTTP, SDK and headless CLI adapters are all valid. Do not introduce an ACP
-requirement into `AgentBackend`.
-
-## Adding an ExecutionRuntime
-
-Implement `ExecutionRuntime` under `backend/app/runtime/`.
-
-Runtime implementations must:
-
-- contain no model reasoning or prompt loop;
-- treat MCP paths as untrusted;
-- enforce their documented EngineeringSession boundaries;
-- associate persistent processes with the owning session/worktree;
-- bound returned output;
-- describe OS/container limitations accurately.
-
-A new runtime is useful for a materially different execution environment (for
-example a future container/remote worker). It should not exist merely to clone a
-provider's native agent tools.
-
-## Backend evaluation
-
-Evaluate a new autonomous backend against:
-
-| Criterion | Question |
-|---|---|
-| Repository exploration | Can it understand the codebase without leaking outside its allowed workspace? |
-| Correctness | Does it produce working, reviewable changes? |
-| Scope discipline | Does it respect the requested boundary? |
-| Test/debug loop | Can it run targeted verification and react to failures? |
-| Permission strength | What is actually enforced, not merely requested in a prompt? |
-| Cancellation | Can SceneWorks terminate or cooperatively stop it? |
-| Event quality | Is execution observable without provider-specific leakage? |
-| Reliability | How often does it complete vs fail? |
-| Portability | Does SceneWorks depend on provider-specific protocol semantics outside the adapter? |
+ACP, headless CLI, HTTP and SDK transports are all valid adapter strategies.
 
 ## Security note
 
-Neither a worktree nor a working-directory restriction is an OS sandbox. Any
-backend/runtime that can launch arbitrary processes may exercise the operating
-system authority of the user running SceneWorks. Use an actual container/OS
-sandbox or network boundary when hostile-code isolation is required.
+A worktree or working-directory restriction is not an OS sandbox. Any backend/runtime that can launch arbitrary processes may exercise the operating-system authority of the user running SceneWorks. Use an actual OS/container/network boundary when hostile-code isolation is required.
