@@ -160,8 +160,6 @@ class SupervisorApplication:
             try:
                 self.monitor_once()
             except Exception:
-                # The next monitor cycle must still run. Operational failures are
-                # captured by lifecycle operations rather than crashing supervision.
                 continue
 
 
@@ -175,6 +173,7 @@ def serialize_status(status: SupervisorStatus) -> dict[str, Any]:
                 "restart_attempts": row.restart_attempts,
                 "last_transition_at": row.last_transition_at,
                 "healthy_since": row.healthy_since,
+                "enabled": row.enabled,
             }
             for component, row in status.components.items()
         },
