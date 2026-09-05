@@ -1,22 +1,16 @@
-"""SceneWorks MCP reasoning, engineering-control, PCS and GUI interface.
-
-Observe and Standard modes expose semantic SceneWorks concepts. Advanced mode
-adds provider-neutral EngineeringSessions, durable WP15 evidence correlation,
-WP16 PCS runtime semantics, WP17 GUI evidence and WP18 controlled accessibility
-automation. Agent providers are optional workers; SceneWorks-captured runtime,
-process, log, Git, PCS and GUI observations remain the evidence authority.
-"""
+"""SceneWorks MCP reasoning, engineering-control, PCS, GUI and system interface."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from app.mcp.integrity import ControlPlaneIntegrityMCPServer
-from app.mcp.server import MCPToolError
+from app.mcp.server import MCPToolError, _bounded, _tool
+from app.services.supervisor import SupervisorUnavailable
 
 
 class SceneWorksMCPServer(ControlPlaneIntegrityMCPServer):
-    """Canonical server with provider-neutral PCS/GUI and integrity guidance."""
+    """Canonical server with provider-neutral engineering and lifecycle controls."""
 
     def _wp18_instructions(self) -> str:
         if self.mode == "observe":
@@ -46,8 +40,71 @@ class SceneWorksMCPServer(ControlPlaneIntegrityMCPServer):
             "gui_automate, resolves opaque UI Automation control ids only inside the current "
             "SceneWorks-managed PCS window, never uses caller-supplied screen coordinates, and "
             "requires before/after screenshot evidence with deterministic visual comparison. "
+            "WP21 infrastructure lifecycle mutation is semantic and supervisor-owned; MCP may "
+            "request only api/web/mcp_tunnel/all restart operations and never receives raw PID, "
+            "port, command, executable, environment, or shell authority. "
             + mode_text
         )
+
+    def tool_definitions(self) -> list[dict[str, Any]]:
+        tools = super().tool_definitions()
+        read_only = {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        }
+        lifecycle_action = {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+        }
+        tools.extend(
+            [
+                _tool(
+                    "sceneworks.system.status",
+                    "Return bounded local SceneWorks API/web/MCP-tunnel lifecycle state from the out-of-process supervisor.",
+                    {},
+                    read_only,
+                ),
+                _tool(
+                    "sceneworks.system.restart",
+                    "Request a journaled semantic restart of one SceneWorks infrastructure component or the complete stack. No PID, port, path, URL, command or environment input is accepted.",
+                    {
+                        "component": {
+                            "type": "string",
+                            "enum": ["api", "web", "mcp_tunnel", "all"],
+                        }
+                    },
+                    lifecycle_action,
+                    required=["component"],
+                ),
+            ]
+        )
+        return tools
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if name not in {"sceneworks.system.status", "sceneworks.system.restart"}:
+            return await super().call_tool(name, arguments)
+        args = arguments or {}
+        if self.ctx.supervisor is None:
+            raise MCPToolError("local SceneWorks lifecycle supervisor is unavailable")
+        try:
+            if name == "sceneworks.system.status":
+                if args:
+                    raise MCPToolError("sceneworks.system.status accepts no arguments")
+                result = await self.ctx.supervisor.status()
+            else:
+                if set(args) != {"component"}:
+                    raise MCPToolError("sceneworks.system.restart accepts only component")
+                component = str(args.get("component") or "")
+                if component not in {"api", "web", "mcp_tunnel", "all"}:
+                    raise MCPToolError("component must be api, web, mcp_tunnel, or all")
+                result = await self.ctx.supervisor.restart(component, actor="mcp")
+        except SupervisorUnavailable as exc:
+            raise MCPToolError(str(exc)) from exc
+        return _bounded(result, int(self.ctx.settings.mcp_tool_max_chars))
 
     def _require_advanced(self) -> None:
         if self.mode != "advanced":

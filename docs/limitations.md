@@ -1,11 +1,12 @@
 # Known Limitations
 
-This file describes the **current** SceneWorks boundary after WP20. Historical V2/V3/WP documents should not be used as the current limitations list.
+This file describes the **current** SceneWorks boundary after WP21. Historical V2/V3/WP documents should not be used as the current limitations list.
 
 ## Deployment and trust
 
-- **Single-machine control plane.** FastAPI, workflow execution, SQLite, local runtimes and agent processes run on one host. There is no distributed worker scheduler.
+- **Single-machine control plane.** FastAPI, workflow execution, SQLite, local runtimes, the lifecycle supervisor and agent processes run on one host. There is no distributed worker scheduler.
 - **Trusted local API.** SceneWorks binds to loopback by default and has no end-user login/RBAC. Do not publish the bare FastAPI service directly to an untrusted network.
+- **Local lifecycle supervisor only.** WP21 binds the supervisor to `127.0.0.1:8020` and uses a local bearer token for mutations. It is not a remote-management endpoint and must not be published directly.
 - **Remote MCP requires a trusted boundary.** Use an authenticated tunnel/reverse proxy and keep the SceneWorks API itself private.
 
 ## Execution security
@@ -14,6 +15,18 @@ This file describes the **current** SceneWorks boundary after WP20. Historical V
 - **`network_access=false` is not hard egress enforcement.** A shell-capable process can use host networking unless an OS/container/firewall boundary prevents it.
 - **NativeRuntime process handles are in-memory.** `EngineeringSession` and managed PCS run metadata persist, but an OS process handle does not survive SceneWorks restart. Persisted managed PCS runs are therefore reconciled to `LOST` after restart rather than pretending control was retained.
 - **External assets are read-only by contract, not a filesystem sandbox.** SceneWorks only exposes declared asset aliases through the PCS API/MCP surface; a separately permitted arbitrary shell process still has the OS user's filesystem authority.
+
+## Infrastructure lifecycle limits
+
+WP21 gives SceneWorks durable local lifecycle ownership for `api`, `web`, and `mcp_tunnel`, but it deliberately stops short of remote administration or generic process supervision.
+
+- **Fixed component set.** The supervisor cannot launch arbitrary executables or manage arbitrary ports/processes. New lifecycle targets require an explicit semantic component contract, health probe, startup grace, ownership proof, bounded recovery policy, and tests.
+- **Windows is the primary host target.** CI validates the Windows process provider, launcher parsing, and deterministic lifecycle contracts, but destructive recovery behavior still needs final qualification on the actual SceneWorks laptop/process tree.
+- **Supervisor availability remains a dependency.** If the supervisor process itself exits, API/web/tunnel automatic recovery is unavailable until the launcher starts the supervisor again. WP21 does not install a Windows Service or OS-level watchdog for the supervisor itself.
+- **Bootstrap configuration is process-lifetime configuration.** `-Dev` and `-NoTunnel` affect a newly started supervisor. An already-running supervisor retains the configuration it was started with; changing those flags requires restarting the supervisor process.
+- **Legacy adoption is deliberately conservative.** Existing pre-WP21 processes are adopted only when both the fixed listener and expected command fingerprint match. Ambiguous cases remain `UNKNOWN` rather than being forcefully taken over.
+- **Recovery is bounded, not infinite.** Three attempts in a rolling five-minute window lead to `DEGRADED`; this is intentional crash-loop protection, not an availability defect.
+- **No remote hub/edge recovery yet.** A future distributed/remote recovery design must use a new trust boundary rather than exposing the loopback supervisor remotely.
 
 ## Agent backend limits
 
@@ -105,6 +118,7 @@ The root-cause text is an engineering claim unless supported by evidence. Fix/ve
 - **SQLite only.** There is no PostgreSQL/multi-instance deployment today.
 - **Versioned migrations do exist.** Alembic migrations under `backend/migrations/versions/` are the schema-evolution mechanism. Older documentation claiming that SceneWorks has no migration tooling is obsolete.
 - Workflow checkpoints use a separate SQLite checkpoint store.
+- WP21 lifecycle operations use a separate supervisor SQLite journal so acceptance/recovery history survives FastAPI restarts.
 
 ## Project memory
 
@@ -117,10 +131,12 @@ The root-cause text is an engineering claim unless supported by evidence. Fix/ve
 - The web UI is desktop-oriented. Mobile/responsive behavior is not a primary qualification target.
 - No internationalization.
 - The WP20 Control page is observational; engineering mutations remain in governed task/MCP/runtime paths.
+- WP21 Diagnostics can request semantic infrastructure restarts, but lifecycle credentials remain server-side and the browser is not a general process-control client.
 
 ## Deliberate non-goals for the current architecture
 
 - generic desktop remote control;
+- generic/remote process administration through the WP21 supervisor;
 - CrewAI or another orchestration framework solely to add agent roles;
 - a second Jira-like ticket lifecycle;
 - silent autonomous-provider failover after mutation;
@@ -130,8 +146,9 @@ The root-cause text is an engineering claim unless supported by evidence. Fix/ve
 
 ## Highest-value next hardening
 
-1. Real Windows PCS host qualification of WP16–WP18.
+1. Real Windows host qualification of WP21 recovery/ownership plus WP16–WP18 PCS/GUI behavior.
 2. First-class task Verification synthesis/UX.
 3. Structured issue-resolution snapshots backed by SceneWorks evidence.
 4. Editable role -> model-profile mapping plus explicit resolved-routing display.
-5. OS-level process/resource/network containment where a true security boundary is required.
+5. Decide whether supervisor self-watch/Windows-Service integration is justified after laptop qualification; do not add it preemptively.
+6. OS-level process/resource/network containment where a true security boundary is required.

@@ -1,16 +1,17 @@
 # SceneWorks Architecture
 
-This document describes the current architecture after WP20. Historical WP documents remain useful implementation records, but they are not the canonical description of the running system.
+This document describes the current architecture after WP21. Historical WP documents remain useful implementation records, but they are not the canonical description of the running system.
 
 ## System model
 
-SceneWorks is a local engineering control plane. It supports governed task workflows and direct engineering supervision while keeping model providers, autonomous workers, machine execution, and evidence as separate concerns.
+SceneWorks is a local engineering control plane. It supports governed task workflows and direct engineering supervision while keeping model providers, autonomous workers, machine execution, infrastructure lifecycle, and evidence as separate concerns.
 
 ```mermaid
 graph TD
     WEB["Web UI"]
-    SUP["External supervisor / ChatGPT MCP"]
+    EXT["External supervisor / ChatGPT MCP"]
     API["FastAPI control plane"]
+    LCS["Local Lifecycle Supervisor\n127.0.0.1:8020"]
     TASK["Governed Task / LangGraph workflow"]
     ES["EngineeringSession"]
     EVID["Engineering evidence ledger"]
@@ -20,11 +21,14 @@ graph TD
     GUI["PCS GUI evidence / UI Automation"]
     GIT["Git worktrees"]
     DB["SQLite + Alembic"]
+    INFRA["API / Web / MCP tunnel processes"]
 
     WEB --> API
-    SUP --> API
+    EXT --> API
     API --> TASK
     API --> ES
+    API --> LCS
+    WEB --> LCS
     TASK --> AB
     TASK --> GIT
     ES --> NR
@@ -39,7 +43,10 @@ graph TD
     TASK --> DB
     ES --> DB
     EVID --> DB
+    LCS --> INFRA
 ```
+
+The web browser does not talk directly to the lifecycle supervisor. Diagnostics lifecycle requests pass through Next.js server-only routes so the bearer token never reaches browser JavaScript.
 
 ## Authority boundaries
 
@@ -56,6 +63,29 @@ SceneWorks owns:
 - final human decision boundaries.
 
 An external agent may propose a diagnosis or claim that a fix works. That output is **inference**. SceneWorks-observed Git state, command results, process state, PCS observations, screenshots, and deterministic runbook results are **evidence**.
+
+### Infrastructure lifecycle is supervisor-owned
+
+WP21 introduces a separate standard-library Python supervisor bound only to `127.0.0.1:8020`. It owns lifecycle for three fixed infrastructure components: `api`, `web`, and `mcp_tunnel`.
+
+The supervisor owns:
+
+- process-ownership metadata and fingerprint checks;
+- startup grace and health sampling;
+- bounded automatic recovery and restart budgets;
+- stop/start dependency ordering;
+- durable operation acceptance/journaling before mutation.
+
+FastAPI, provider agents, browser JavaScript, and the PowerShell launcher are clients, not lifecycle authorities. They may request semantic operations only. A port match alone is never authority to terminate a process; ambiguous ownership fails closed.
+
+The MCP lifecycle surface is intentionally narrow:
+
+```text
+sceneworks.system.status
+sceneworks.system.restart(component=api|web|mcp_tunnel|all)
+```
+
+It exposes no arbitrary PID, port, path, executable, URL, environment, command, or shell input.
 
 ### AgentBackend is optional autonomous labor
 
@@ -81,6 +111,8 @@ EngineeringSession
 ```
 
 The runtime is worktree/session scoped, but arbitrary commands still execute with the OS authority of the user running SceneWorks. Repository confinement is not an OS sandbox.
+
+Infrastructure lifecycle is separate from `ExecutionRuntime`: API/web/MCP-tunnel recovery goes through the WP21 supervisor rather than generic engineering process primitives.
 
 ## Governed task workflow
 
@@ -120,6 +152,8 @@ Evidence categories include workspace, command/process, Git, PCS runtime/logs, v
 
 The evidence ledger does not duplicate full repository source/diffs. Large payloads are bounded and Git text is represented by hashes/metadata where appropriate.
 
+WP21 infrastructure operations use a separate bounded SQLite operation journal because they must survive API restarts. Lifecycle journal entries are operational evidence but do not contain credentials, environment dictionaries, or arbitrary command strings.
+
 ## PCS runtime control
 
 WP16 makes PCS lifecycle a SceneWorks-owned semantic capability rather than an agent-owned shell convention.
@@ -140,7 +174,7 @@ No arbitrary PID/HWND input, coordinate clicking, generic keyboard injection, or
 
 ## Web control surfaces
 
-WP20 aligns the web application with the execution architecture.
+WP20 aligned the web application with the engineering-control architecture. WP21 extends Diagnostics with local infrastructure lifecycle state and semantic restart controls without making the browser a process authority.
 
 - **Home** — create work and surface attention/active/recent items.
 - **Work** — full governed task thread.
@@ -148,9 +182,9 @@ WP20 aligns the web application with the execution architecture.
 - **Projects** — repository registration lifecycle.
 - **Control** — bounded read-only aggregate of active EngineeringSessions, managed PCS runs and recent evidence.
 - **Settings** — backend/model/MCP configuration.
-- **Diagnostics** — API/performance/connectivity diagnostics.
+- **Diagnostics** — API/performance/connectivity diagnostics plus API/web/MCP-tunnel lifecycle status and semantic restart actions.
 
-`GET /api/control-center` is intentionally observational. It does not introduce a second mutation/control API.
+`GET /api/control-center` remains observational. WP21 lifecycle actions use dedicated Next.js server routes that proxy to the loopback supervisor and keep the supervisor token server-side.
 
 ## Model routing
 
@@ -172,7 +206,8 @@ SceneWorks already stores the ingredients for objective verification:
 - workflow events/execution results;
 - WP15 engineering evidence;
 - WP16 deterministic PCS verification evidence;
-- WP17/18 visual evidence.
+- WP17/18 visual evidence;
+- WP21 bounded infrastructure lifecycle state/operation history.
 
 The missing layer is a first-class task-level synthesis that maps each criterion/test/policy rule to evidence and returns `PASS`, `FAIL`, or `UNVERIFIABLE`. Reviewer approval is not itself objective evidence.
 
@@ -187,14 +222,19 @@ See [verification-and-issue-traceability.md](verification-and-issue-traceability
 | workflow checkpoint SQLite | LangGraph durable workflow checkpoints |
 | worktree filesystem | Isolated task/engineering worktrees |
 | SceneWorks attachment/artifact storage | Task attachments and GUI screenshot evidence |
+| supervisor local data | bearer token, bounded process-ownership metadata, lifecycle operation journal |
+
+On Windows the supervisor data defaults to `%LOCALAPPDATA%\SceneWorks\supervisor\`.
 
 ## Security/trust boundary
 
-The API is a trusted local control plane and binds to loopback by default. There is currently no end-user authentication/RBAC.
+FastAPI is a trusted local control plane and binds to loopback by default. There is currently no end-user authentication/RBAC.
+
+The WP21 lifecycle supervisor is a separate local trust boundary: it also binds only to loopback, mutations require a per-user bearer token, and browser clients never receive that token. It is not a remote administration endpoint.
 
 Worktree/path checks reduce accidental scope violations, but a process with shell execution has the privileges of the SceneWorks OS user. `network_access=false` is not a hard egress boundary without OS/container/firewall enforcement.
 
-MCP remote access should therefore use a trusted authenticated tunnel/reverse proxy; the bare FastAPI service should not be published directly.
+MCP remote access should therefore use a trusted authenticated tunnel/reverse proxy; the bare FastAPI service and the lifecycle supervisor must not be published directly.
 
 ## Dependency rule
 
@@ -206,6 +246,10 @@ Web / MCP
       -> task workflow OR EngineeringSession
          -> SceneWorks services/runtime/evidence
             -> Git / PCS / optional AgentBackend
+
+Web server routes / FastAPI SupervisorClient / launcher
+   -> local lifecycle supervisor
+      -> owned API / web / MCP-tunnel process trees
 ```
 
-Provider/protocol-specific objects belong inside adapters. Agent backends must not become the authority for Git, PCS state, verification truth, or evidence persistence.
+Provider/protocol-specific objects belong inside adapters. Agent backends must not become the authority for Git, PCS state, verification truth, evidence persistence, or SceneWorks infrastructure lifecycle.
