@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib import error, request
 
 from supervisor.core import LifecycleSupervisor
-from supervisor.http_api import SupervisorApplication, create_server
+from supervisor.http_api import SupervisorApplication, create_server, serialize_status
 from supervisor.journal import OperationJournal
 from supervisor.model import ComponentKey
 from supervisor.providers import FakeHealthProvider, FakeProcessProvider
@@ -131,6 +131,26 @@ class SupervisorHttpApiTests(unittest.TestCase):
         self.assertNotIn("Authorization", serialized)
         self.assertEqual(body["aggregate_state"], "HEALTHY")
         self.assertEqual(set(body["components"]), {"api", "web", "mcp_tunnel"})
+        self.assertTrue(all(row["enabled"] for row in body["components"].values()))
+
+    def test_status_serialization_preserves_disabled_component_state(self) -> None:
+        processes = FakeProcessProvider()
+        health = FakeHealthProvider()
+        for component in ComponentKey:
+            processes.set_process(component, running=True, owned=True)
+            health.set_healthy(component, True)
+        supervisor = LifecycleSupervisor(
+            process_provider=processes,
+            health_provider=health,
+            enabled_components={ComponentKey.API, ComponentKey.WEB},
+        )
+        supervisor.reconcile()
+
+        payload = serialize_status(supervisor.status())
+
+        self.assertEqual(payload["aggregate_state"], "HEALTHY")
+        self.assertFalse(payload["components"]["mcp_tunnel"]["enabled"])
+        self.assertEqual(payload["components"]["mcp_tunnel"]["state"], "STOPPED")
 
     def test_automatic_recovery_is_journaled_before_process_mutation(self) -> None:
         self.health.set_healthy(ComponentKey.API, False)
