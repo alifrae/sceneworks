@@ -42,14 +42,11 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
 
     def test_three_failed_samples_trigger_automatic_restart(self) -> None:
         self.health.set_healthy(ComponentKey.API, False)
-
         self.supervisor.monitor_once()
         self.supervisor.monitor_once()
         self.assertEqual(self.processes.calls, [])
-
         self.health.queue_results(ComponentKey.API, [False, True])
         self.supervisor.monitor_once()
-
         self.assertEqual(
             self.processes.calls,
             [("stop", ComponentKey.API), ("start", ComponentKey.API)],
@@ -64,9 +61,7 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
         self.processes.set_process(ComponentKey.API, running=False, owned=True)
         self.health.set_healthy(ComponentKey.API, False)
         self.health.queue_results(ComponentKey.API, [True])
-
         self.supervisor.monitor_once()
-
         self.assertEqual(self.processes.calls, [("start", ComponentKey.API)])
         self.assertEqual(self.clock.sleeps, [1.0])
         self.assertEqual(
@@ -76,11 +71,9 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
 
     def test_restart_budget_exhaustion_transitions_to_degraded(self) -> None:
         self.health.set_healthy(ComponentKey.API, False)
-
         self.supervisor.monitor_once()
         self.supervisor.monitor_once()
         self.supervisor.monitor_once()
-
         starts = [call for call in self.processes.calls if call == ("start", ComponentKey.API)]
         self.assertEqual(len(starts), 3)
         self.assertEqual(self.clock.sleeps, [1.0, 2.0, 5.0])
@@ -98,12 +91,10 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
             self.supervisor.status().components[ComponentKey.API].restart_attempts,
             1,
         )
-
         self.health.set_healthy(ComponentKey.API, True)
         self.supervisor.monitor_once()
         self.clock.advance(600.0)
         self.supervisor.monitor_once()
-
         self.assertEqual(
             self.supervisor.status().components[ComponentKey.API].restart_attempts,
             0,
@@ -111,7 +102,6 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
 
     def test_restart_all_uses_dependency_order(self) -> None:
         self.supervisor.restart_all(actor="local_cli")
-
         self.assertEqual(
             self.processes.calls,
             [
@@ -128,15 +118,23 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
         self.processes.set_process(ComponentKey.API, running=True, owned=False)
         self.supervisor.reconcile()
         self.processes.calls.clear()
-
         with self.assertRaises(LifecycleError):
             self.supervisor.stop(ComponentKey.API, actor="local_cli")
-
         self.assertEqual(self.processes.calls, [])
         self.assertIn(
             self.supervisor.status().components[ComponentKey.API].state,
             {ComponentState.UNKNOWN, ComponentState.DEGRADED},
         )
+
+    def test_reachable_endpoint_without_owned_process_is_unknown(self) -> None:
+        self.processes.set_process(ComponentKey.API, running=False, owned=False)
+        self.health.set_healthy(ComponentKey.API, True)
+        self.supervisor.reconcile()
+        self.assertEqual(
+            self.supervisor.status().components[ComponentKey.API].state,
+            ComponentState.UNKNOWN,
+        )
+        self.assertEqual(self.processes.calls, [])
 
 
 if __name__ == "__main__":
