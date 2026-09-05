@@ -19,6 +19,7 @@ class FakeProcessHost:
     def __init__(self) -> None:
         self.next_pid = 100
         self.processes: dict[int, ProcessSnapshot] = {}
+        self.listeners: dict[int, list[ProcessSnapshot]] = {}
         self.launches: list[LaunchSpec] = []
         self.terminations: list[int] = []
 
@@ -34,6 +35,9 @@ class FakeProcessHost:
 
     def inspect(self, pid: int) -> ProcessSnapshot | None:
         return self.processes.get(pid)
+
+    def find_listeners(self, port: int) -> list[ProcessSnapshot]:
+        return list(self.listeners.get(port, []))
 
     def terminate_tree(self, pid: int) -> None:
         self.terminations.append(pid)
@@ -118,6 +122,55 @@ class ManagedProcessProviderTests(unittest.TestCase):
         self.assertNotIn("CONTROL_PLANE_API_KEY", raw)
         parsed = json.loads(raw)
         self.assertEqual(parsed["api"]["pid"], 100)
+
+    def test_legacy_adoption_uses_separate_listener_fingerprint(self) -> None:
+        spec = LaunchSpec(
+            component=ComponentKey.API,
+            argv=("uv", "run", "python", "-m", "app.main"),
+            cwd=Path("backend"),
+            fingerprint=("uv", "app.main"),
+            adopt_port=8010,
+            adopt_fingerprint=("app.main",),
+        )
+        self.host.listeners[8010] = [
+            ProcessSnapshot(pid=222, command_line="python.exe -m app.main")
+        ]
+        self.host.processes[222] = self.host.listeners[8010][0]
+        provider = ManagedProcessProvider(
+            specs={ComponentKey.API: spec},
+            store=ProcessMetadataStore(self.store_path),
+            host=self.host,
+        )
+
+        observation = provider.observe(ComponentKey.API)
+
+        self.assertTrue(observation.running)
+        self.assertTrue(observation.owned)
+        self.assertEqual(observation.pid, 222)
+
+    def test_legacy_adoption_still_rejects_unrelated_listener(self) -> None:
+        spec = LaunchSpec(
+            component=ComponentKey.API,
+            argv=("uv", "run", "python", "-m", "app.main"),
+            cwd=Path("backend"),
+            fingerprint=("uv", "app.main"),
+            adopt_port=8010,
+            adopt_fingerprint=("app.main",),
+        )
+        self.host.listeners[8010] = [
+            ProcessSnapshot(pid=333, command_line="unrelated.exe --port 8010")
+        ]
+        provider = ManagedProcessProvider(
+            specs={ComponentKey.API: spec},
+            store=ProcessMetadataStore(self.store_path),
+            host=self.host,
+        )
+
+        observation = provider.observe(ComponentKey.API)
+
+        self.assertFalse(observation.running)
+        self.assertFalse(observation.owned)
+        self.assertIsNone(observation.pid)
 
 
 if __name__ == "__main__":
