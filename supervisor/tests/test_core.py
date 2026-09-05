@@ -101,6 +101,8 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
         )
 
     def test_restart_all_uses_dependency_order(self) -> None:
+        for component in ComponentKey:
+            self.health.queue_results(component, [False, True])
         self.supervisor.restart_all(actor="local_cli")
         self.assertEqual(
             self.processes.calls,
