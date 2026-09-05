@@ -30,6 +30,7 @@ WP21 provides:
 - durable lifecycle operation/audit records;
 - a loopback-only supervisor control API that survives FastAPI restart;
 - Diagnostics UI status and lifecycle controls;
+- semantic MCP lifecycle status/restart tools;
 - launcher integration so the existing Windows entry point delegates lifecycle ownership rather than duplicating it;
 - deterministic tests with fake process/health providers;
 - host-level Windows qualification for real process restart and tunnel recovery.
@@ -209,7 +210,7 @@ Default Windows location:
 The journal stores bounded operational metadata:
 
 - operation id;
-- actor: `auto`, `user_ui`, `launcher`, or `local_cli`;
+- actor: `auto`, `user_ui`, `launcher`, `local_cli`, or `mcp`;
 - requested action and component;
 - accepted/start/end timestamps;
 - state transitions;
@@ -292,11 +293,11 @@ Unattended remote download is deliberately out of scope until SceneWorks has an 
 
 ## MCP/autonomy boundary
 
-WP21 may expose semantic lifecycle status/restart tools through the existing SceneWorks MCP server when the backend and tunnel are healthy. Such tools delegate to the supervisor and never execute arbitrary shell commands.
+WP21 exposes semantic lifecycle status/restart tools through the existing SceneWorks MCP server when the backend and tunnel are healthy. These tools delegate to the supervisor and never execute arbitrary shell commands.
 
 MCP alone is not the recovery path for an MCP-tunnel outage. Automatic supervisor recovery is the recovery path. WP22 hub/edge can later provide an independent remote path.
 
-Minimum semantic tools if added in WP21:
+Required semantic tools:
 
 ```text
 sceneworks.system.status
@@ -398,12 +399,13 @@ WP21 is complete only when all of the following are true:
 6. Diagnostics can restart the API even when the API itself is unavailable, provided the frontend and supervisor are healthy;
 7. `restart_all` is asynchronous and the UI reconnects after the frontend restart;
 8. the launcher delegates normal lifecycle ownership to the supervisor;
-9. no lifecycle interface accepts arbitrary shell, PID, port, URL, executable path, or environment payloads from UI/MCP;
-10. ambiguous process ownership never results in blind termination;
-11. deterministic CI tests pass without requiring live PCS, a paid model provider, or the real tunnel runtime;
-12. real Windows qualification covers process restart, tunnel recovery, crash-loop behavior, and unrelated-port safety;
-13. canonical architecture, limitations, launcher, MCP, and web UI documentation are updated with the implemented behavior;
-14. existing SceneWorks workflow, evidence, PCS, GUI, and provider-neutral invariants remain green.
+9. `sceneworks.system.status` and `sceneworks.system.restart` are exposed through MCP and delegate only to semantic supervisor operations;
+10. no lifecycle interface accepts arbitrary shell, PID, port, URL, executable path, or environment payloads from UI/MCP;
+11. ambiguous process ownership never results in blind termination;
+12. deterministic CI tests pass without requiring live PCS, a paid model provider, or the real tunnel runtime;
+13. real Windows qualification covers process restart, tunnel recovery, crash-loop behavior, and unrelated-port safety;
+14. canonical architecture, limitations, launcher, MCP, and web UI documentation are updated with the implemented behavior;
+15. existing SceneWorks workflow, evidence, PCS, GUI, and provider-neutral invariants remain green.
 
 ## Forward compatibility
 
