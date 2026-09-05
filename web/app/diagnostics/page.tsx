@@ -4,6 +4,26 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_URL, api, errorMessage, getRequestDiagnostics, type ApiHealth, type RequestDiagnostic } from "@/lib/api";
 import type { Backend } from "@/lib/types";
 
+type ComponentName = "api" | "web" | "mcp_tunnel";
+type SystemComponent = {
+  state: string;
+  consecutive_failures: number;
+  restart_attempts: number;
+  last_transition_at: number | null;
+  healthy_since: number | null;
+  enabled: boolean;
+};
+type SystemStatus = {
+  aggregate_state: string;
+  components: Partial<Record<ComponentName, SystemComponent>>;
+};
+
+const COMPONENT_LABELS: Record<ComponentName, string> = {
+  api: "API",
+  web: "Web",
+  mcp_tunnel: "MCP tunnel",
+};
+
 function latencyClass(value: number | null) {
   if (value === null) return "";
   if (value < 150) return "latency-good";
@@ -15,6 +35,16 @@ function formatMs(value: number | null) {
   return value === null ? "—" : `${Math.round(value)} ms`;
 }
 
+function lifecycleBadge(state: string) {
+  if (state === "HEALTHY") return "success";
+  if (["UNHEALTHY", "DEGRADED", "UNKNOWN"].includes(state)) return "error";
+  return "";
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export default function DiagnosticsPage() {
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [healthLatency, setHealthLatency] = useState<number | null>(null);
@@ -23,6 +53,21 @@ export default function DiagnosticsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemError, setSystemError] = useState<string | null>(null);
+  const [systemBusy, setSystemBusy] = useState<ComponentName | "all" | null>(null);
+
+  const loadSystemStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/supervisor/status", { cache: "no-store" });
+      if (!response.ok) throw new Error("Lifecycle supervisor is unavailable.");
+      setSystemStatus(await response.json());
+      setSystemError(null);
+    } catch (e) {
+      setSystemStatus(null);
+      setSystemError(e instanceof Error ? e.message : "Lifecycle supervisor is unavailable.");
+    }
+  }, []);
 
   const runChecks = useCallback(async () => {
     setBusy(true);
@@ -41,14 +86,19 @@ export default function DiagnosticsPage() {
     } finally {
       setRequests(getRequestDiagnostics());
       setBusy(false);
+      void loadSystemStatus();
     }
-  }, []);
+  }, [loadSystemStatus]);
 
   useEffect(() => {
     void runChecks();
-    const timer = window.setInterval(() => setRequests(getRequestDiagnostics()), 1000);
-    return () => window.clearInterval(timer);
-  }, [runChecks]);
+    const requestTimer = window.setInterval(() => setRequests(getRequestDiagnostics()), 1000);
+    const systemTimer = window.setInterval(() => void loadSystemStatus(), 5000);
+    return () => {
+      window.clearInterval(requestTimer);
+      window.clearInterval(systemTimer);
+    };
+  }, [loadSystemStatus, runChecks]);
 
   const latestNetwork = useMemo(
     () => requests.filter((item) => item.cause !== "cache-hit").slice(0, 20),
@@ -63,6 +113,49 @@ export default function DiagnosticsPage() {
   const browserOrigin = typeof window === "undefined" ? "—" : window.location.origin;
   const frontendMode = process.env.NODE_ENV === "development" ? "development" : "production";
 
+  async function restartService(component: ComponentName | "all") {
+    const label = component === "all" ? "SceneWorks" : COMPONENT_LABELS[component];
+    if (!window.confirm(`Restart ${label}? Active work using that service may be interrupted.`)) return;
+    setSystemBusy(component);
+    setSystemError(null);
+    try {
+      const response = await fetch("/api/supervisor/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ component }),
+      });
+      if (!response.ok) throw new Error("Restart request was rejected by the lifecycle supervisor.");
+      const { operation_id: operationId } = await response.json();
+      if (!operationId) throw new Error("Restart request returned no operation id.");
+
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        await sleep(1000);
+        try {
+          const operationResponse = await fetch(`/api/supervisor/operations/${encodeURIComponent(operationId)}`, { cache: "no-store" });
+          if (!operationResponse.ok) continue;
+          const operation = await operationResponse.json();
+          if (["FAILED", "PARTIAL", "REJECTED"].includes(operation.state)) {
+            throw new Error(operation.detail || `Restart ended in ${operation.state}.`);
+          }
+          if (operation.state === "SUCCEEDED") {
+            await loadSystemStatus();
+            return;
+          }
+        } catch (e) {
+          if (e instanceof Error && /Restart ended/.test(e.message)) throw e;
+          // Restarting the web component temporarily removes these proxy routes.
+          // Retry until the replacement web process is available or the deadline expires.
+        }
+      }
+      throw new Error("Restart did not complete within two minutes.");
+    } catch (e) {
+      setSystemError(e instanceof Error ? e.message : "Restart failed.");
+    } finally {
+      setSystemBusy(null);
+    }
+  }
+
   async function copyDiagnostics() {
     const payload = {
       captured_at: new Date().toISOString(),
@@ -72,6 +165,7 @@ export default function DiagnosticsPage() {
       health,
       health_latency_ms: healthLatency,
       backends,
+      system_status: systemStatus,
       recent_requests: latestNetwork,
     };
     try {
@@ -88,7 +182,7 @@ export default function DiagnosticsPage() {
       <div className="row space-between">
         <div>
           <h1>Diagnostics</h1>
-          <p className="muted">Connectivity, provider health, and browser-to-API timing. This is intentionally smaller than a raw log viewer.</p>
+          <p className="muted">Connectivity, lifecycle supervision, provider health, and browser-to-API timing.</p>
         </div>
         <div className="row">
           <button className="btn" onClick={copyDiagnostics}>{copied ? "Copied" : "Copy diagnostics"}</button>
@@ -110,9 +204,9 @@ export default function DiagnosticsPage() {
           <div className="small muted">Browser → FastAPI → browser</div>
         </div>
         <div className="diag-card">
-          <div className="diag-label">Frontend mode</div>
-          <div className="diag-value">{frontendMode}</div>
-          <div className="small muted">{frontendMode === "development" ? "First route visits may compile on demand." : "Routes are prebuilt."}</div>
+          <div className="diag-label">Lifecycle</div>
+          <div className={`diag-value ${systemStatus?.aggregate_state === "HEALTHY" ? "latency-good" : "latency-bad"}`}>{systemStatus?.aggregate_state || "Unavailable"}</div>
+          <div className="small muted">Out-of-process local supervisor</div>
         </div>
         <div className="diag-card">
           <div className="diag-label">Active agents</div>
@@ -121,10 +215,47 @@ export default function DiagnosticsPage() {
         </div>
       </div>
 
-      {frontendMode === "development" && (
-        <div className="notice">
-          You are running the Next.js development server. The first visit to Work, Team, Projects, or Settings can be dominated by route compilation rather than API latency. Use the Windows launcher in production mode for normal SceneWorks use.
+      <div className="panel">
+        <div className="row space-between">
+          <div>
+            <h2>SceneWorks services</h2>
+            <p className="small muted">Lifecycle actions are journaled and limited to semantic API, web, and MCP-tunnel operations.</p>
+          </div>
+          <button className="btn" disabled={systemBusy !== null || !systemStatus} onClick={() => void restartService("all")}>
+            {systemBusy === "all" ? "Restarting…" : "Restart SceneWorks"}
+          </button>
         </div>
+        {systemError && <div className="notice error">{systemError}</div>}
+        {!systemStatus ? (
+          <div className="empty">Lifecycle supervisor unavailable.</div>
+        ) : (
+          <table className="grid">
+            <thead><tr><th>Component</th><th>State</th><th>Health failures</th><th>Recovery budget</th><th>Action</th></tr></thead>
+            <tbody>
+              {(["api", "web", "mcp_tunnel"] as ComponentName[]).map((name) => {
+                const component = systemStatus.components[name];
+                if (!component) return null;
+                return (
+                  <tr key={name}>
+                    <td>{COMPONENT_LABELS[name]} {!component.enabled && <span className="small muted">(disabled)</span>}</td>
+                    <td><span className={`badge ${lifecycleBadge(component.state)}`}>{component.state}</span></td>
+                    <td className="mono small">{component.consecutive_failures}/3</td>
+                    <td className="mono small">{component.restart_attempts}/3 in 5 min</td>
+                    <td>
+                      <button className="btn" disabled={!component.enabled || systemBusy !== null} onClick={() => void restartService(name)}>
+                        {systemBusy === name ? "Restarting…" : "Restart"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {frontendMode === "development" && (
+        <div className="notice">You are running the Next.js development server. First route visits may include compilation latency; use the production launcher for normal operation.</div>
       )}
 
       {slowest && slowest.durationMs >= 600 && (
@@ -186,7 +317,7 @@ export default function DiagnosticsPage() {
           <tr><td className="muted">API URL</td><td className="mono">{API_URL}</td></tr>
           <tr><td className="muted">Frontend mode</td><td className="mono">{frontendMode}</td></tr>
         </tbody></table>
-        <p className="small muted">Server logs stay in the backend terminal. Keeping raw logs out of the main UI avoids noise and accidental exposure of repository paths or provider diagnostics.</p>
+        <p className="small muted">Server logs and lifecycle credentials remain outside the browser. The UI receives bounded status and operation metadata only.</p>
       </div>
     </div>
   );
