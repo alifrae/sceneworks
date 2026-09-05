@@ -65,6 +65,11 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+      - name: Verify lifecycle supervisor and PowerShell launcher
+        working-directory: .
+        run: |
+          python -m unittest discover -s supervisor/tests -v
+          powershell -NoProfile -Command "[void][scriptblock]::Create((Get-Content -Raw scripts/start-sceneworks.ps1))"
       - name: Verify lock matches project constraints
         run: uv lock --check
       - name: Install backend plus pinned OpenHands SDK
@@ -119,5 +124,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
+      - name: Run frontend unit tests
+        run: npm run test:unit
       - name: Type-check and production build
         run: npm run build
