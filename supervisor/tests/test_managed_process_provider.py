@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,6 +182,56 @@ class ManagedProcessProviderTests(unittest.TestCase):
         self.assertFalse(observation.running)
         self.assertFalse(observation.owned)
         self.assertIsNone(observation.pid)
+
+    def test_adoption_discovery_timeout_fails_closed_without_crashing(self) -> None:
+        class TimeoutListenerHost(FakeProcessHost):
+            def find_listeners(self, port: int) -> list[ProcessSnapshot]:
+                raise subprocess.TimeoutExpired(["powershell.exe"], 5)
+
+        spec = LaunchSpec(
+            component=ComponentKey.API,
+            argv=("uv", "run", "python", "-m", "app.main"),
+            cwd=Path("backend"),
+            fingerprint=("uv", "app.main"),
+            adopt_port=8010,
+            adopt_fingerprint=("app.main",),
+        )
+        provider = ManagedProcessProvider(
+            specs={ComponentKey.API: spec},
+            store=ProcessMetadataStore(self.store_path),
+            host=TimeoutListenerHost(),
+        )
+
+        try:
+            observation = provider.observe(ComponentKey.API)
+        except subprocess.TimeoutExpired as exc:
+            self.fail(f"listener discovery timeout escaped reconciliation: {exc}")
+
+        self.assertTrue(observation.running)
+        self.assertFalse(observation.owned)
+        self.assertIsNone(observation.pid)
+
+    def test_process_inspection_timeout_fails_closed_without_crashing(self) -> None:
+        class TimeoutInspectHost(FakeProcessHost):
+            def inspect(self, pid: int) -> ProcessSnapshot | None:
+                raise subprocess.TimeoutExpired(["powershell.exe"], 5)
+
+        store = ProcessMetadataStore(self.store_path)
+        store.set(ComponentKey.API, 444, source="managed")
+        provider = ManagedProcessProvider(
+            specs=self.specs,
+            store=store,
+            host=TimeoutInspectHost(),
+        )
+
+        try:
+            observation = provider.observe(ComponentKey.API)
+        except subprocess.TimeoutExpired as exc:
+            self.fail(f"process inspection timeout escaped reconciliation: {exc}")
+
+        self.assertTrue(observation.running)
+        self.assertFalse(observation.owned)
+        self.assertEqual(observation.pid, 444)
 
 
 if __name__ == "__main__":
