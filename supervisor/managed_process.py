@@ -29,6 +29,7 @@ class LaunchSpec:
     fingerprint: tuple[str, ...]
     env_overrides: dict[str, str] = field(default_factory=dict)
     adopt_port: int | None = None
+    adopt_fingerprint: tuple[str, ...] | None = None
 
 
 class ProcessHost(Protocol):
@@ -122,7 +123,7 @@ class ManagedProcessProvider:
                 return ProcessObservation(running=False, owned=True, pid=pid)
             return ProcessObservation(
                 running=True,
-                owned=self._matches(spec, snapshot),
+                owned=self._matches(snapshot, spec.fingerprint),
                 pid=pid,
             )
 
@@ -157,10 +158,11 @@ class ManagedProcessProvider:
         finder = getattr(self._host, "find_listeners", None)
         if finder is None:
             return None
+        fingerprint = spec.adopt_fingerprint or spec.fingerprint
         snapshots = [
             snapshot
             for snapshot in finder(spec.adopt_port)
-            if self._matches(spec, snapshot)
+            if self._matches(snapshot, fingerprint)
         ]
         if len(snapshots) != 1:
             return None
@@ -169,9 +171,9 @@ class ManagedProcessProvider:
         return pid
 
     @staticmethod
-    def _matches(spec: LaunchSpec, snapshot: ProcessSnapshot) -> bool:
+    def _matches(snapshot: ProcessSnapshot, fingerprint: tuple[str, ...]) -> bool:
         command = snapshot.command_line.casefold()
-        return all(token.casefold() in command for token in spec.fingerprint)
+        return bool(fingerprint) and all(token.casefold() in command for token in fingerprint)
 
     def _spec(self, component: ComponentKey) -> LaunchSpec:
         try:
