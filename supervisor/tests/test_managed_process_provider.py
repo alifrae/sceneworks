@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from supervisor.managed_process import (
+    LaunchSpec,
+    ManagedProcessProvider,
+    ProcessMetadataStore,
+    ProcessOwnershipError,
+    ProcessSnapshot,
+)
+from supervisor.model import ComponentKey
+
+
+class FakeProcessHost:
+    def __init__(self) -> None:
+        self.next_pid = 100
+        self.processes: dict[int, ProcessSnapshot] = {}
+        self.launches: list[LaunchSpec] = []
+        self.terminations: list[int] = []
+
+    def launch(self, spec: LaunchSpec) -> int:
+        self.launches.append(spec)
+        pid = self.next_pid
+        self.next_pid += 1
+        self.processes[pid] = ProcessSnapshot(
+            pid=pid,
+            command_line=" ".join(spec.argv),
+        )
+        return pid
+
+    def inspect(self, pid: int) -> ProcessSnapshot | None:
+        return self.processes.get(pid)
+
+    def terminate_tree(self, pid: int) -> None:
+        self.terminations.append(pid)
+        self.processes.pop(pid, None)
+
+
+class ManagedProcessProviderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store_path = Path(self.tmp.name) / "processes.json"
+        self.store = ProcessMetadataStore(self.store_path)
+        self.host = FakeProcessHost()
+        self.specs = {
+            ComponentKey.API: LaunchSpec(
+                component=ComponentKey.API,
+                argv=("uv", "run", "python", "-m", "app.main"),
+                cwd=Path("backend"),
+                fingerprint=("uv", "app.main"),
+                env_overrides={"CONTROL_PLANE_API_KEY": "must-not-persist"},
+            )
+        }
+        self.provider = ManagedProcessProvider(
+            specs=self.specs,
+            store=self.store,
+            host=self.host,
+        )
+
+    def test_start_persists_pid_and_reconciles_after_provider_restart(self) -> None:
+        self.provider.start(ComponentKey.API)
+        first = self.provider.observe(ComponentKey.API)
+        self.assertTrue(first.running)
+        self.assertTrue(first.owned)
+        self.assertEqual(first.pid, 100)
+
+        reopened = ManagedProcessProvider(
+            specs=self.specs,
+            store=ProcessMetadataStore(self.store_path),
+            host=self.host,
+        )
+        second = reopened.observe(ComponentKey.API)
+        self.assertEqual(second, first)
+
+    def test_natural_exit_remains_known_as_previously_owned(self) -> None:
+        self.provider.start(ComponentKey.API)
+        self.host.processes.pop(100)
+
+        observation = self.provider.observe(ComponentKey.API)
+
+        self.assertFalse(observation.running)
+        self.assertTrue(observation.owned)
+        self.assertEqual(observation.pid, 100)
+
+    def test_pid_reuse_or_fingerprint_mismatch_fails_closed(self) -> None:
+        self.provider.start(ComponentKey.API)
+        self.host.processes[100] = ProcessSnapshot(
+            pid=100,
+            command_line="unrelated.exe --serve",
+        )
+
+        observation = self.provider.observe(ComponentKey.API)
+        self.assertTrue(observation.running)
+        self.assertFalse(observation.owned)
+
+        with self.assertRaises(ProcessOwnershipError):
+            self.provider.stop(ComponentKey.API)
+        self.assertEqual(self.host.terminations, [])
+
+    def test_owned_stop_terminates_tree_and_clears_metadata(self) -> None:
+        self.provider.start(ComponentKey.API)
+        self.provider.stop(ComponentKey.API)
+
+        self.assertEqual(self.host.terminations, [100])
+        self.assertFalse(self.provider.observe(ComponentKey.API).running)
+        self.assertFalse(self.provider.observe(ComponentKey.API).owned)
+
+    def test_metadata_never_persists_environment_values(self) -> None:
+        self.provider.start(ComponentKey.API)
+        raw = self.store_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("must-not-persist", raw)
+        self.assertNotIn("CONTROL_PLANE_API_KEY", raw)
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["api"]["pid"], 100)
+
+
+if __name__ == "__main__":
+    unittest.main()
