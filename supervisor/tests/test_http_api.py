@@ -93,6 +93,8 @@ class SupervisorHttpApiTests(unittest.TestCase):
         self.assertEqual(row["action"], "restart_all")
         self.assertEqual(self.processes.calls, [])
 
+        for component in ComponentKey:
+            self.health.queue_results(component, [False, True])
         self.assertTrue(self.app.process_next())
         row = self.app.journal.get(operation_id)
         assert row is not None
