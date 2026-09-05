@@ -6,67 +6,56 @@ SceneWorks' Windows startup entry points live under `scripts/`:
 .\scripts\start-sceneworks.ps1
 ```
 
-or double-click/run:
+or through the convenience wrapper:
 
 ```powershell
 .\scripts\start-sceneworks.cmd
 ```
 
-The `.cmd` file is only a convenience wrapper. `start-sceneworks.ps1` is the
-single startup orchestrator.
+`start-sceneworks.ps1` is bootstrap/provisioning glue. WP21 moved infrastructure
+lifecycle ownership out of PowerShell into the local **SceneWorks Supervisor**.
+The supervisor runs separately from FastAPI on `127.0.0.1:8020`, so it remains
+available while the API or web process is being restarted.
 
-The launcher:
+The launcher still:
 
-- verifies `uv` and `npm` are available;
-- installs frontend dependencies when `node_modules` is missing;
-- builds the Next.js production frontend when the existing build is missing or older than frontend source;
-- before starting a stopped backend, runs `uv sync --frozen --extra openhands` so the normal SceneWorks environment contains the repository-pinned OpenHands SDK/tools pair;
-- starts/reuses the FastAPI backend and waits for `/api/health`;
-- starts/reuses the frontend and waits for port 3000;
-- optionally verifies `/mcp` and starts the Secure MCP tunnel in its own PowerShell window;
-- waits for the tunnel readiness endpoint at `http://127.0.0.1:8080/readyz`;
-- can explicitly stop and relaunch the current SceneWorks API, frontend and MCP tunnel with `-Restart`;
-- opens SceneWorks in the default browser unless `-NoBrowser` is used.
+- verifies `uv` and `npm`;
+- installs frontend dependencies when required;
+- builds the production frontend when stale or when `-Rebuild` is supplied;
+- runs `uv sync --frozen --extra openhands` for the backend environment;
+- starts/reuses the out-of-process supervisor;
+- reads the supervisor token only from the local user data directory;
+- submits semantic `reconcile`, `start`, or `restart-all` operations;
+- opens the browser unless `-NoBrowser` is used.
 
-The operational backend entry point is `uv run python -m app.main`. It deliberately
-starts Uvicorn with reload disabled. On Windows, Uvicorn's reload/subprocess
-supervision can select an event-loop path without functional
-`asyncio.create_subprocess_exec`; Git registration and Gemini/OpenCode health
-probes require asyncio subprocess support. UI development still uses `-Dev` for
-the Next.js frontend; it does not change the backend into an auto-reload server.
+The launcher **does not** terminate listeners by PID/port. Process-tree ownership,
+fingerprint checks, health monitoring, recovery budgets, and stop/start ordering
+belong to the supervisor. A matching port by itself is never authority to kill a
+process.
 
-OpenHands remains an optional worker and is not made the default by the launcher.
-The existing OpenHands server URL and executable override modes remain valid; the
-launcher only ensures that the pinned local SDK mode is available in a normal
-fresh startup environment.
+## Normal startup
 
-Normal use should stay in production mode because Next.js development mode can
-compile a route the first time it is visited, which makes navigation look slower
-than the API actually is.
+```powershell
+.\scripts\start-sceneworks.ps1
+```
 
-## Options
+The launcher starts or reuses the supervisor, submits `reconcile`, then requests
+semantic starts for API and web plus the MCP tunnel when enabled. Existing
+pre-WP21 services may be adopted only when both the expected fixed listener and
+the expected SceneWorks command fingerprint match.
 
-Restart the currently running SceneWorks stack and relaunch it:
+## Restart
 
 ```powershell
 .\scripts\start-sceneworks.ps1 -Restart
 ```
 
-The `.cmd` wrapper forwards the same option:
+`-Restart` maps to the supervisor's journaled `restart-all` operation. The
+supervisor stops in dependency order `mcp_tunnel -> web -> api` and starts in
+`api -> web -> mcp_tunnel` order. Operation acceptance is persisted before
+process mutation.
 
-```powershell
-.\scripts\start-sceneworks.cmd -Restart
-```
-
-Restart checks the SceneWorks health/readiness endpoints first, resolves the
-listener process on ports `8010`, `3000` and `8080`, terminates the corresponding
-SceneWorks terminal/process tree, waits for the endpoint to go down, then follows
-the normal startup path. It does not blindly terminate an unrelated process just
-because it owns one of those ports.
-
-`-Restart -NoTunnel` stops an existing SceneWorks tunnel but does not start a new
-one. `-Restart -Rebuild` also forces a fresh production frontend build before the
-web server is relaunched.
+## Other options
 
 For UI development:
 
@@ -74,68 +63,58 @@ For UI development:
 .\scripts\start-sceneworks.ps1 -Dev
 ```
 
-Force a fresh frontend production build:
+Force a production frontend rebuild:
 
 ```powershell
 .\scripts\start-sceneworks.ps1 -Rebuild
 ```
 
-Start without opening the browser:
+Do not open the browser:
 
 ```powershell
 .\scripts\start-sceneworks.ps1 -NoBrowser
 ```
 
-Start SceneWorks without the ChatGPT Secure MCP tunnel:
+Disable tunnel supervision when starting a new supervisor instance:
 
 ```powershell
 .\scripts\start-sceneworks.ps1 -NoTunnel
 ```
 
+A supervisor already running at `127.0.0.1:8020` retains the configuration with
+which it was started. Restart the supervisor process itself before changing
+`-Dev`/`-NoTunnel` bootstrap configuration.
+
 ## Secure MCP tunnel
 
-The default tunnel executable location is:
+The default executable location is:
 
 ```text
 tools\tunnel-client-runtime-cloudflared.exe
 ```
 
-The executable is a local tool and is ignored by Git. Override its location
-with either:
+Override it with `-TunnelClientPath` or `SCENEWORKS_TUNNEL_CLIENT_PATH`. Tunnel
+startup requires `CONTROL_PLANE_TUNNEL_ID` and `CONTROL_PLANE_API_KEY`. The MCP
+target defaults to `http://127.0.0.1:8010/mcp` and may be overridden by
+`MCP_SERVER_URL` or `-McpServerUrl`.
 
-```powershell
-.\scripts\start-sceneworks.ps1 -TunnelClientPath C:\path\to\tunnel-client-runtime-cloudflared.exe
-```
+If the executable or credentials are unavailable, the launcher disables tunnel
+supervision for that newly started supervisor and continues with API/web.
+Credentials and environment dictionaries are never persisted in supervisor
+process metadata or lifecycle journal rows.
 
-or:
+## Local supervisor state
 
-```powershell
-$env:SCENEWORKS_TUNNEL_CLIENT_PATH = "C:\path\to\tunnel-client-runtime-cloudflared.exe"
-```
-
-The launcher starts the tunnel only when both credentials are available:
-
-```text
-CONTROL_PLANE_TUNNEL_ID
-CONTROL_PLANE_API_KEY
-```
-
-The MCP target defaults to:
+On Windows the supervisor stores bounded local state under:
 
 ```text
-http://127.0.0.1:8010/mcp
+%LOCALAPPDATA%\SceneWorks\supervisor\
 ```
 
-Override it with `MCP_SERVER_URL` or `-McpServerUrl` when necessary.
+This includes the bearer token, process ownership metadata, and SQLite operation
+journal. The token is used by PowerShell, FastAPI's server-side client, and
+Next.js server routes. It is never sent to browser JavaScript or exposed through
+MCP responses.
 
-If the tunnel executable or credentials are missing, SceneWorks itself still
-starts and the launcher emits a warning. If the tunnel readiness endpoint is
-already reachable, the existing tunnel is reused instead of starting another
-one.
-
-The launcher likewise does not duplicate existing SceneWorks services: if the
-API or frontend health URL is already reachable, that service is reused unless
-`-Restart` was requested.
-
-See [the ChatGPT MCP plugin tutorial](../tutorials/chatgpt-mcp-plugin.md) for
-first-time tunnel creation and plugin configuration.
+See [WP21 lifecycle supervisor](../wp21-lifecycle-supervisor.md) for recovery,
+security, and qualification details.
