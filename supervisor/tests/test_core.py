@@ -90,9 +90,9 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
 
     def test_ten_healthy_minutes_clear_restart_budget(self) -> None:
         self.health.set_healthy(ComponentKey.API, False)
+        self.supervisor.monitor_once()
+        self.supervisor.monitor_once()
         self.health.queue_results(ComponentKey.API, [False, True])
-        self.supervisor.monitor_once()
-        self.supervisor.monitor_once()
         self.supervisor.monitor_once()
         self.assertEqual(
             self.supervisor.status().components[ComponentKey.API].restart_attempts,
