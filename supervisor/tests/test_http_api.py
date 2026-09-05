@@ -41,6 +41,7 @@ class SupervisorHttpApiTests(unittest.TestCase):
         self.thread.start()
         self.addCleanup(self.server.shutdown)
         self.addCleanup(self.server.server_close)
+        self.addCleanup(self.app.shutdown)
         self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def _json_request(
@@ -73,7 +74,6 @@ class SupervisorHttpApiTests(unittest.TestCase):
             "/v1/actions/restart",
             {"component": "api"},
         )
-
         self.assertEqual(status, 401)
         self.assertEqual(body["error"], "unauthorized")
         self.assertEqual(self.app.journal.list(limit=10), [])
@@ -85,7 +85,6 @@ class SupervisorHttpApiTests(unittest.TestCase):
             "/v1/actions/restart-all",
             token="unit-test-token",
         )
-
         self.assertEqual(status, 202)
         operation_id = body["operation_id"]
         row = self.app.journal.get(operation_id)
@@ -117,7 +116,6 @@ class SupervisorHttpApiTests(unittest.TestCase):
             {"component": "database"},
             token="unit-test-token",
         )
-
         self.assertEqual(status, 400)
         self.assertEqual(body["error"], "invalid_component")
         self.assertEqual(self.app.journal.list(limit=10), [])
@@ -131,6 +129,25 @@ class SupervisorHttpApiTests(unittest.TestCase):
         self.assertNotIn("Authorization", serialized)
         self.assertEqual(body["aggregate_state"], "HEALTHY")
         self.assertEqual(set(body["components"]), {"api", "web", "mcp_tunnel"})
+
+    def test_automatic_recovery_is_journaled_before_process_mutation(self) -> None:
+        self.health.set_healthy(ComponentKey.API, False)
+        self.app.monitor_once()
+        self.app.monitor_once()
+        self.health.queue_results(ComponentKey.API, [False, True])
+        self.app.monitor_once()
+
+        rows = self.app.journal.list(limit=10)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["actor"], "auto")
+        self.assertEqual(row["action"], "restart")
+        self.assertEqual(row["component"], "api")
+        self.assertEqual(row["state"], "SUCCEEDED")
+        self.assertEqual(
+            self.processes.calls,
+            [("stop", ComponentKey.API), ("start", ComponentKey.API)],
+        )
 
 
 if __name__ == "__main__":
