@@ -6,7 +6,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from supervisor.model import ComponentKey, ProcessObservation
 
@@ -40,6 +40,9 @@ class ProcessHost(Protocol):
     def terminate_tree(self, pid: int) -> None: ...
 
 
+OwnershipSource = Literal["managed", "adopted"]
+
+
 class ProcessMetadataStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -47,20 +50,37 @@ class ProcessMetadataStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def get(self, component: ComponentKey) -> int | None:
+        record = self.get_record(component)
+        return None if record is None else record[0]
+
+    def get_record(self, component: ComponentKey) -> tuple[int, OwnershipSource] | None:
         with self._lock:
             raw = self._read()
             entry = raw.get(component.value)
             if not isinstance(entry, dict):
                 return None
             pid = entry.get("pid")
-            return int(pid) if isinstance(pid, int) and pid > 0 else None
+            if not isinstance(pid, int) or pid <= 0:
+                return None
+            source = entry.get("source", "managed")
+            if source not in {"managed", "adopted"}:
+                return None
+            return int(pid), source
 
-    def set(self, component: ComponentKey, pid: int) -> None:
+    def set(
+        self,
+        component: ComponentKey,
+        pid: int,
+        *,
+        source: OwnershipSource = "managed",
+    ) -> None:
         if pid <= 0:
             raise ValueError("pid must be positive")
+        if source not in {"managed", "adopted"}:
+            raise ValueError("invalid ownership source")
         with self._lock:
             raw = self._read()
-            raw[component.value] = {"pid": int(pid)}
+            raw[component.value] = {"pid": int(pid), "source": source}
             self._write(raw)
 
     def clear(self, component: ComponentKey) -> None:
@@ -111,19 +131,25 @@ class ManagedProcessProvider:
     def observe(self, component: ComponentKey) -> ProcessObservation:
         with self._lock:
             spec = self._spec(component)
-            pid = self._store.get(component)
-            if pid is None:
+            record = self._store.get_record(component)
+            if record is None:
                 adopted = self._try_adopt(spec)
                 if adopted is None:
                     return ProcessObservation(running=False, owned=False, pid=None)
-                pid = adopted
+                record = (adopted, "adopted")
+            pid, source = record
 
             snapshot = self._host.inspect(pid)
             if snapshot is None:
                 return ProcessObservation(running=False, owned=True, pid=pid)
+            fingerprint = (
+                spec.adopt_fingerprint or spec.fingerprint
+                if source == "adopted"
+                else spec.fingerprint
+            )
             return ProcessObservation(
                 running=True,
-                owned=self._matches(snapshot, spec.fingerprint),
+                owned=self._matches(snapshot, fingerprint),
                 pid=pid,
             )
 
@@ -139,7 +165,7 @@ class ManagedProcessProvider:
             if observation.owned:
                 self._store.clear(component)
             pid = self._host.launch(self._spec(component))
-            self._store.set(component, pid)
+            self._store.set(component, pid, source="managed")
 
     def stop(self, component: ComponentKey) -> None:
         with self._lock:
@@ -167,7 +193,7 @@ class ManagedProcessProvider:
         if len(snapshots) != 1:
             return None
         pid = snapshots[0].pid
-        self._store.set(spec.component, pid)
+        self._store.set(spec.component, pid, source="adopted")
         return pid
 
     @staticmethod
