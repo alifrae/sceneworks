@@ -60,7 +60,7 @@ class LifecycleSupervisorCoreTests(unittest.TestCase):
     def test_owned_process_exit_triggers_immediate_recovery(self) -> None:
         self.processes.set_process(ComponentKey.API, running=False, owned=True)
         self.health.set_healthy(ComponentKey.API, False)
-        self.health.queue_results(ComponentKey.API, [True])
+        self.health.queue_results(ComponentKey.API, [False, False, True])
         self.supervisor.monitor_once()
         self.assertEqual(self.processes.calls, [("start", ComponentKey.API)])
         self.assertEqual(self.clock.sleeps, [1.0])
