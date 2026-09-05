@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from supervisor.model import (
+    DEFAULT_COMPONENT_SPECS,
     ComponentKey,
+    ComponentSpec,
     ComponentState,
     ComponentStatus,
     SupervisorStatus,
@@ -45,12 +47,18 @@ class LifecycleSupervisor:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         auto_recovery_sink: AutoRecoverySink | None = None,
+        component_specs: dict[ComponentKey, ComponentSpec] | None = None,
+        startup_poll_seconds: float = 0.25,
+        enabled_components: set[ComponentKey] | None = None,
     ) -> None:
         self._process = process_provider
         self._health = health_provider
         self._clock = clock
         self._sleep = sleep
         self._auto_recovery_sink = auto_recovery_sink
+        self._component_specs = dict(component_specs or DEFAULT_COMPONENT_SPECS)
+        self._startup_poll_seconds = max(float(startup_poll_seconds), 0.01)
+        self._enabled_components = set(ComponentKey) if enabled_components is None else set(enabled_components)
         now = self._clock()
         self._records = {
             component: _ComponentRecord(last_transition_at=now)
@@ -75,12 +83,17 @@ class LifecycleSupervisor:
                     restart_attempts=len(record.restart_history),
                     last_transition_at=record.last_transition_at,
                     healthy_since=record.healthy_since,
+                    enabled=component in self._enabled_components,
                 )
 
-            states = {row.state for row in components.values()}
-            if states == {ComponentState.HEALTHY}:
+            active_states = {
+                row.state for row in components.values() if row.enabled
+            }
+            if not active_states:
+                aggregate = ComponentState.STOPPED
+            elif active_states == {ComponentState.HEALTHY}:
                 aggregate = ComponentState.HEALTHY
-            elif ComponentState.DEGRADED in states:
+            elif ComponentState.DEGRADED in active_states:
                 aggregate = ComponentState.DEGRADED
             else:
                 aggregate = ComponentState.UNHEALTHY
@@ -89,6 +102,12 @@ class LifecycleSupervisor:
     def reconcile(self) -> SupervisorStatus:
         with self._lock:
             for component in ComponentKey:
+                if component not in self._enabled_components:
+                    self._records[component].consecutive_failures = 0
+                    self._records[component].healthy_since = None
+                    self._mark(component, ComponentState.STOPPED)
+                    continue
+
                 observation = self._process.observe(component)
                 if observation.running and not observation.owned:
                     self._mark(component, ComponentState.UNKNOWN)
@@ -113,6 +132,7 @@ class LifecycleSupervisor:
     def start(self, component: ComponentKey, *, actor: str) -> None:
         del actor
         with self._lock:
+            self._require_enabled(component)
             observation = self._process.observe(component)
             if observation.running:
                 if not observation.owned:
@@ -136,7 +156,7 @@ class LifecycleSupervisor:
 
             self._mark(component, ComponentState.STARTING)
             self._process.start(component)
-            if self._health.healthy(component):
+            if self._wait_until_healthy(component):
                 self._mark_healthy(component)
                 return
             self._mark(component, ComponentState.UNHEALTHY)
@@ -166,15 +186,15 @@ class LifecycleSupervisor:
 
     def restart(self, component: ComponentKey, *, actor: str) -> None:
         with self._lock:
+            self._require_enabled(component)
             observation = self._process.observe(component)
             if observation.running:
                 self.stop(component, actor=actor)
-            else:
-                if self._health.healthy(component):
-                    self._mark(component, ComponentState.UNKNOWN)
-                    raise LifecycleError(
-                        f"refusing to restart {component.value}: endpoint ownership is ambiguous"
-                    )
+            elif self._health.healthy(component):
+                self._mark(component, ComponentState.UNKNOWN)
+                raise LifecycleError(
+                    f"refusing to restart {component.value}: endpoint ownership is ambiguous"
+                )
             self.start(component, actor=actor)
 
     def restart_all(self, *, actor: str) -> None:
@@ -184,18 +204,26 @@ class LifecycleSupervisor:
                 ComponentKey.WEB,
                 ComponentKey.API,
             ):
-                self.stop(component, actor=actor)
+                if component in self._enabled_components:
+                    self.stop(component, actor=actor)
             for component in (
                 ComponentKey.API,
                 ComponentKey.WEB,
                 ComponentKey.MCP_TUNNEL,
             ):
-                self.start(component, actor=actor)
+                if component in self._enabled_components:
+                    self.start(component, actor=actor)
 
     def monitor_once(self) -> SupervisorStatus:
         with self._lock:
             for component in ComponentKey:
                 record = self._records[component]
+                if component not in self._enabled_components:
+                    record.consecutive_failures = 0
+                    record.healthy_since = None
+                    self._mark(component, ComponentState.STOPPED)
+                    continue
+
                 observation = self._process.observe(component)
 
                 if observation.running and not observation.owned:
@@ -246,6 +274,9 @@ class LifecycleSupervisor:
         sink(component, lambda: self._recover(component))
 
     def _recover(self, component: ComponentKey) -> None:
+        if component not in self._enabled_components:
+            self._mark(component, ComponentState.STOPPED)
+            return
         record = self._records[component]
         now = self._clock()
         self._prune_restart_history(record, now)
@@ -285,6 +316,22 @@ class LifecycleSupervisor:
             self._mark(component, ComponentState.UNHEALTHY)
 
         self._mark(component, ComponentState.DEGRADED)
+
+    def _wait_until_healthy(self, component: ComponentKey) -> bool:
+        spec = self._component_specs.get(component, DEFAULT_COMPONENT_SPECS[component])
+        deadline = self._clock() + max(float(spec.startup_grace_seconds), 0.0)
+        while True:
+            if self._health.healthy(component):
+                return True
+            now = self._clock()
+            if now >= deadline:
+                return False
+            self._sleep(min(self._startup_poll_seconds, deadline - now))
+
+    def _require_enabled(self, component: ComponentKey) -> None:
+        if component not in self._enabled_components:
+            self._mark(component, ComponentState.STOPPED)
+            raise LifecycleError(f"{component.value} is disabled")
 
     def _mark_healthy(self, component: ComponentKey) -> None:
         record = self._records[component]
