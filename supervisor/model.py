@@ -48,6 +48,7 @@ class ComponentStatus:
     restart_attempts: int
     last_transition_at: float
     healthy_since: float | None
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
