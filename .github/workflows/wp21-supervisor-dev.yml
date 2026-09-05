@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - "supervisor/**"
+      - "backend/app/context.py"
+      - "backend/app/services/supervisor.py"
+      - "backend/app/mcp/__init__.py"
+      - "backend/tests/test_supervisor_client.py"
+      - "backend/tests/test_wp21_system_mcp.py"
       - ".github/workflows/wp21-supervisor-dev.yml"
 
 concurrency:
@@ -23,3 +28,18 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s supervisor/tests -v
+
+  backend-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run pytest tests/test_supervisor_client.py tests/test_wp21_system_mcp.py -q
