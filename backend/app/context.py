@@ -38,6 +38,7 @@ from app.services.pcs_control import PcsControlService
 from app.services.pcs_integrity import IntegrityPcsControlService
 from app.services.provenance import ProvenanceService
 from app.services.settings import SettingsOverrides, SettingsStore, apply_overrides
+from app.services.supervisor import SupervisorClient
 from app.services.workflow import TaskWorkflowService
 from app.workflows import WorkflowManager
 
@@ -71,6 +72,7 @@ class AppContext:
     gui_automation: GuiAutomationService
     settings_store: SettingsStore
     settings_overrides: SettingsOverrides
+    supervisor: SupervisorClient | None = None
     health_warmup: asyncio.Task | None = field(default=None)
 
     async def shutdown(self) -> None:
@@ -82,14 +84,7 @@ class AppContext:
                 pass
         await self.backends.shutdown()
         await self.agent_sessions.shutdown()
-        # Mark/cancel in-flight governed executions before PCS/runtime cleanup
-        # introduces any delay. This preserves the restart-recovery invariant:
-        # work active at shutdown is recorded INTERRUPTED, never left looking
-        # completed merely because another subsystem took time to close.
         await self.execution_engine.shutdown()
-        # PCS control must drain/finalize managed runs before the native runtime
-        # destroys its process handles. GUI evidence/automation have no
-        # independent process lifecycle and therefore need no shutdown hooks.
         await self.pcs_control.shutdown()
         await self.runtimes.shutdown()
         await self.workflow_manager.shutdown()
@@ -182,6 +177,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
     company = CompanyService(
         session_factory, workflow, roles, git, prompt_builder, execution_engine
     )
+    supervisor = SupervisorClient()
 
     ctx = AppContext(
         settings=settings,
@@ -209,6 +205,7 @@ async def build_context(settings: Settings | None = None) -> AppContext:
         gui_automation=gui_automation,
         settings_store=settings_store,
         settings_overrides=overrides,
+        supervisor=supervisor,
     )
 
     ctx.health_warmup = asyncio.create_task(_warm_backend_health(backends))
