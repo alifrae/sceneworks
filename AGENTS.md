@@ -94,6 +94,9 @@ These rules apply to every coding agent working in SceneWorks.
 25. **GUI text/value evidence must not become a secret echo channel.**
     Do not persist user-provided values typed through GUI automation. Record bounded metadata such as character count and SHA-256 when correlation is needed. Accessibility names/automation ids may be evidence; control values are not automatically evidence.
 
+26. **SceneWorks infrastructure lifecycle is semantic and supervisor-owned.**
+    API, web, and MCP-tunnel start/stop/restart/recovery belong to the out-of-process loopback lifecycle supervisor. FastAPI, provider agents, browser JavaScript, and the Windows launcher are clients, not lifecycle authorities. Mutating interfaces accept semantic component/action enums only; they must not expose arbitrary PID, port, executable, path, URL, environment, command, or shell input. A port match alone never authorizes process termination; ambiguous process ownership must fail closed. Automatic recovery must remain bounded and journaled before process mutation.
+
 ## Backend additions
 
 - Implement `AgentBackend.run()`, `cancel()`, and `health()` in `backend/app/agents/<backend>.py`.
@@ -138,6 +141,14 @@ These rules apply to every coding agent working in SceneWorks.
 - The Windows provider may use a fixed internal PowerShell/.NET UI Automation adapter, but caller-controlled script text must never cross that boundary.
 - Before/after screenshots and visual comparison are part of the action contract, not optional diagnostics.
 - Add deterministic fake automation providers for CI; Windows/UIA live qualification is a separate host-level validation and must not be fabricated on Linux CI.
+
+## Lifecycle supervisor additions
+
+- Keep the supervisor standard-library core independent from FastAPI and model/provider adapters.
+- Persist only bounded ownership metadata and operation state; never persist environment dictionaries or lifecycle credentials in the operation journal/process metadata.
+- Keep the HTTP control service loopback-only. Widening it to remote access requires a separate trust/authentication design and is not an incremental WP21 change.
+- Any new lifecycle target must have a fixed semantic component identity, explicit health contract, startup grace, ownership proof, bounded recovery policy, and deterministic tests before it can be exposed to UI/MCP.
+- Real Windows process/tunnel failure injection is host qualification; do not fabricate it from Linux or GitHub-hosted evidence.
 
 ## Documentation policy
 
