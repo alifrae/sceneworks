@@ -133,13 +133,19 @@ class ManagedProcessProvider:
             spec = self._spec(component)
             record = self._store.get_record(component)
             if record is None:
-                adopted = self._try_adopt(spec)
+                try:
+                    adopted = self._try_adopt(spec)
+                except (OSError, subprocess.SubprocessError):
+                    return ProcessObservation(running=True, owned=False, pid=None)
                 if adopted is None:
                     return ProcessObservation(running=False, owned=False, pid=None)
                 record = (adopted, "adopted")
             pid, source = record
 
-            snapshot = self._host.inspect(pid)
+            try:
+                snapshot = self._host.inspect(pid)
+            except (OSError, subprocess.SubprocessError):
+                return ProcessObservation(running=True, owned=False, pid=pid)
             if snapshot is None:
                 return ProcessObservation(running=False, owned=True, pid=pid)
             fingerprint = (
