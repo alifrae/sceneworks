@@ -1,6 +1,6 @@
 # SceneWorks V4.0.0
 
-SceneWorks is a local engineering control plane for governed software work. It combines a conventional task workflow with provider-neutral engineering sessions, durable evidence, semantic PCS control, and optional autonomous coding workers.
+SceneWorks is a local engineering control plane for governed software work. It combines a conventional task workflow with provider-neutral engineering sessions, durable evidence, semantic PCS control, supervised local infrastructure lifecycle, and optional autonomous coding workers.
 
 The current architecture deliberately separates three things that older documentation often conflated:
 
@@ -18,9 +18,12 @@ Tasks, EngineeringSessions, permissions, evidence, verification
 SceneWorks NativeRuntime        AgentBackend
 files / commands / process      Gemini ACP / OpenCode / OpenHands
 Git / PCS / GUI evidence        optional autonomous worker
+
+Local lifecycle supervisor (separate process)
+API / web / MCP tunnel ownership, health, bounded recovery, journal
 ```
 
-Gemini CLI remains the recommended default autonomous worker, but direct MCP engineering control does not depend on Gemini authentication or model availability.
+Gemini CLI remains the recommended default autonomous worker, but direct MCP engineering control does not depend on Gemini authentication or model availability. API/web/MCP-tunnel lifecycle is owned by the separate loopback SceneWorks Supervisor, not by provider agents or FastAPI itself.
 
 ## Current product surfaces
 
@@ -30,7 +33,7 @@ Gemini CLI remains the recommended default autonomous worker, but direct MCP eng
 - **Projects** — register/unregister local repositories and retain registration history.
 - **Control** — read-only operational view of EngineeringSessions, managed PCS processes, and recent evidence.
 - **Settings** — backend health, default worker, model-profile routing, MCP mode and Advanced permission ceiling.
-- **Diagnostics** — API/performance/connectivity diagnostics.
+- **Diagnostics** — API/performance/connectivity diagnostics plus bounded API/web/MCP-tunnel lifecycle state and semantic restart controls.
 
 ## Execution architecture
 
@@ -69,6 +72,8 @@ EngineeringSession
 
 Direct engineering actions are captured in the durable WP15 evidence ledger. Agent/model conclusions are inference; SceneWorks-observed file/Git/command/process/PCS/GUI observations are evidence.
 
+Infrastructure lifecycle is a separate bounded surface: MCP exposes only `sceneworks.system.status` and semantic `sceneworks.system.restart(api|web|mcp_tunnel|all)`. It does not expose PID, port, executable, path, environment, command, or shell authority.
+
 ## PCS control
 
 For projects with PCS runtime-control configuration, SceneWorks can:
@@ -83,6 +88,12 @@ For projects with PCS runtime-control configuration, SceneWorks can:
 - use controlled UI Automation actions when no semantic PCS API exists.
 
 GUI automation is a fallback. Deterministic PCS/API control remains preferred.
+
+## Local infrastructure supervision
+
+WP21 adds an out-of-process standard-library Python supervisor bound only to `127.0.0.1:8020`. It owns SceneWorks API, web, and MCP-tunnel process lifecycle, health sampling, bounded automatic recovery, process-ownership checks, and the durable operation journal.
+
+The Windows launcher is bootstrap/provisioning glue and a supervisor client; it no longer terminates listeners directly. The supervisor refuses destructive actions when process ownership is ambiguous. See [WP21 Lifecycle Supervisor](docs/wp21-lifecycle-supervisor.md) and the [Windows launcher guide](docs/development/windows-launcher.md).
 
 ## Model routing
 
@@ -116,6 +127,8 @@ Default UI: `http://localhost:3000`
 
 The frontend API URL can be overridden with `NEXT_PUBLIC_API_URL`.
 
+For normal Windows operation, use `scripts/start-sceneworks.ps1`; it starts/reuses the lifecycle supervisor and requests semantic starts for the SceneWorks services.
+
 ## Register a repository
 
 Open **Projects -> Add existing repository** and enter an absolute path to a local Git repository. SceneWorks validates the repository and stores configuration; it does not add SceneWorks code to the repository.
@@ -127,16 +140,19 @@ Repository-changing agent/workflow operations happen in isolated worktrees under
 The normal qualification path is:
 
 ```bash
+python -m unittest discover -s supervisor/tests -v
+
 cd backend
 uv sync --frozen
 uv run pytest -m "not live"
 
 cd ../web
 npm ci
+npm run test:unit
 npm run build
 ```
 
-The repository also contains deterministic provider-independent qualification scenarios used by CI. Live provider/Windows PCS qualification is intentionally separate from the normal non-live suite.
+CI also parses the PowerShell launcher and runs the supervisor suite on Windows. The repository contains deterministic provider-independent qualification scenarios. Live provider/Windows host failure-injection qualification is intentionally separate from the normal non-live suite.
 
 ## Documentation
 
@@ -145,6 +161,7 @@ The repository also contains deterministic provider-independent qualification sc
 - [Known limitations](docs/limitations.md) — current, not historical, limitations.
 - [Verification and issue traceability](docs/verification-and-issue-traceability.md) — current verification UX gap and recommended issue-resolution contract.
 - [ChatGPT/MCP tutorial](docs/tutorials/chatgpt-mcp-plugin.md) — direct engineering and PCS control.
-- [WP14 provider-neutral execution](docs/wp14-provider-neutral-execution.md) through [WP20 engineering control center](docs/wp20-engineering-control-center.md) — historical implementation records.
+- [WP21 Lifecycle Supervisor](docs/wp21-lifecycle-supervisor.md) — current local infrastructure lifecycle and recovery contract.
+- [WP14 provider-neutral execution](docs/wp14-provider-neutral-execution.md) through [WP21 lifecycle supervisor](docs/wp21-lifecycle-supervisor.md) — historical implementation records and WP-specific decisions.
 
 Historical WP/version documents describe the state at the time they were written. The files above are the canonical source for current architecture and limitations.
