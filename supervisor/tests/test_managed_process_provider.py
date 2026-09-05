@@ -122,6 +122,7 @@ class ManagedProcessProviderTests(unittest.TestCase):
         self.assertNotIn("CONTROL_PLANE_API_KEY", raw)
         parsed = json.loads(raw)
         self.assertEqual(parsed["api"]["pid"], 100)
+        self.assertEqual(parsed["api"]["source"], "managed")
 
     def test_legacy_adoption_uses_separate_listener_fingerprint(self) -> None:
         spec = LaunchSpec(
@@ -143,10 +144,19 @@ class ManagedProcessProviderTests(unittest.TestCase):
         )
 
         observation = provider.observe(ComponentKey.API)
+        reopened = ManagedProcessProvider(
+            specs={ComponentKey.API: spec},
+            store=ProcessMetadataStore(self.store_path),
+            host=self.host,
+        )
+        after_restart = reopened.observe(ComponentKey.API)
 
         self.assertTrue(observation.running)
         self.assertTrue(observation.owned)
         self.assertEqual(observation.pid, 222)
+        self.assertEqual(after_restart, observation)
+        parsed = json.loads(self.store_path.read_text(encoding="utf-8"))
+        self.assertEqual(parsed["api"]["source"], "adopted")
 
     def test_legacy_adoption_still_rejects_unrelated_listener(self) -> None:
         spec = LaunchSpec(
