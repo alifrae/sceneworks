@@ -46,6 +46,7 @@ def _launch_specs(args: argparse.Namespace) -> dict[ComponentKey, LaunchSpec]:
             cwd=backend,
             fingerprint=("uv", "app.main"),
             adopt_port=8010,
+            adopt_fingerprint=("app.main",),
         ),
         ComponentKey.WEB: LaunchSpec(
             component=ComponentKey.WEB,
@@ -53,6 +54,7 @@ def _launch_specs(args: argparse.Namespace) -> dict[ComponentKey, LaunchSpec]:
             cwd=web,
             fingerprint=("npm", "run", web_script),
             adopt_port=3000,
+            adopt_fingerprint=(str(web), "next"),
         ),
     }
     if not args.no_tunnel:
@@ -63,6 +65,7 @@ def _launch_specs(args: argparse.Namespace) -> dict[ComponentKey, LaunchSpec]:
             fingerprint=(tunnel_path.name, "run"),
             env_overrides={"MCP_SERVER_URL": str(args.mcp_server_url)},
             adopt_port=8080,
+            adopt_fingerprint=(tunnel_path.name,),
         )
     return specs
 
