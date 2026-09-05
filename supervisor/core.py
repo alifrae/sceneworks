@@ -19,6 +19,9 @@ class LifecycleError(RuntimeError):
     """Expected lifecycle-domain failure."""
 
 
+AutoRecoverySink = Callable[[ComponentKey, Callable[[], None]], None]
+
+
 @dataclass
 class _ComponentRecord:
     state: ComponentState = ComponentState.UNKNOWN
@@ -41,17 +44,23 @@ class LifecycleSupervisor:
         health_provider: HealthProvider,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        auto_recovery_sink: AutoRecoverySink | None = None,
     ) -> None:
         self._process = process_provider
         self._health = health_provider
         self._clock = clock
         self._sleep = sleep
+        self._auto_recovery_sink = auto_recovery_sink
         now = self._clock()
         self._records = {
             component: _ComponentRecord(last_transition_at=now)
             for component in ComponentKey
         }
         self._lock = threading.RLock()
+
+    def set_auto_recovery_sink(self, sink: AutoRecoverySink | None) -> None:
+        with self._lock:
+            self._auto_recovery_sink = sink
 
     def status(self) -> SupervisorStatus:
         with self._lock:
@@ -90,7 +99,12 @@ class LifecycleSupervisor:
                     else:
                         self._mark(component, ComponentState.UNHEALTHY)
                     continue
-                if observation.owned:
+
+                endpoint_healthy = self._health.healthy(component)
+                if endpoint_healthy:
+                    self._records[component].healthy_since = None
+                    self._mark(component, ComponentState.UNKNOWN)
+                elif observation.owned:
                     self._mark(component, ComponentState.UNHEALTHY)
                 else:
                     self._mark(component, ComponentState.STOPPED)
@@ -114,6 +128,12 @@ class LifecycleSupervisor:
                     f"cannot start {component.value}: owned process is already running but unhealthy"
                 )
 
+            if self._health.healthy(component):
+                self._mark(component, ComponentState.UNKNOWN)
+                raise LifecycleError(
+                    f"cannot start {component.value}: endpoint is reachable without owned process"
+                )
+
             self._mark(component, ComponentState.STARTING)
             self._process.start(component)
             if self._health.healthy(component):
@@ -127,6 +147,11 @@ class LifecycleSupervisor:
         with self._lock:
             observation = self._process.observe(component)
             if not observation.running:
+                if self._health.healthy(component):
+                    self._mark(component, ComponentState.UNKNOWN)
+                    raise LifecycleError(
+                        f"refusing to stop {component.value}: endpoint ownership is ambiguous"
+                    )
                 self._mark(component, ComponentState.STOPPED)
                 return
             if not observation.owned:
@@ -144,6 +169,12 @@ class LifecycleSupervisor:
             observation = self._process.observe(component)
             if observation.running:
                 self.stop(component, actor=actor)
+            else:
+                if self._health.healthy(component):
+                    self._mark(component, ComponentState.UNKNOWN)
+                    raise LifecycleError(
+                        f"refusing to restart {component.value}: endpoint ownership is ambiguous"
+                    )
             self.start(component, actor=actor)
 
     def restart_all(self, *, actor: str) -> None:
@@ -173,10 +204,15 @@ class LifecycleSupervisor:
                     continue
 
                 if not observation.running:
+                    if self._health.healthy(component):
+                        record.healthy_since = None
+                        record.consecutive_failures = 0
+                        self._mark(component, ComponentState.UNKNOWN)
+                        continue
                     if record.state == ComponentState.STOPPED and not observation.owned:
                         continue
                     if observation.owned and record.state != ComponentState.STOPPED:
-                        self._recover(component)
+                        self._request_recovery(component)
                     elif record.state != ComponentState.STOPPED:
                         record.healthy_since = None
                         self._mark(component, ComponentState.UNHEALTHY)
@@ -198,9 +234,16 @@ class LifecycleSupervisor:
                 record.consecutive_failures += 1
                 self._mark(component, ComponentState.UNHEALTHY)
                 if record.consecutive_failures >= self.MONITOR_FAILURE_THRESHOLD:
-                    self._recover(component)
+                    self._request_recovery(component)
 
             return self.status()
+
+    def _request_recovery(self, component: ComponentKey) -> None:
+        sink = self._auto_recovery_sink
+        if sink is None:
+            self._recover(component)
+            return
+        sink(component, lambda: self._recover(component))
 
     def _recover(self, component: ComponentKey) -> None:
         record = self._records[component]
@@ -227,6 +270,9 @@ class LifecycleSupervisor:
                     self._mark(component, ComponentState.DEGRADED)
                     return
                 self._process.stop(component)
+            elif self._health.healthy(component):
+                self._mark(component, ComponentState.UNKNOWN)
+                return
 
             self._process.start(component)
             if self._health.healthy(component):
@@ -258,4 +304,4 @@ class LifecycleSupervisor:
             record.restart_history.popleft()
 
 
-__all__ = ["LifecycleError", "LifecycleSupervisor"]
+__all__ = ["AutoRecoverySink", "LifecycleError", "LifecycleSupervisor"]
